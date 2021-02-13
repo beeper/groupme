@@ -18,7 +18,6 @@ package main
 
 import (
 	"fmt"
-	"net/http"
 	"regexp"
 	"strings"
 
@@ -30,12 +29,12 @@ import (
 
 	"maunium.net/go/mautrix-whatsapp/database"
 	"maunium.net/go/mautrix-whatsapp/types"
-	"maunium.net/go/mautrix-whatsapp/whatsapp-ext"
+	whatsappExt "maunium.net/go/mautrix-whatsapp/whatsapp-ext"
 )
 
 var userIDRegex *regexp.Regexp
 
-func (bridge *Bridge) ParsePuppetMXID(mxid id.UserID) (types.WhatsAppID, bool) {
+func (bridge *Bridge) ParsePuppetMXID(mxid id.UserID) (types.GroupMeID, bool) {
 	if userIDRegex == nil {
 		userIDRegex = regexp.MustCompile(fmt.Sprintf("^@%s:%s$",
 			bridge.Config.Bridge.FormatUsername("([0-9]+)"),
@@ -46,7 +45,7 @@ func (bridge *Bridge) ParsePuppetMXID(mxid id.UserID) (types.WhatsAppID, bool) {
 		return "", false
 	}
 
-	jid := types.WhatsAppID(match[1] + whatsappExt.NewUserSuffix)
+	jid := types.GroupMeID(match[1] + whatsappExt.NewUserSuffix)
 	return jid, true
 }
 
@@ -59,7 +58,7 @@ func (bridge *Bridge) GetPuppetByMXID(mxid id.UserID) *Puppet {
 	return bridge.GetPuppetByJID(jid)
 }
 
-func (bridge *Bridge) GetPuppetByJID(jid types.WhatsAppID) *Puppet {
+func (bridge *Bridge) GetPuppetByJID(jid types.GroupMeID) *Puppet {
 	bridge.puppetsLock.Lock()
 	defer bridge.puppetsLock.Unlock()
 	puppet, ok := bridge.puppets[jid]
@@ -124,7 +123,7 @@ func (bridge *Bridge) dbPuppetsToPuppets(dbPuppets []*database.Puppet) []*Puppet
 	return output
 }
 
-func (bridge *Bridge) FormatPuppetMXID(jid types.WhatsAppID) id.UserID {
+func (bridge *Bridge) FormatPuppetMXID(jid types.GroupMeID) id.UserID {
 	return id.NewUserID(
 		bridge.Config.Bridge.FormatUsername(
 			strings.Replace(
@@ -181,54 +180,54 @@ func (puppet *Puppet) DefaultIntent() *appservice.IntentAPI {
 }
 
 func (puppet *Puppet) UpdateAvatar(source *User, avatar *whatsappExt.ProfilePicInfo) bool {
-	if avatar == nil {
-		var err error
-		avatar, err = source.Conn.GetProfilePicThumb(puppet.JID)
-		if err != nil {
-			puppet.log.Warnln("Failed to get avatar:", err)
-			return false
-		}
-	}
+	// if avatar == nil {
+	// 	var err error
+	// 	avatar, err = source.Conn.GetProfilePicThumb(puppet.JID)
+	// 	if err != nil {
+	// 		puppet.log.Warnln("Failed to get avatar:", err)
+	// 		return false
+	// 	}
+	// }
 
-	if avatar.Status != 0 {
-		return false
-	}
+	// if avatar.Status != 0 {
+	// 	return false
+	// }
 
-	if avatar.Tag == puppet.Avatar {
-		return false
-	}
+	// if avatar.Tag == puppet.Avatar {
+	// 	return false
+	// }
 
-	if len(avatar.URL) == 0 {
-		err := puppet.DefaultIntent().SetAvatarURL(id.ContentURI{})
-		if err != nil {
-			puppet.log.Warnln("Failed to remove avatar:", err)
-		}
-		puppet.AvatarURL = id.ContentURI{}
-		puppet.Avatar = avatar.Tag
-		go puppet.updatePortalAvatar()
-		return true
-	}
+	// if len(avatar.URL) == 0 {
+	// 	err := puppet.DefaultIntent().SetAvatarURL(id.ContentURI{})
+	// 	if err != nil {
+	// 		puppet.log.Warnln("Failed to remove avatar:", err)
+	// 	}
+	// 	puppet.AvatarURL = id.ContentURI{}
+	// 	puppet.Avatar = avatar.Tag
+	// 	go puppet.updatePortalAvatar()
+	// 	return true
+	// }
 
-	data, err := avatar.DownloadBytes()
-	if err != nil {
-		puppet.log.Warnln("Failed to download avatar:", err)
-		return false
-	}
+	// data, err := avatar.DownloadBytes()
+	// if err != nil {
+	// 	puppet.log.Warnln("Failed to download avatar:", err)
+	// 	return false
+	// }
 
-	mime := http.DetectContentType(data)
-	resp, err := puppet.DefaultIntent().UploadBytes(data, mime)
-	if err != nil {
-		puppet.log.Warnln("Failed to upload avatar:", err)
-		return false
-	}
+	// mime := http.DetectContentType(data)
+	// resp, err := puppet.DefaultIntent().UploadBytes(data, mime)
+	// if err != nil {
+	// 	puppet.log.Warnln("Failed to upload avatar:", err)
+	// 	return false
+	// }
 
-	puppet.AvatarURL = resp.ContentURI
-	err = puppet.DefaultIntent().SetAvatarURL(puppet.AvatarURL)
-	if err != nil {
-		puppet.log.Warnln("Failed to set avatar:", err)
-	}
-	puppet.Avatar = avatar.Tag
-	go puppet.updatePortalAvatar()
+	// puppet.AvatarURL = resp.ContentURI
+	// err = puppet.DefaultIntent().SetAvatarURL(puppet.AvatarURL)
+	// if err != nil {
+	// 	puppet.log.Warnln("Failed to set avatar:", err)
+	// }
+	// puppet.Avatar = avatar.Tag
+	// go puppet.updatePortalAvatar()
 	return true
 }
 
@@ -285,19 +284,19 @@ func (puppet *Puppet) updatePortalName() {
 }
 
 func (puppet *Puppet) Sync(source *User, contact whatsapp.Contact) {
-	err := puppet.DefaultIntent().EnsureRegistered()
-	if err != nil {
-		puppet.log.Errorln("Failed to ensure registered:", err)
-	}
+	// err := puppet.DefaultIntent().EnsureRegistered()
+	// if err != nil {
+	// 	puppet.log.Errorln("Failed to ensure registered:", err)
+	// }
 
-	if contact.Jid == source.JID {
-		contact.Notify = source.Conn.Info.Pushname
-	}
+	// if contact.Jid == source.JID {
+	// 	contact.Notify = source.Conn.Info.Pushname
+	// }
 
-	update := false
-	update = puppet.UpdateName(source, contact) || update
-	update = puppet.UpdateAvatar(source, nil) || update
-	if update {
-		puppet.Update()
-	}
+	// update := false
+	// update = puppet.UpdateName(source, contact) || update
+	// update = puppet.UpdateAvatar(source, nil) || update
+	// if update {
+	// 	puppet.Update()
+	// }
 }

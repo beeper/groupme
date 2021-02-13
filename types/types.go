@@ -16,8 +16,11 @@
 
 package types
 
-// WhatsAppID is a WhatsApp JID.
-type WhatsAppID = string
+// GroupMeID is a WhatsApp JID.
+type GroupMeID = string
 
 // WhatsAppMessageID is the internal ID of a WhatsApp message.
 type WhatsAppMessageID = string
+
+//AuthToken is the authentication token
+type AuthToken = string

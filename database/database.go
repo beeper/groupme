@@ -17,18 +17,19 @@
 package database
 
 import (
-	"database/sql"
-
 	_ "github.com/lib/pq"
 	_ "github.com/mattn/go-sqlite3"
 
 	log "maunium.net/go/maulogger/v2"
-
 	"maunium.net/go/mautrix-whatsapp/database/upgrades"
+
+	"gorm.io/driver/postgres"
+	"gorm.io/driver/sqlite"
+	"gorm.io/gorm"
 )
 
 type Database struct {
-	*sql.DB
+	*gorm.DB
 	log     log.Logger
 	dialect string
 
@@ -39,17 +40,24 @@ type Database struct {
 }
 
 func New(dbType string, uri string, baseLog log.Logger) (*Database, error) {
-	conn, err := sql.Open(dbType, uri)
-	if err != nil {
-		return nil, err
-	}
+
+	var conn gorm.Dialector
 
 	if dbType == "sqlite3" {
-		_, _ = conn.Exec("PRAGMA foreign_keys = ON")
+		//_, _ = conn.Exec("PRAGMA foreign_keys = ON")
+		conn = sqlite.Open(uri)
+	} else {
+		conn = postgres.Open(uri)
 	}
-
+	print("no")
+	gdb, err := gorm.Open(conn, &gorm.Config{
+		// Logger: baseLog,
+	})
+	if err != nil {
+		panic("failed to connect database")
+	}
 	db := &Database{
-		DB:      conn,
+		DB:      gdb,
 		log:     baseLog.Sub("Database"),
 		dialect: dbType,
 	}
@@ -73,6 +81,29 @@ func New(dbType string, uri string, baseLog log.Logger) (*Database, error) {
 }
 
 func (db *Database) Init() error {
+	err := db.AutoMigrate(&Portal{})
+	if err != nil {
+		return err
+	}
+	err = db.AutoMigrate(&Puppet{})
+	if err != nil {
+		return err
+	}
+	err = db.AutoMigrate(&Message{})
+	if err != nil {
+		return err
+	}
+
+	err = db.AutoMigrate(&mxRegistered{})
+	if err != nil {
+		return err
+	}
+
+	err = db.AutoMigrate(&mxUserProfile{})
+	if err != nil {
+		return err
+	}
+
 	return upgrades.Run(db.log.Sub("Upgrade"), db.dialect, db.DB)
 }
 

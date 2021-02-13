@@ -1,67 +1,67 @@
 # Features & roadmap
-* Matrix → WhatsApp
-  * [x] Message content
-    * [x] Plain text
-    * [x] Formatted messages
-    * [x] Media/files
-    * [x] Replies
-  * [x] Message redactions
-  * [x] Presence
-  * [x] Typing notifications
-  * [x] Read receipts
+* Matrix → GroupMe
+  * [ ] Message content
+    * [ ] Plain text
+    * [ ] Formatted messages
+    * [ ] Media/files
+    * [ ] Replies
+  * [ ] Message redactions
+  * [ ] Presence
+  * [ ] Typing notifications
+  * [ ] Read receipts
   * [ ] Power level
   * [ ] Membership actions
-    * [x] Invite
+    * [ ] Invite
     * [ ] Join
-    * [x] Leave
-    * [x] Kick
+    * [ ] Leave
+    * [ ] Kick
   * [ ] Room metadata changes
-    * [x] Name
+    * [ ] Name
     * [ ] Avatar<sup>[1]</sup>
-    * [x] Topic
+    * [ ] Topic
   * [ ] Initial room metadata
-* WhatsApp → Matrix
-  * [x] Message content
-    * [x] Plain text
-    * [x] Formatted messages
-    * [x] Media/files
-    * [x] Location messages
-    * [x] Contact messages
-    * [x] Replies
+* GroupMe → Matrix
+  * [ ] Message content
+    * [ ] Plain text
+    * [ ] Formatted messages
+    * [ ] Media/files
+    * [ ] Location messages
+    * [ ] Contact messages
+    * [ ] Replies
   * [ ] Chat types
-    * [x] Private chat
-    * [x] Group chat
+    * [ ] Private chat
+    * [ ] Group chat
     * [ ] Broadcast list<sup>[2]</sup>
-  * [x] Message deletions
-  * [x] Avatars
-  * [x] Presence
-  * [x] Typing notifications
-  * [x] Read receipts
-  * [x] Admin/superadmin status
-  * [x] Membership actions
-    * [x] Invite
-    * [x] Join
-    * [x] Leave
-    * [x] Kick
-  * [x] Group metadata changes
-    * [x] Title
-    * [x] Avatar
-    * [x] Description
-  * [x] Initial group metadata
+  * [ ] Message deletions
+  * [ ] Avatars
+  * [ ] Presence
+  * [ ] Typing notifications
+  * [ ] Read receipts
+  * [ ] Admin/superadmin status
+  * [ ] Membership actions
+    * [ ] Invite
+    * [ ] Join
+    * [ ] Leave
+    * [ ] Kick
+  * [ ] Group metadata changes
+    * [ ] Title
+    * [ ] Avatar
+    * [ ] Description
+  * [ ] Initial group metadata
   * [ ] User metadata changes
     * [ ] Display name<sup>[3]</sup>
-    * [x] Avatar
-  * [x] Initial user metadata
-    * [x] Display name
-    * [x] Avatar
+    * [ ] Avatar
+  * [ ] Initial user metadata
+    * [ ] Display name
+    * [ ] Avatar
 * Misc
-  * [x] Automatic portal creation
-    * [x] At startup
-    * [x] When receiving invite
-    * [x] When receiving message
-  * [x] Private chat creation by inviting Matrix puppet of WhatsApp user to new room
-  * [x] Option to use own Matrix account for messages sent from WhatsApp mobile/other web clients
-  * [x] Shared group chat portals
+  * [ ] Automatic portal creation
+    * [ ] At startup
+    * [ ] When receiving invite
+    * [ ] When receiving message
+  * [ ] Private chat creation by inviting Matrix puppet of WhatsApp user to new room
+  * [ ] Option to use own Matrix account for messages sent from WhatsApp mobile/other web clients
+  * [ ] Shared group chat portals
 
 <sup>[1]</sup> May involve reverse-engineering the WhatsApp Web API and/or editing go-whatsapp  
 <sup>[2]</sup> May already work  

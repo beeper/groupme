@@ -27,7 +27,7 @@ import (
 	"maunium.net/go/mautrix/id"
 
 	"maunium.net/go/mautrix-whatsapp/types"
-	"maunium.net/go/mautrix-whatsapp/whatsapp-ext"
+	whatsappExt "maunium.net/go/mautrix-whatsapp/whatsapp-ext"
 )
 
 var italicRegex = regexp.MustCompile("([\\s>~*]|^)_(.+?)_([^a-zA-Z\\d]|$)")
@@ -58,9 +58,9 @@ func NewFormatter(bridge *Bridge) *Formatter {
 				if mxid[0] == '@' {
 					puppet := bridge.GetPuppetByMXID(id.UserID(mxid))
 					if puppet != nil {
-						jids, ok := ctx[mentionedJIDsContextKey].([]types.WhatsAppID)
+						jids, ok := ctx[mentionedJIDsContextKey].([]types.GroupMeID)
 						if !ok {
-							ctx[mentionedJIDsContextKey] = []types.WhatsAppID{puppet.JID}
+							ctx[mentionedJIDsContextKey] = []types.GroupMeID{puppet.JID}
 						} else {
 							ctx[mentionedJIDsContextKey] = append(jids, puppet.JID)
 						}
@@ -100,12 +100,11 @@ func NewFormatter(bridge *Bridge) *Formatter {
 			return fmt.Sprintf("<code>%s</code>", str)
 		},
 	}
-	formatter.waReplFuncText = map[*regexp.Regexp]func(string) string{
-	}
+	formatter.waReplFuncText = map[*regexp.Regexp]func(string) string{}
 	return formatter
 }
 
-func (formatter *Formatter) getMatrixInfoByJID(jid types.WhatsAppID) (mxid id.UserID, displayname string) {
+func (formatter *Formatter) getMatrixInfoByJID(jid types.GroupMeID) (mxid id.UserID, displayname string) {
 	if user := formatter.bridge.GetUserByJID(jid); user != nil {
 		mxid = user.MXID
 		displayname = string(user.MXID)
@@ -116,7 +115,7 @@ func (formatter *Formatter) getMatrixInfoByJID(jid types.WhatsAppID) (mxid id.Us
 	return
 }
 
-func (formatter *Formatter) ParseWhatsApp(content *event.MessageEventContent, mentionedJIDs []types.WhatsAppID) {
+func (formatter *Formatter) ParseWhatsApp(content *event.MessageEventContent, mentionedJIDs []types.GroupMeID) {
 	output := html.EscapeString(content.Body)
 	for regex, replacement := range formatter.waReplString {
 		output = regex.ReplaceAllString(output, replacement)
@@ -140,9 +139,9 @@ func (formatter *Formatter) ParseWhatsApp(content *event.MessageEventContent, me
 	}
 }
 
-func (formatter *Formatter) ParseMatrix(html string) (string, []types.WhatsAppID) {
+func (formatter *Formatter) ParseMatrix(html string) (string, []types.GroupMeID) {
 	ctx := make(format.Context)
 	result := formatter.matrixHTMLParser.Parse(html, ctx)
-	mentionedJIDs, _ := ctx[mentionedJIDsContextKey].([]types.WhatsAppID)
+	mentionedJIDs, _ := ctx[mentionedJIDsContextKey].([]types.GroupMeID)
 	return result, mentionedJIDs
 }

@@ -17,6 +17,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/signal"
@@ -137,14 +138,14 @@ type Bridge struct {
 	Metrics        *MetricsHandler
 
 	usersByMXID         map[id.UserID]*User
-	usersByJID          map[types.WhatsAppID]*User
+	usersByJID          map[types.GroupMeID]*User
 	usersLock           sync.Mutex
 	managementRooms     map[id.RoomID]*User
 	managementRoomsLock sync.Mutex
 	portalsByMXID       map[id.RoomID]*Portal
 	portalsByJID        map[database.PortalKey]*Portal
 	portalsLock         sync.Mutex
-	puppets             map[types.WhatsAppID]*Puppet
+	puppets             map[types.GroupMeID]*Puppet
 	puppetsByCustomMXID map[id.UserID]*Puppet
 	puppetsLock         sync.Mutex
 }
@@ -163,11 +164,11 @@ type Crypto interface {
 func NewBridge() *Bridge {
 	bridge := &Bridge{
 		usersByMXID:         make(map[id.UserID]*User),
-		usersByJID:          make(map[types.WhatsAppID]*User),
+		usersByJID:          make(map[types.GroupMeID]*User),
 		managementRooms:     make(map[id.RoomID]*User),
 		portalsByMXID:       make(map[id.RoomID]*Portal),
 		portalsByJID:        make(map[database.PortalKey]*Portal),
-		puppets:             make(map[types.WhatsAppID]*Puppet),
+		puppets:             make(map[types.GroupMeID]*Puppet),
 		puppetsByCustomMXID: make(map[id.UserID]*Puppet),
 	}
 
@@ -223,7 +224,10 @@ func (bridge *Bridge) Init() {
 	bridge.AS.Log = log.Sub("Matrix")
 
 	bridge.Log.Debugln("Initializing database connection")
+	print("test1")
+
 	bridge.DB, err = database.New(bridge.Config.AppService.Database.Type, bridge.Config.AppService.Database.URI, bridge.Log)
+
 	if err != nil {
 		bridge.Log.Fatalln("Failed to initialize database connection:", err)
 		os.Exit(14)
@@ -242,8 +246,8 @@ func (bridge *Bridge) Init() {
 	bridge.StateStore = database.NewSQLStateStore(bridge.DB)
 	bridge.AS.StateStore = bridge.StateStore
 
-	bridge.DB.SetMaxOpenConns(bridge.Config.AppService.Database.MaxOpenConns)
-	bridge.DB.SetMaxIdleConns(bridge.Config.AppService.Database.MaxIdleConns)
+	//	bridge.DB.SetMaxOpenConns(bridge.Config.AppService.Database.MaxOpenConns)
+	//	bridge.DB.SetMaxIdleConns(bridge.Config.AppService.Database.MaxIdleConns)
 
 	ss := bridge.Config.AppService.Provisioning.SharedSecret
 	if len(ss) > 0 && ss != "disable" {
@@ -383,16 +387,18 @@ func (bridge *Bridge) Stop() {
 			continue
 		}
 		bridge.Log.Debugln("Disconnecting", user.MXID)
-		sess, err := user.Conn.Disconnect()
-		if err != nil {
-			bridge.Log.Errorfln("Error while disconnecting %s: %v", user.MXID, err)
-		} else if len(sess.Wid) > 0 {
-			user.SetSession(&sess)
-		}
+		//sess, err :=
+		user.Conn.Stop(context.TODO())
+		// if err != nil {
+		// 	bridge.Log.Errorfln("Error while disconnecting %s: %v", user.MXID, err)
+		// } else if len(sess.Wid) > 0 {
+		// 	user.SetSession(&sess)
+		// }
 	}
 }
 
 func (bridge *Bridge) Main() {
+
 	if *generateRegistration {
 		bridge.GenerateRegistration()
 		return
@@ -400,7 +406,6 @@ func (bridge *Bridge) Main() {
 		bridge.MigrateDatabase()
 		return
 	}
-
 	bridge.Init()
 	bridge.Log.Infoln("Bridge initialization complete, starting...")
 	bridge.Start()

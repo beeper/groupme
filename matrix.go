@@ -168,6 +168,7 @@ func (mx *MatrixHandler) createPrivatePortalFromInvite(roomID id.RoomID, inviter
 	if portal.bridge.Config.Bridge.PrivateChatPortalMeta {
 		portal.Name = puppet.Displayname
 		portal.AvatarURL = puppet.AvatarURL
+		print("possible bug with pointer above")
 		portal.Avatar = puppet.Avatar
 		_, _ = portal.MainIntent().SetRoomName(portal.MXID, portal.Name)
 		_, _ = portal.MainIntent().SetRoomAvatar(portal.MXID, portal.AvatarURL)
@@ -288,33 +289,33 @@ func (mx *MatrixHandler) HandleMembership(evt *event.Event) {
 }
 
 func (mx *MatrixHandler) HandleRoomMetadata(evt *event.Event) {
-	defer mx.bridge.Metrics.TrackEvent(evt.Type)()
-	user := mx.bridge.GetUserByMXID(evt.Sender)
-	if user == nil || !user.Whitelisted || !user.IsConnected() {
-		return
-	}
+	// defer mx.bridge.Metrics.TrackEvent(evt.Type)()
+	// user := mx.bridge.GetUserByMXID(evt.Sender)
+	// if user == nil || !user.Whitelisted || !user.IsConnected() {
+	// 	return
+	// }
 
-	portal := mx.bridge.GetPortalByMXID(evt.RoomID)
-	if portal == nil || portal.IsPrivateChat() {
-		return
-	}
+	// portal := mx.bridge.GetPortalByMXID(evt.RoomID)
+	// if portal == nil || portal.IsPrivateChat() {
+	// 	return
+	// }
 
-	var resp <-chan string
-	var err error
-	switch content := evt.Content.Parsed.(type) {
-	case *event.RoomNameEventContent:
-		resp, err = user.Conn.UpdateGroupSubject(content.Name, portal.Key.JID)
-	case *event.TopicEventContent:
-		resp, err = user.Conn.UpdateGroupDescription(portal.Key.JID, content.Topic)
-	case *event.RoomAvatarEventContent:
-		return
-	}
-	if err != nil {
-		mx.log.Errorln(err)
-	} else {
-		out := <-resp
-		mx.log.Infoln(out)
-	}
+	// var resp <-chan string
+	// var err error
+	// switch content := evt.Content.Parsed.(type) {
+	// case *event.RoomNameEventContent:
+	// 	resp, err = user.Conn.UpdateGroupSubject(content.Name, portal.Key.JID)
+	// case *event.TopicEventContent:
+	// 	resp, err = user.Conn.UpdateGroupDescription(portal.Key.JID, content.Topic)
+	// case *event.RoomAvatarEventContent:
+	// 	return
+	// }
+	// if err != nil {
+	// 	mx.log.Errorln(err)
+	// } else {
+	// 	out := <-resp
+	// 	mx.log.Infoln(out)
+	// }
 }
 
 func (mx *MatrixHandler) shouldIgnoreEvent(evt *event.Event) bool {

@@ -178,7 +178,7 @@ func (bc BridgeConfig) FormatDisplayname(contact whatsapp.Contact) (string, int8
 	return buf.String(), quality
 }
 
-func (bc BridgeConfig) FormatUsername(userID types.WhatsAppID) string {
+func (bc BridgeConfig) FormatUsername(userID types.GroupMeID) string {
 	var buf bytes.Buffer
 	bc.usernameTemplate.Execute(&buf, userID)
 	return buf.String()

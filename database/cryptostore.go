@@ -36,8 +36,9 @@ type SQLCryptoStore struct {
 var _ crypto.Store = (*SQLCryptoStore)(nil)
 
 func NewSQLCryptoStore(db *Database, userID id.UserID, ghostIDFormat string) *SQLCryptoStore {
+	raw, _ := db.DB.DB()
 	return &SQLCryptoStore{
-		SQLCryptoStore: crypto.NewSQLCryptoStore(db.DB, db.dialect, "", "",
+		SQLCryptoStore: crypto.NewSQLCryptoStore(raw, db.dialect, "", "",
 			[]byte("maunium.net/go/mautrix-whatsapp"),
 			&cryptoLogger{db.log.Sub("CryptoStore")}),
 		UserID:        userID,
