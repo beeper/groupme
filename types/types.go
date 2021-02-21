@@ -24,3 +24,5 @@ type WhatsAppMessageID = string
 
 //AuthToken is the authentication token
 type AuthToken = string
+
+type TmpID = GroupMeID

@@ -20,13 +20,13 @@ import (
 	// "errors"
 	"context"
 	"fmt"
+
 	// "math"
-	"sort"
+
 	"strconv"
 	"strings"
 
 	"github.com/Rhymen/go-whatsapp"
-
 	"maunium.net/go/maulogger/v2"
 
 	"maunium.net/go/mautrix"
@@ -34,9 +34,6 @@ import (
 	"maunium.net/go/mautrix/event"
 	"maunium.net/go/mautrix/format"
 	"maunium.net/go/mautrix/id"
-
-	// "maunium.net/go/mautrix-whatsapp/database"
-	"maunium.net/go/mautrix-whatsapp/whatsapp-ext"
 )
 
 type CommandHandler struct {
@@ -382,10 +379,10 @@ const cmdLoginHelp = `login - Authenticate this Bridge as WhatsApp Web Client`
 
 // CommandLogin handles login command
 func (handler *CommandHandler) CommandLogin(ce *CommandEvent) {
-	if !ce.User.Connect(true) {
-		ce.User.log.Debugln("Connect() returned false, assuming error was logged elsewhere and canceling login.")
-		return
-	}
+	//	if !ce.User.Connect(true) {
+	//		ce.User.log.Debugln("Connect() returned false, assuming error was logged elsewhere and canceling login.")
+	//		return
+	//	}
 	ce.User.Login(ce)
 }
 
@@ -418,8 +415,13 @@ func (handler *CommandHandler) CommandLogout(ce *CommandEvent) {
 	// 	ce.User.log.Warnln("Error while disconnecting after logout:", err)
 	// }
 	// ce.User.Conn.RemoveHandlers()
-	// ce.User.Conn = nil
-	// ce.User.removeFromJIDMap()
+	ce.User.Conn.Stop(context.TODO())
+	ce.User.Conn = nil
+	ce.User.removeFromJIDMap()
+	ce.User.Token = ""
+	ce.User.JID = ""
+	ce.User.Client = nil
+	ce.User.Update()
 	// // TODO this causes a foreign key violation, which should be fixed
 	// //ce.User.JID = ""
 	// ce.User.SetSession(nil)
@@ -489,15 +491,16 @@ func (handler *CommandHandler) CommandDeleteSession(ce *CommandEvent) {
 const cmdReconnectHelp = `reconnect - Reconnect to WhatsApp`
 
 func (handler *CommandHandler) CommandReconnect(ce *CommandEvent) {
-	// if ce.User.Conn == nil {
-	// 	if ce.User.Session == nil {
-	// 		ce.Reply("No existing connection and no session. Did you mean `login`?")
-	// 	} else {
-	// 		ce.Reply("No existing connection, creating one...")
-	// 		ce.User.Connect(false)
-	// 	}
-	// 	return
-	// }
+	fmt.Println(ce.User.Conn)
+	if ce.User.Conn == nil {
+		if len(ce.User.Token) == 0 {
+			ce.Reply("No existing connection and no token. Did you mean `login`?")
+		} else {
+			ce.Reply("No existing connection, creating one...")
+			ce.User.Connect()
+		}
+		return
+	}
 
 	// wasConnected := true
 	// sess, err := ce.User.Conn.Disconnect()
@@ -581,7 +584,7 @@ func (handler *CommandHandler) CommandDisconnect(ce *CommandEvent) {
 		ce.Reply("You don't have a WhatsApp connection.")
 		return
 	}
-	 ce.User.Conn.Stop(context.TODO())
+	ce.User.Conn.Stop(context.TODO())
 	// if err == whatsapp.ErrNotConnected {
 	// 	ce.Reply("You were not connected.")
 	// 	return
@@ -750,18 +753,18 @@ func (handler *CommandHandler) CommandDeleteAllPortals(ce *CommandEvent) {
 const cmdListHelp = `list <contacts|groups> [page] [items per page] - Get a list of all contacts and groups.`
 
 func formatContacts(contacts bool, input map[string]whatsapp.Contact) (result []string) {
-	for jid, contact := range input {
-		if strings.HasSuffix(jid, whatsappExt.NewUserSuffix) != contacts {
-			continue
-		}
-
-		if contacts {
-			result = append(result, fmt.Sprintf("* %s / %s - `%s`", contact.Name, contact.Notify, contact.Jid[:len(contact.Jid)-len(whatsappExt.NewUserSuffix)]))
-		} else {
-			result = append(result, fmt.Sprintf("* %s - `%s`", contact.Name, contact.Jid))
-		}
-	}
-	sort.Sort(sort.StringSlice(result))
+	//	for jid, contact := range input {
+	//		if strings.HasSuffix(jid, whatsappExt.NewUserSuffix) != contacts {
+	//			continue
+	//		}
+	//
+	//		if contacts {
+	//			result = append(result, fmt.Sprintf("* %s / %s - `%s`", contact.Name, contact.Notify, contact.Jid[:len(contact.Jid)-len(whatsappExt.NewUserSuffix)]))
+	//		} else {
+	//			result = append(result, fmt.Sprintf("* %s - `%s`", contact.Name, contact.Jid))
+	//		}
+	//	}
+	//	sort.Sort(sort.StringSlice(result))
 	return
 }
 

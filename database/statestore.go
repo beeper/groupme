@@ -55,7 +55,8 @@ func NewSQLStateStore(db *Database) *SQLStateStore {
 
 func (store *SQLStateStore) IsRegistered(userID id.UserID) bool {
 	v := mxRegistered{UserID: userID.String()}
-	ans := store.db.First(&v)
+	var count int64
+	ans := store.db.Model(&mxRegistered{}).Where(&v).Count(&count)
 
 	if errors.Is(ans.Error, gorm.ErrRecordNotFound) {
 		return false
@@ -63,7 +64,7 @@ func (store *SQLStateStore) IsRegistered(userID id.UserID) bool {
 	if ans.Error != nil {
 		store.log.Warnfln("Failed to scan registration existence for %s: %v", userID, ans.Error)
 	}
-	return true
+	return count >= 1
 }
 
 func (store *SQLStateStore) MarkRegistered(userID id.UserID) {
@@ -113,7 +114,7 @@ func (store *SQLStateStore) GetRoomMembers(roomID id.RoomID) map[id.UserID]*even
 
 func (store *SQLStateStore) GetMembership(roomID id.RoomID, userID id.UserID) event.Membership {
 	var user mxUserProfile
-	ans := store.db.Where("room_id = ? AND user_id = ?", roomID, userID).Take(&user)
+	ans := store.db.Where("room_id = ? AND user_id = ?", roomID, userID).Limit(1).Find(&user)
 	membership := event.MembershipLeave
 	if ans.Error != nil && ans.Error != gorm.ErrRecordNotFound {
 		store.log.Warnfln("Failed to scan membership of %s in %s: %v", userID, roomID, ans.Error)
@@ -197,8 +198,8 @@ func (store *SQLStateStore) SetMembership(roomID id.RoomID, userID id.UserID, me
 	print("weird thing 2 502650285")
 	print(user.Membership)
 
-	ans := store.db.Select("roomID", "userID", "membership").Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "roomID"}, {Name: "userID"}},
+	ans := store.db.Debug().Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "room_id"}, {Name: "user_id"}},
 		DoUpdates: clause.AssignmentColumns([]string{"membership"}),
 	}).Create(&user)
 
@@ -217,7 +218,7 @@ func (store *SQLStateStore) SetMember(roomID id.RoomID, userID id.UserID, member
 		AvatarURL:   string(member.AvatarURL),
 	}
 	ans := store.db.Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "roomID"}, {Name: "userID"}},
+		Columns:   []clause.Column{{Name: "room_id"}, {Name: "user_id"}},
 		DoUpdates: clause.AssignmentColumns([]string{"membership"}),
 	}).Create(&user)
 

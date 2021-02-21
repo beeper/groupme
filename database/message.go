@@ -46,8 +46,8 @@ func (mq *MessageQuery) GetAll(chat PortalKey) (messages []*Message) {
 
 func (mq *MessageQuery) GetByJID(chat PortalKey, jid types.WhatsAppMessageID) *Message {
 	var message Message
-	ans := mq.db.Where("chat_jid = ? AND chat_receiver = ? AND jid = ?", chat.JID, chat.Receiver, jid).Take(&message)
-	if ans.Error != nil {
+	ans := mq.db.Where("chat_jid = ? AND chat_receiver = ? AND jid = ?", chat.JID, chat.Receiver, jid).Limit(1).Find(&message)
+	if ans.Error != nil || ans.RowsAffected == 0 {
 		return nil
 	}
 	return &message
@@ -55,8 +55,8 @@ func (mq *MessageQuery) GetByJID(chat PortalKey, jid types.WhatsAppMessageID) *M
 
 func (mq *MessageQuery) GetByMXID(mxid id.EventID) *Message {
 	var message Message
-	ans := mq.db.Where("mxid = ?", mxid).Take(&message)
-	if ans.Error != nil {
+	ans := mq.db.Where("mxid = ?", mxid).Limit(1).Find(&message)
+	if ans.Error != nil || ans.RowsAffected == 0 {
 		return nil
 	}
 	return &message
@@ -64,8 +64,8 @@ func (mq *MessageQuery) GetByMXID(mxid id.EventID) *Message {
 
 func (mq *MessageQuery) GetLastInChat(chat PortalKey) *Message {
 	var message Message
-	ans := mq.db.Where("chat_jid = ? AND chat_receiver = ?", chat.JID, chat.Receiver).Order("timestamp desc").First(&message)
-	if ans.Error != nil {
+	ans := mq.db.Where("chat_jid = ? AND chat_receiver = ?", chat.JID, chat.Receiver).Order("timestamp desc").Limit(1).Find(&message)
+	if ans.Error != nil || ans.RowsAffected == 0 {
 		return nil
 	}
 	return &message
@@ -76,12 +76,12 @@ type Message struct {
 	db  *Database
 	log log.Logger
 
-	Chat      PortalKey               `gorm:"primaryKey;embedded;embeddedPrefix:chat_"`
-	JID       types.WhatsAppMessageID `gorm:"primaryKey"`
-	MXID      id.EventID              `gorm:"unique;notNull"`
-	Sender    types.GroupMeID         `gorm:"notNull"`
-	Timestamp uint64                  `gorm:"notNull;default:0"`
-	Content   *groupme.Message        `gorm:"type:TEXT;notNull"`
+	Chat      PortalKey        `gorm:"primaryKey;embedded;embeddedPrefix:chat_"`
+	JID       types.GroupMeID  `gorm:"primaryKey"`
+	MXID      id.EventID       `gorm:"unique;notNull"`
+	Sender    types.GroupMeID  `gorm:"notNull"`
+	Timestamp uint64           `gorm:"notNull;default:0"`
+	Content   *groupme.Message `gorm:"type:TEXT;notNull"`
 
 	//	Portal Portal `gorm:"foreignKey:JID;"` //`gorm:"foreignKey:Chat.Receiver,Chat.JID;references:jid,receiver;constraint:onDelete:CASCADE;"`TODO
 }

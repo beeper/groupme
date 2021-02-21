@@ -327,7 +327,7 @@ func (bridge *Bridge) LoadRelaybot() {
 	}
 	bridge.Relaybot.ManagementRoom = bridge.Config.Bridge.Relaybot.ManagementRoom
 	bridge.Relaybot.IsRelaybot = true
-	bridge.Relaybot.Connect(false)
+	bridge.Relaybot.Connect()
 }
 
 func (bridge *Bridge) UpdateBotProfile() {
@@ -361,7 +361,7 @@ func (bridge *Bridge) UpdateBotProfile() {
 func (bridge *Bridge) StartUsers() {
 	bridge.Log.Debugln("Starting users")
 	for _, user := range bridge.GetAllUsers() {
-		go user.Connect(false)
+		go user.Connect()
 	}
 	bridge.Log.Debugln("Starting custom puppets")
 	for _, loopuppet := range bridge.GetAllPuppetsWithCustomMXID() {

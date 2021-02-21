@@ -17,6 +17,8 @@
 package database
 
 import (
+	"strings"
+
 	_ "github.com/lib/pq"
 	_ "github.com/mattn/go-sqlite3"
 
@@ -26,6 +28,7 @@ import (
 	"gorm.io/driver/postgres"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
+	"gorm.io/gorm/schema"
 )
 
 type Database struct {
@@ -52,6 +55,9 @@ func New(dbType string, uri string, baseLog log.Logger) (*Database, error) {
 	print("no")
 	gdb, err := gorm.Open(conn, &gorm.Config{
 		// Logger: baseLog,
+		NamingStrategy: schema.NamingStrategy{
+			NameReplacer: strings.NewReplacer("JID", "Jid", "MXID", "Mxid"),
+		},
 	})
 	if err != nil {
 		panic("failed to connect database")
@@ -81,6 +87,7 @@ func New(dbType string, uri string, baseLog log.Logger) (*Database, error) {
 }
 
 func (db *Database) Init() error {
+	println("actual upgrade")
 	err := db.AutoMigrate(&Portal{})
 	if err != nil {
 		return err
@@ -104,6 +111,14 @@ func (db *Database) Init() error {
 		return err
 	}
 
+	err = db.AutoMigrate(&User{})
+	if err != nil {
+		return err
+	}
+	err = db.AutoMigrate(&UserPortal{})
+	if err != nil {
+		return err
+	}
 	return upgrades.Run(db.log.Sub("Upgrade"), db.dialect, db.DB)
 }
 

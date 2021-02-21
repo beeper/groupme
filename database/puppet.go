@@ -53,8 +53,8 @@ func (pq *PuppetQuery) GetAll() (puppets []*Puppet) {
 
 func (pq *PuppetQuery) Get(jid types.GroupMeID) *Puppet {
 	puppet := Puppet{}
-	ans := pq.db.Where("jid = ?", jid).Take(puppet)
-	if ans.Error != nil {
+	ans := pq.db.Where("jid = ?", jid).Limit(1).Find(&puppet)
+	if ans.Error != nil || ans.RowsAffected == 0 {
 		return nil
 	}
 	return &puppet
@@ -62,8 +62,8 @@ func (pq *PuppetQuery) Get(jid types.GroupMeID) *Puppet {
 
 func (pq *PuppetQuery) GetByCustomMXID(mxid id.UserID) *Puppet {
 	puppet := Puppet{}
-	ans := pq.db.Where("custom_mxid = ?", mxid).Take(puppet)
-	if ans.Error != nil {
+	ans := pq.db.Where("custom_mxid = ?", mxid).Limit(1).Find(&puppet)
+	if ans.Error != nil || ans.RowsAffected == 0 {
 		return nil
 	}
 	return &puppet
@@ -93,7 +93,7 @@ type Puppet struct {
 	Displayname string
 	NameQuality int8
 
-	CustomMXID     id.UserID
+	CustomMXID     id.UserID `gorm:"column:custom_mxid;"`
 	AccessToken    string
 	NextBatch      string
 	EnablePresence bool `gorm:"notNull;default:true"`

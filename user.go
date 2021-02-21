@@ -22,11 +22,11 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/skip2/go-qrcode"
 	log "maunium.net/go/maulogger/v2"
 
 	"github.com/Rhymen/go-whatsapp"
@@ -40,6 +40,7 @@ import (
 
 	"github.com/karmanyaahm/groupme"
 	"maunium.net/go/mautrix-whatsapp/database"
+	"maunium.net/go/mautrix-whatsapp/groupmeExt"
 	"maunium.net/go/mautrix-whatsapp/types"
 	whatsappExt "maunium.net/go/mautrix-whatsapp/whatsapp-ext"
 )
@@ -57,7 +58,7 @@ type User struct {
 
 	IsRelaybot bool
 
-	Client           *groupme.Client
+	Client           *groupmeExt.Client
 	ConnectionErrors int
 	CommunityID      string
 
@@ -230,10 +231,10 @@ func (user *User) SetSession(session *whatsapp.Session) {
 	// user.Update()
 }
 
-func (user *User) Connect(evenIfNoLogin bool) bool {
+func (user *User) Connect() bool {
 	if user.Conn != nil {
 		return true
-	} else if !evenIfNoLogin && len(user.Token) < 0 {
+	} else if len(user.Token) == 0 {
 		return false
 	}
 	user.log.Debugln("Connecting to WhatsApp")
@@ -260,8 +261,6 @@ func (user *User) Connect(evenIfNoLogin bool) bool {
 
 func (user *User) RestoreSession() bool {
 	if len(user.Token) > 0 {
-		//sess, err :=
-		user.Conn.SubscribeToUser(context.TODO(), groupme.ID(user.GetJID()), user.Token)
 		// if err == whatsapp.ErrAlreadyLoggedIn {
 		// 	return true
 		// } else if err != nil {
@@ -275,7 +274,6 @@ func (user *User) RestoreSession() bool {
 		// 	}
 		// 	user.log.Debugln("Disconnecting due to failed session restore...")
 		//	_, err :=
-		user.Conn.Stop(context.TODO())
 		// if err != nil {
 		// 	user.log.Errorln("Failed to disconnect after failed session restore:", err)
 		// }
@@ -283,28 +281,30 @@ func (user *User) RestoreSession() bool {
 		// }
 
 		user.Conn.SubscribeToUser(context.TODO(), groupme.ID(user.JID), user.Token)
-
+		//TODO: typing notifics
 		user.ConnectionErrors = 0
 		//user.SetSession(&sess)
 		user.log.Debugln("Session restored successfully")
 		user.PostLogin()
+		return true
+	} else {
+		user.log.Debugln("tried login but no token")
+		return false
 	}
-	return true
 }
 
 func (user *User) HasSession() bool {
-	return user.Conn != nil && len(user.Token) > 0
+	return len(user.Token) > 0
 }
 
 func (user *User) IsConnected() bool {
-	// return user.Conn != nil && user.Conn.IsConnected() && user.Conn.IsLoggedIn()
-	return true
+	println("better connectoin check TODO")
+	return user.Conn != nil
 }
 
 func (user *User) IsLoggedIn() bool {
 	return true
 }
-
 
 func (user *User) IsLoginInProgress() bool {
 	// return user.Conn != nil && user.Conn.IsLoginInProgress()
@@ -318,59 +318,6 @@ func (user *User) GetJID() types.GroupMeID {
 	}
 	return user.JID
 }
-
-func (user *User) loginQrChannel(ce *CommandEvent, qrChan <-chan string, eventIDChan chan<- id.EventID) {
-	var qrEventID id.EventID
-	for code := range qrChan {
-		if code == "stop" {
-			return
-		}
-		qrCode, err := qrcode.Encode(code, qrcode.Low, 256)
-		if err != nil {
-			user.log.Errorln("Failed to encode QR code:", err)
-			ce.Reply("Failed to encode QR code: %v", err)
-			return
-		}
-
-		bot := user.bridge.AS.BotClient()
-
-		resp, err := bot.UploadBytes(qrCode, "image/png")
-		if err != nil {
-			user.log.Errorln("Failed to upload QR code:", err)
-			ce.Reply("Failed to upload QR code: %v", err)
-			return
-		}
-
-		if qrEventID == "" {
-			sendResp, err := bot.SendImage(ce.RoomID, code, resp.ContentURI)
-			if err != nil {
-				user.log.Errorln("Failed to send QR code to user:", err)
-				return
-			}
-			qrEventID = sendResp.EventID
-			eventIDChan <- qrEventID
-		} else {
-			_, err = bot.SendMessageEvent(ce.RoomID, event.EventMessage, &event.MessageEventContent{
-				MsgType: event.MsgImage,
-				Body:    code,
-				URL:     resp.ContentURI.CUString(),
-				NewContent: &event.MessageEventContent{
-					MsgType: event.MsgImage,
-					Body:    code,
-					URL:     resp.ContentURI.CUString(),
-				},
-				RelatesTo: &event.RelatesTo{
-					Type:    event.RelReplace,
-					EventID: qrEventID,
-				},
-			})
-			if err != nil {
-				user.log.Errorln("Failed to send edited QR code to user:", err)
-			}
-		}
-	}
-}
-
 func (user *User) Login(ce *CommandEvent) {
 	// qrChan := make(chan string, 3)
 	// eventIDChan := make(chan id.EventID, 1)
@@ -416,13 +363,13 @@ func (user *User) Login(ce *CommandEvent) {
 	user.addToJIDMap()
 	//user.SetSession(&session)
 	ce.Reply("Successfully logged in, synchronizing chats...")
-	// user.PostLogin()
+	user.PostLogin()
 }
 
 type Chat struct {
 	Portal          *Portal
 	LastMessageTime uint64
-	Contact         whatsapp.Contact
+	Group           groupme.Group
 }
 
 type ChatList []Chat
@@ -521,10 +468,19 @@ func (user *User) postConnPing() bool {
 func (user *User) intPostLogin() {
 	defer user.syncWait.Done()
 	user.lastReconnection = time.Now().Unix()
+	user.Client = groupmeExt.NewClient(user.Token)
+	myuser, err := user.Client.MyUser(context.TODO())
+	if err != nil {
+		log.Fatal(err) //TODO
+	}
+	user.JID = myuser.ID.String()
+	user.Update()
+
 	user.createCommunity()
 	user.tryAutomaticDoublePuppeting()
 
 	user.log.Debugln("Waiting for chat list receive confirmation")
+	user.HandleChatList()
 	select {
 	case <-user.chatListReceived:
 		user.log.Debugln("Chat list receive confirmation received in PostLogin")
@@ -565,84 +521,79 @@ func (user *User) HandleStreamEvent(evt whatsappExt.StreamEvent) {
 	}
 }
 
-func (user *User) HandleChatList(chats []whatsapp.Chat) {
-	// user.log.Infoln("Chat list received")
-	// chatMap := make(map[string]whatsapp.Chat)
-	// for _, chat := range user.Conn.Store.Chats {
-	// 	chatMap[chat.Jid] = chat
-	// }
-	// for _, chat := range chats {
-	// 	chatMap[chat.Jid] = chat
-	// }
-	// select {
-	// case user.chatListReceived <- struct{}{}:
-	// default:
-	// }
-	// go user.syncPortals(chatMap, false)
+func (user *User) HandleChatList() {
+	chatMap := make(map[string]groupme.Group)
+	chats, err := user.Client.IndexAllGroups()
+	if err != nil {
+		log.Fatal(err) //TODO: handle
+	}
+	for _, chat := range chats {
+		chatMap[chat.ID.String()] = *chat
+	}
+	user.chatListReceived <- struct{}{}
+	user.log.Infoln("Chat list received")
+	go user.syncPortals(chatMap, false)
 }
 
-func (user *User) syncPortals(chatMap map[string]whatsapp.Chat, createAll bool) {
-	// if chatMap == nil {
-	// 	chatMap = user.Conn.Store.Chats
-	// }
-	// user.log.Infoln("Reading chat list")
-	// chats := make(ChatList, 0, len(chatMap))
-	// existingKeys := user.GetInCommunityMap()
-	// portalKeys := make([]database.PortalKeyWithMeta, 0, len(chatMap))
-	// for _, chat := range chatMap {
-	// 	ts, err := strconv.ParseUint(chat.LastMessageTime, 10, 64)
-	// 	if err != nil {
-	// 		user.log.Warnfln("Non-integer last message time in %s: %s", chat.Jid, chat.LastMessageTime)
-	// 		continue
-	// 	}
-	// 	portal := user.GetPortalByJID(chat.Jid)
+func (user *User) syncPortals(chatMap map[string]groupme.Group, createAll bool) {
+	if chatMap == nil {
+		//	chatMap = user.Conn.Store.Chats
+		log.Fatal("chatmap nil major oops")
+	}
+	user.log.Infoln("Reading chat list")
 
-	// 	chats = append(chats, Chat{
-	// 		Portal:          portal,
-	// 		Contact:         user.Conn.Store.Contacts[chat.Jid],
-	// 		LastMessageTime: ts,
-	// 	})
-	// 	var inCommunity, ok bool
-	// 	if inCommunity, ok = existingKeys[portal.Key]; !ok || !inCommunity {
-	// 		inCommunity = user.addPortalToCommunity(portal)
-	// 		if portal.IsPrivateChat() {
-	// 			puppet := user.bridge.GetPuppetByJID(portal.Key.JID)
-	// 			user.addPuppetToCommunity(puppet)
-	// 		}
-	// 	}
-	// 	portalKeys = append(portalKeys, database.PortalKeyWithMeta{PortalKey: portal.Key, InCommunity: inCommunity})
-	// }
-	// user.log.Infoln("Read chat list, updating user-portal mapping")
-	// err := user.SetPortalKeys(portalKeys)
-	// if err != nil {
-	// 	user.log.Warnln("Failed to update user-portal mapping:", err)
-	// }
-	// sort.Sort(chats)
-	// limit := user.bridge.Config.Bridge.InitialChatSync
-	// if limit < 0 {
-	// 	limit = len(chats)
-	// }
-	// now := uint64(time.Now().Unix())
-	// user.log.Infoln("Syncing portals")
-	// for i, chat := range chats {
-	// 	if chat.LastMessageTime+user.bridge.Config.Bridge.SyncChatMaxAge < now {
-	// 		break
-	// 	}
-	// 	create := (chat.LastMessageTime >= user.LastConnection && user.LastConnection > 0) || i < limit
-	// 	if len(chat.Portal.MXID) > 0 || create || createAll {
-	// 		chat.Portal.Sync(user, chat.Contact)
-	// 		err := chat.Portal.BackfillHistory(user, chat.LastMessageTime)
-	// 		if err != nil {
-	// 			chat.Portal.log.Errorln("Error backfilling history:", err)
-	// 		}
-	// 	}
-	// }
-	// user.UpdateDirectChats(nil)
-	// user.log.Infoln("Finished syncing portals")
-	// select {
-	// case user.syncPortalsDone <- struct{}{}:
-	// default:
-	// }
+	chats := make(ChatList, 0, len(chatMap))
+	existingKeys := user.GetInCommunityMap()
+	portalKeys := make([]database.PortalKeyWithMeta, 0, len(chatMap))
+	for _, chat := range chatMap {
+		portal := user.GetPortalByJID(chat.ID.String())
+
+		chats = append(chats, Chat{
+			Portal:          portal,
+			LastMessageTime: uint64(time.Now().Unix()),
+			Group:           chat,
+		})
+		var inCommunity, ok bool
+		if inCommunity, ok = existingKeys[portal.Key]; !ok || !inCommunity {
+			inCommunity = user.addPortalToCommunity(portal)
+			if portal.IsPrivateChat() {
+				puppet := user.bridge.GetPuppetByJID(portal.Key.JID)
+				user.addPuppetToCommunity(puppet)
+			}
+		}
+		portalKeys = append(portalKeys, database.PortalKeyWithMeta{PortalKey: portal.Key, InCommunity: inCommunity})
+	}
+	user.log.Infoln("Read chat list, updating user-portal mapping")
+	err := user.SetPortalKeys(portalKeys)
+	if err != nil {
+		user.log.Warnln("Failed to update user-portal mapping:", err)
+	}
+	sort.Sort(chats)
+	limit := user.bridge.Config.Bridge.InitialChatSync
+	if limit < 0 {
+		limit = len(chats)
+	}
+	now := uint64(time.Now().Unix())
+	user.log.Infoln("Syncing portals")
+	for i, chat := range chats {
+		if chat.LastMessageTime+user.bridge.Config.Bridge.SyncChatMaxAge < now {
+			break
+		}
+		create := (chat.LastMessageTime >= user.LastConnection && user.LastConnection > 0) || i < limit
+		if len(chat.Portal.MXID) > 0 || create || createAll {
+			chat.Portal.Sync(user, chat.Group)
+			err := chat.Portal.BackfillHistory(user, chat.LastMessageTime)
+			if err != nil {
+				chat.Portal.log.Errorln("Error backfilling history:", err)
+			}
+		}
+	}
+	user.UpdateDirectChats(nil)
+	user.log.Infoln("Finished syncing portals")
+	select {
+	case user.syncPortalsDone <- struct{}{}:
+	default:
+	}
 }
 
 func (user *User) getDirectChats() map[id.UserID][]id.RoomID {
@@ -881,41 +832,41 @@ func (user *User) HandleBatteryMessage(battery whatsapp.BatteryMessage) {
 	}
 }
 
-func (user *User) HandleTextMessage(message whatsapp.TextMessage) {
-	user.messageInput <- PortalMessage{message.Info.RemoteJid, user, message, message.Info.Timestamp}
+func (user *User) HandleTextMessage(message groupme.Message) {
+	user.messageInput <- PortalMessage{message.GroupID.String(), user, &message, uint64(message.CreatedAt.ToTime().Unix())}
 }
 
-func (user *User) HandleImageMessage(message whatsapp.ImageMessage) {
-	user.messageInput <- PortalMessage{message.Info.RemoteJid, user, message, message.Info.Timestamp}
-}
-
-func (user *User) HandleStickerMessage(message whatsapp.StickerMessage) {
-	user.messageInput <- PortalMessage{message.Info.RemoteJid, user, message, message.Info.Timestamp}
-}
-
-func (user *User) HandleVideoMessage(message whatsapp.VideoMessage) {
-	user.messageInput <- PortalMessage{message.Info.RemoteJid, user, message, message.Info.Timestamp}
-}
-
-func (user *User) HandleAudioMessage(message whatsapp.AudioMessage) {
-	user.messageInput <- PortalMessage{message.Info.RemoteJid, user, message, message.Info.Timestamp}
-}
-
-func (user *User) HandleDocumentMessage(message whatsapp.DocumentMessage) {
-	user.messageInput <- PortalMessage{message.Info.RemoteJid, user, message, message.Info.Timestamp}
-}
-
-func (user *User) HandleContactMessage(message whatsapp.ContactMessage) {
-	user.messageInput <- PortalMessage{message.Info.RemoteJid, user, message, message.Info.Timestamp}
-}
-
-func (user *User) HandleLocationMessage(message whatsapp.LocationMessage) {
-	user.messageInput <- PortalMessage{message.Info.RemoteJid, user, message, message.Info.Timestamp}
-}
-
-func (user *User) HandleMessageRevoke(message whatsappExt.MessageRevocation) {
-	user.messageInput <- PortalMessage{message.RemoteJid, user, message, 0}
-}
+//func (user *User) HandleImageMessage(message whatsapp.ImageMessage) {
+//	user.messageInput <- PortalMessage{message.Info.RemoteJid, user, message, message.Info.Timestamp}
+//}
+//
+//func (user *User) HandleStickerMessage(message whatsapp.StickerMessage) {
+//	user.messageInput <- PortalMessage{message.Info.RemoteJid, user, message, message.Info.Timestamp}
+//}
+//
+//func (user *User) HandleVideoMessage(message whatsapp.VideoMessage) {
+//	user.messageInput <- PortalMessage{message.Info.RemoteJid, user, message, message.Info.Timestamp}
+//}
+//
+//func (user *User) HandleAudioMessage(message whatsapp.AudioMessage) {
+//	user.messageInput <- PortalMessage{message.Info.RemoteJid, user, message, message.Info.Timestamp}
+//}
+//
+//func (user *User) HandleDocumentMessage(message whatsapp.DocumentMessage) {
+//	user.messageInput <- PortalMessage{message.Info.RemoteJid, user, message, message.Info.Timestamp}
+//}
+//
+//func (user *User) HandleContactMessage(message whatsapp.ContactMessage) {
+//	user.messageInput <- PortalMessage{message.Info.RemoteJid, user, message, message.Info.Timestamp}
+//}
+//
+//func (user *User) HandleLocationMessage(message whatsapp.LocationMessage) {
+//	user.messageInput <- PortalMessage{message.Info.RemoteJid, user, message, message.Info.Timestamp}
+//}
+//
+//func (user *User) HandleMessageRevoke(message whatsappExt.MessageRevocation) {
+//	user.messageInput <- PortalMessage{message.RemoteJid, user, message, 0}
+//}
 
 type FakeMessage struct {
 	Text  string
@@ -923,40 +874,40 @@ type FakeMessage struct {
 	Alert bool
 }
 
-func (user *User) HandleCallInfo(info whatsappExt.CallInfo) {
-	if info.Data != nil {
-		return
-	}
-	data := FakeMessage{
-		ID: info.ID,
-	}
-	switch info.Type {
-	case whatsappExt.CallOffer:
-		if !user.bridge.Config.Bridge.CallNotices.Start {
-			return
-		}
-		data.Text = "Incoming call"
-		data.Alert = true
-	case whatsappExt.CallOfferVideo:
-		if !user.bridge.Config.Bridge.CallNotices.Start {
-			return
-		}
-		data.Text = "Incoming video call"
-		data.Alert = true
-	case whatsappExt.CallTerminate:
-		if !user.bridge.Config.Bridge.CallNotices.End {
-			return
-		}
-		data.Text = "Call ended"
-		data.ID += "E"
-	default:
-		return
-	}
-	portal := user.GetPortalByJID(info.From)
-	if portal != nil {
-		portal.messages <- PortalMessage{info.From, user, data, 0}
-	}
-}
+//func (user *User) HandleCallInfo(info whatsappExt.CallInfo) {
+//	if info.Data != nil {
+//		return
+//	}
+//	data := FakeMessage{
+//		ID: info.ID,
+//	}
+//	switch info.Type {
+//	case whatsappExt.CallOffer:
+//		if !user.bridge.Config.Bridge.CallNotices.Start {
+//			return
+//		}
+//		data.Text = "Incoming call"
+//		data.Alert = true
+//	case whatsappExt.CallOfferVideo:
+//		if !user.bridge.Config.Bridge.CallNotices.Start {
+//			return
+//		}
+//		data.Text = "Incoming video call"
+//		data.Alert = true
+//	case whatsappExt.CallTerminate:
+//		if !user.bridge.Config.Bridge.CallNotices.End {
+//			return
+//		}
+//		data.Text = "Call ended"
+//		data.ID += "E"
+//	default:
+//		return
+//	}
+//	portal := user.GetPortalByJID(info.From)
+//	if portal != nil {
+//		portal.messages <- PortalMessage{info.From, user, data, 0}
+//	}
+//}
 
 func (user *User) HandlePresence(info whatsappExt.Presence) {
 	puppet := user.bridge.GetPuppetByJID(info.SenderJID)
@@ -1119,10 +1070,10 @@ func (user *User) HandleChatUpdate(cmd whatsappExt.ChatUpdate) {
 		go portal.HandleWhatsAppKick(cmd.Data.SenderJID, cmd.Data.UserChange.JIDs)
 	case whatsappExt.ChatActionAdd:
 		go portal.HandleWhatsAppInvite(cmd.Data.SenderJID, cmd.Data.UserChange.JIDs)
-	case whatsappExt.ChatActionIntroduce:
-		if cmd.Data.SenderJID != "unknown" {
-			go portal.Sync(user, whatsapp.Contact{Jid: portal.Key.JID})
-		}
+		//case whatsappExt.ChatActionIntroduce:
+		//	if cmd.Data.SenderJID != "unknown" {
+		//		go portal.Sync(user, whatsapp.Contact{Jid: portal.Key.JID})
+		//	}
 	}
 }
 

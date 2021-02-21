@@ -73,7 +73,7 @@ func (pq *PortalQuery) GetAll() []*Portal {
 }
 
 func (pq *PortalQuery) GetByJID(key PortalKey) *Portal {
-	return pq.get(pq.db.DB.Where("jit = ? AND receiver = ?", key.JID, key.Receiver))
+	return pq.get(pq.db.DB.Where("jid = ? AND receiver = ?", key.JID, key.Receiver))
 
 }
 
@@ -97,16 +97,23 @@ func (pq *PortalQuery) getAll(db *gorm.DB) (portals []*Portal) {
 	if ans.Error != nil || len(portals) == 0 {
 		return nil
 	}
+	for _, i := range portals {
+		i.db = pq.db
+		i.log = pq.log
+	}
 	return
 
 }
 
 func (pq *PortalQuery) get(db *gorm.DB) *Portal {
 	var portal Portal
-	ans := db.Take(&portal)
-	if ans.Error != nil {
+	ans := db.Limit(1).Find(&portal)
+	if ans.Error != nil || db.RowsAffected == 0 {
 		return nil
 	}
+	portal.db = pq.db
+	portal.log = pq.log
+
 	return &portal
 }
 
@@ -155,8 +162,7 @@ func (portal *Portal) Insert() {
 }
 
 func (portal *Portal) Update() {
-
-	ans := portal.db.Model(&portal).Updates(portal)
+	ans := portal.db.Where("jid = ? AND receiver = ?", portal.Key.JID, portal.Key.Receiver).Save(&portal)
 	print("check .model vs not")
 
 	if ans.Error != nil {
@@ -172,6 +178,7 @@ func (portal *Portal) Delete() {
 }
 
 func (portal *Portal) GetUserIDs() []id.UserID {
+	println("HI AAAAAAAAAAAAAAAAAAAa")
 	rows, err := portal.db.Raw(`SELECT "user".mxid FROM "user", user_portal
 		WHERE "user".jid=user_portal.user_jid
 			AND user_portal.portal_jid=$1

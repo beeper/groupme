@@ -17,15 +17,12 @@
 package database
 
 import (
-	"database/sql"
 	"strings"
-
-	"github.com/Rhymen/go-whatsapp"
+	"time"
 
 	log "maunium.net/go/maulogger/v2"
 
 	"maunium.net/go/mautrix-whatsapp/types"
-	whatsappExt "maunium.net/go/mautrix-whatsapp/whatsapp-ext"
 	"maunium.net/go/mautrix/id"
 )
 
@@ -42,72 +39,77 @@ func (uq *UserQuery) New() *User {
 }
 
 func (uq *UserQuery) GetAll() (users []*User) {
-	// rows, err := uq.db.Query(`SELECT mxid, jid, management_room, last_connection, client_id, client_token, server_token, enc_key, mac_key FROM "user"`)
-	// if err != nil || rows == nil {
-	// 	return nil
-	// }
-	// defer rows.Close()
-	// for rows.Next() {
-	// 	users = append(users, uq.New().Scan(rows))
-	// }
+	ans := uq.db.Find(&users)
+	if ans.Error != nil || len(users) == 0 {
+		return nil
+	}
+	for _, i := range users {
+		i.db = uq.db
+		i.log = uq.log
+	}
 	return
 }
 
 func (uq *UserQuery) GetByMXID(userID id.UserID) *User {
-	// row := uq.db.QueryRow(`SELECT mxid, jid, management_room, last_connection, client_id, client_token, server_token, enc_key, mac_key FROM "user" WHERE mxid=$1`, userID)
-	// if row == nil {
-	// 	return nil
-	// }
-	// return uq.New().Scan(row)
-	return nil
+	var user User
+	ans := uq.db.Where("mxid = ?", userID).Take(&user)
+	user.db = uq.db
+	user.log = uq.log
+	if ans.Error != nil {
+		return nil
+	}
+	return &user
 }
 
 func (uq *UserQuery) GetByJID(userID types.GroupMeID) *User {
-	// row := uq.db.QueryRow(`SELECT mxid, jid, management_room, last_connection, client_id, client_token, server_token, enc_key, mac_key FROM "user" WHERE jid=$1`, stripSuffix(userID))
-	// if row == nil {
-	// 	return nil
-	// }
-	// return uq.New().Scan(row)
-	return nil
+	var user User
+	ans := uq.db.Where("jid = ?", userID).Limit(1).Find(&user)
+	if ans.Error != nil || ans.RowsAffected == 0 {
+		return nil
+	}
+	user.db = uq.db
+	user.log = uq.log
+
+	return &user
 }
 
 type User struct {
 	db  *Database
 	log log.Logger
 
-	MXID           id.UserID
-	JID            types.GroupMeID
-	Token          types.AuthToken
-	
+	MXID  id.UserID       `gorm:"primaryKey"`
+	JID   types.GroupMeID `gorm:"unique"`
+	Token types.AuthToken
+
 	ManagementRoom id.RoomID
-	LastConnection uint64
+	LastConnection uint64 `gorm:"notNull;default:0"`
 }
 
-func (user *User) Scan(row Scannable) *User {
-	var jid, clientID, clientToken, serverToken sql.NullString
-	var encKey, macKey []byte
-	err := row.Scan(&user.MXID, &jid, &user.ManagementRoom, &user.LastConnection, &clientID, &clientToken, &serverToken, &encKey, &macKey)
-	if err != nil {
-		if err != sql.ErrNoRows {
-			user.log.Errorln("Database scan failed:", err)
-		}
-		return nil
-	}
-	if len(jid.String) > 0 && len(clientID.String) > 0 {
-		user.JID = jid.String + whatsappExt.NewUserSuffix
-		// user.Session = &whatsapp.Session{
-		// 	ClientId:    clientID.String,
-		// 	ClientToken: clientToken.String,
-		// 	ServerToken: serverToken.String,
-		// 	EncKey:      encKey,
-		// 	MacKey:      macKey,
-		// 	Wid:         jid.String + whatsappExt.OldUserSuffix,
-		// }
-	 }// else {
-	// 	user.Session = nil
-	// }
-	return user
-}
+//func (user *User) Scan(row Scannable) *User {
+//	var jid, clientID, clientToken, serverToken sql.NullString
+//	var encKey, macKey []byte
+//	err := row.Scan(&user.MXID, &jid, &user.ManagementRoom, &user.LastConnection, &clientID, &clientToken, &serverToken, &encKey, &macKey)
+//	if err != nil {
+//		if err != sql.ErrNoRows {
+//			user.log.Errorln("Database scan failed:", err)
+//		}
+//		return nil
+//	}
+//	if len(jid.String) > 0 && len(clientID.String) > 0 {
+//		user.JID = jid.String + whatsappExt.NewUserSuffix
+//		// user.Session = &whatsapp.Session{
+//		// 	ClientId:    clientID.String,
+//		// 	ClientToken: clientToken.String,
+//		// 	ServerToken: serverToken.String,
+//		// 	EncKey:      encKey,
+//		// 	MacKey:      macKey,
+//		// 	Wid:         jid.String + whatsappExt.OldUserSuffix,
+//		// }
+//	} // else {
+//	// 	user.Session = nil
+//	// }
+//	return user
+//}
 
 func stripSuffix(jid types.GroupMeID) string {
 	if len(jid) == 0 {
@@ -130,42 +132,30 @@ func (user *User) jidPtr() *string {
 	return nil
 }
 
-func (user *User) sessionUnptr() (sess whatsapp.Session) {
-	// if user.Session != nil {
-	// 	sess = *user.Session
-	// }
-	 return
-}
+//func (user *User) sessionUnptr() (sess whatsapp.Session) {
+//	// if user.Session != nil {
+//	// 	sess = *user.Session
+//	// }
+//	return
+//}
 
 func (user *User) Insert() {
-	// sess := user.sessionUnptr()
-	// _, err := user.db.Exec(`INSERT INTO "user" (mxid, jid, management_room, last_connection, client_id, client_token, server_token, enc_key, mac_key) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-	// 	user.MXID, user.jidPtr(),
-	// 	user.ManagementRoom, user.LastConnection,
-	// 	sess.ClientId, sess.ClientToken, sess.ServerToken, sess.EncKey, sess.MacKey)
-	// if err != nil {
-	// 	user.log.Warnfln("Failed to insert %s: %v", user.MXID, err)
-	// }
+	ans := user.db.Create(&user)
+	if ans.Error != nil {
+		user.log.Warnfln("Failed to insert %s: %v", user.MXID, ans.Error)
+	}
 }
 
 func (user *User) UpdateLastConnection() {
-	// user.LastConnection = uint64(time.Now().Unix())
-	// _, err := user.db.Exec(`UPDATE "user" SET last_connection=$1 WHERE mxid=$2`,
-	// 	user.LastConnection, user.MXID)
-	// if err != nil {
-	// 	user.log.Warnfln("Failed to update last connection ts: %v", err)
-	// }
+	user.LastConnection = uint64(time.Now().Unix())
+	user.Update()
 }
 
 func (user *User) Update() {
-	// sess := user.sessionUnptr()
-	// _, err := user.db.Exec(`UPDATE "user" SET jid=$1, management_room=$2, last_connection=$3, client_id=$4, client_token=$5, server_token=$6, enc_key=$7, mac_key=$8 WHERE mxid=$9`,
-	// 	user.jidPtr(), user.ManagementRoom, user.LastConnection,
-	// 	sess.ClientId, sess.ClientToken, sess.ServerToken, sess.EncKey, sess.MacKey,
-	// 	user.MXID)
-	// if err != nil {
-	// 	user.log.Warnfln("Failed to update %s: %v", user.MXID, err)
-	// }
+	ans := user.db.Save(&user)
+	if ans.Error != nil {
+		user.log.Warnfln("Failed to update last connection ts: %v", ans.Error)
+	}
 }
 
 type PortalKeyWithMeta struct {
@@ -173,82 +163,85 @@ type PortalKeyWithMeta struct {
 	InCommunity bool
 }
 
+type UserPortal struct {
+	UserJID types.GroupMeID `gorm:"primaryKey;"`
+
+	PortalJID      types.GroupMeID `gorm:"primaryKey;"`
+	PortalReceiver types.GroupMeID `gorm:"primaryKey;"`
+
+	InCommunity bool `gorm:"notNull;default:false;"`
+
+	User   User   `gorm:"foreignKey:UserJID;references:jid;constraint:OnDelete:CASCADE;"`
+	Portal Portal `gorm:"foreignKey:PortalJID,PortalReceiver;references:JID,Receiver;constraint:OnDelete:CASCADE;"`
+}
+
 func (user *User) SetPortalKeys(newKeys []PortalKeyWithMeta) error {
-	// tx, err := user.db.Begin()
-	// if err != nil {
-	// 	return err
-	// }
-	// _, err = tx.Exec("DELETE FROM user_portal WHERE user_jid=$1", user.jidPtr())
-	// if err != nil {
-	// 	_ = tx.Rollback()
-	// 	return err
-	// }
-	// valueStrings := make([]string, len(newKeys))
-	// values := make([]interface{}, len(newKeys)*4)
-	// for i, key := range newKeys {
-	// 	pos := i * 4
-	// 	valueStrings[i] = fmt.Sprintf("($%d, $%d, $%d, $%d)", pos+1, pos+2, pos+3, pos+4)
-	// 	values[pos] = user.jidPtr()
-	// 	values[pos+1] = key.JID
-	// 	values[pos+2] = key.Receiver
-	// 	values[pos+3] = key.InCommunity
-	// }
-	// query := fmt.Sprintf("INSERT INTO user_portal (user_jid, portal_jid, portal_receiver, in_community) VALUES %s",
-	// 	strings.Join(valueStrings, ", "))
-	// _, err = tx.Exec(query, values...)
-	// if err != nil {
-	// 	_ = tx.Rollback()
-	// 	return err
-	// }
-	// return tx.Commit()
-	return nil
+	tx := user.db.Begin()
+	ans := tx.Where("user_jid = ?", *user.jidPtr()).Delete(&UserPortal{})
+	print("make sure all are deletede")
+	if ans.Error != nil {
+		_ = tx.Rollback()
+		return ans.Error
+	}
+
+	for _, key := range newKeys {
+		ans = tx.Create(&UserPortal{
+			UserJID:        *user.jidPtr(),
+			PortalJID:      key.JID,
+			PortalReceiver: key.Receiver,
+			InCommunity:    key.InCommunity,
+		})
+		if ans.Error != nil {
+			_ = tx.Rollback()
+			return ans.Error
+		}
+	}
+
+	return tx.Commit().Error
 }
 
 func (user *User) IsInPortal(key PortalKey) bool {
-	// row := user.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM user_portal WHERE user_jid=$1 AND portal_jid=$2 AND portal_receiver=$3)`, user.jidPtr(), &key.JID, &key.Receiver)
-	// var exists bool
-	// _ = row.Scan(&exists)
-	// return exists
-	return false
+	var count int64
+	user.db.Find(&UserPortal{
+		UserJID:        *user.jidPtr(),
+		PortalJID:      key.JID,
+		PortalReceiver: key.Receiver,
+	}).Count(&count) //TODO: efficient
+	return count > 0
 }
 
 func (user *User) GetPortalKeys() []PortalKey {
-	// rows, err := user.db.Query(`SELECT portal_jid, portal_receiver FROM user_portal WHERE user_jid=$1`, user.jidPtr())
-	// if err != nil {
-	// 	user.log.Warnln("Failed to get user portal keys:", err)
-	// 	return nil
-	// }
-	// var keys []PortalKey
-	// for rows.Next() {
-	// 	var key PortalKey
-	// 	err = rows.Scan(&key.JID, &key.Receiver)
-	// 	if err != nil {
-	// 		user.log.Warnln("Failed to scan row:", err)
-	// 		continue
-	// 	}
-	// 	keys = append(keys, key)
-	// }
-	// return keys
-	return nil
+	var up []UserPortal
+	ans := user.db.Where("user_jid = ?", *user.jidPtr()).Find(&up)
+	if ans.Error != nil {
+		user.log.Warnln("Failed to get user portal keys:", ans.Error)
+		return nil
+	}
+	var keys []PortalKey
+	for _, i := range up {
+		key := PortalKey{
+			JID:      i.UserJID,
+			Receiver: i.PortalReceiver,
+		}
+		keys = append(keys, key)
+	}
+	return keys
 }
 
 func (user *User) GetInCommunityMap() map[PortalKey]bool {
-	// rows, err := user.db.Query(`SELECT portal_jid, portal_receiver, in_community FROM user_portal WHERE user_jid=$1`, user.jidPtr())
-	// if err != nil {
-	// 	user.log.Warnln("Failed to get user portal keys:", err)
-	// 	return nil
-	// }
-	// keys := make(map[PortalKey]bool)
-	// for rows.Next() {
-	// 	var key PortalKey
-	// 	var inCommunity bool
-	// 	err = rows.Scan(&key.JID, &key.Receiver, &inCommunity)
-	// 	if err != nil {
-	// 		user.log.Warnln("Failed to scan row:", err)
-	// 		continue
-	// 	}
-	// 	keys[key] = inCommunity
-	// }
-	// return keys
-	return nil
+	var up []UserPortal
+	ans := user.db.Where("user_jid = ?", *user.jidPtr()).Find(&up)
+	if ans.Error != nil {
+		user.log.Warnln("Failed to get user portal keys:", ans.Error)
+		return nil
+	}
+	keys := make(map[PortalKey]bool)
+	for _, i := range up {
+		key := PortalKey{
+			JID:      i.PortalJID,
+			Receiver: i.PortalReceiver,
+		}
+		keys[key] = i.InCommunity
+	}
+	return keys
 }

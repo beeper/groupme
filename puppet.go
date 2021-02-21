@@ -45,7 +45,7 @@ func (bridge *Bridge) ParsePuppetMXID(mxid id.UserID) (types.GroupMeID, bool) {
 		return "", false
 	}
 
-	jid := types.GroupMeID(match[1] + whatsappExt.NewUserSuffix)
+	jid := types.GroupMeID(match[1])
 	return jid, true
 }
 
@@ -159,6 +159,7 @@ type Puppet struct {
 }
 
 func (puppet *Puppet) PhoneNumber() string {
+	println("phone num")
 	return strings.Replace(puppet.JID, whatsappExt.NewUserSuffix, "", 1)
 }
 

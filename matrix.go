@@ -336,6 +336,7 @@ func (mx *MatrixHandler) shouldIgnoreEvent(evt *event.Event) bool {
 const sessionWaitTimeout = 5 * time.Second
 
 func (mx *MatrixHandler) HandleEncrypted(evt *event.Event) {
+	println("IDK iF encryption works yet")
 	defer mx.bridge.Metrics.TrackEvent(evt.Type)()
 	if mx.shouldIgnoreEvent(evt) || mx.bridge.Crypto == nil {
 		return
