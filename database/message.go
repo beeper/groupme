@@ -17,9 +17,9 @@
 package database
 
 import (
-	"github.com/karmanyaahm/groupme"
 	log "maunium.net/go/maulogger/v2"
 
+	"maunium.net/go/mautrix-whatsapp/groupmeExt"
 	"maunium.net/go/mautrix-whatsapp/types"
 	"maunium.net/go/mautrix/id"
 )
@@ -76,12 +76,12 @@ type Message struct {
 	db  *Database
 	log log.Logger
 
-	Chat      PortalKey        `gorm:"primaryKey;embedded;embeddedPrefix:chat_"`
-	JID       types.GroupMeID  `gorm:"primaryKey"`
-	MXID      id.EventID       `gorm:"unique;notNull"`
-	Sender    types.GroupMeID  `gorm:"notNull"`
-	Timestamp uint64           `gorm:"notNull;default:0"`
-	Content   *groupme.Message `gorm:"type:TEXT;notNull"`
+	Chat      PortalKey           `gorm:"primaryKey;embedded;embeddedPrefix:chat_"`
+	JID       types.GroupMeID     `gorm:"primaryKey"`
+	MXID      id.EventID          `gorm:"unique;notNull"`
+	Sender    types.GroupMeID     `gorm:"notNull"`
+	Timestamp uint64              `gorm:"notNull;default:0"`
+	Content   *groupmeExt.Message `gorm:"type:TEXT;notNull"`
 
 	//	Portal Portal `gorm:"foreignKey:JID;"` //`gorm:"foreignKey:Chat.Receiver,Chat.JID;references:jid,receiver;constraint:onDelete:CASCADE;"`TODO
 }
@@ -124,13 +124,13 @@ type Message struct {
 func (msg *Message) Insert() {
 	ans := msg.db.Create(&msg)
 	if ans.Error != nil {
-		//	msg.log.Warnfln("Failed to insert %s@%s: %v", msg.Chat, msg.JID, ans.Error)
+		msg.log.Warnfln("Failed to insert %s@%s: %v", msg.Chat, msg.JID, ans.Error)
 	}
 }
 
 func (msg *Message) Delete() {
 	ans := msg.db.Delete(&msg)
 	if ans.Error != nil {
-		//	msg.log.Warnfln("Failed to delete %s@%s: %v", msg.Chat, msg.JID, ans.Error)
+		msg.log.Warnfln("Failed to delete %s@%s: %v", msg.Chat, msg.JID, ans.Error)
 	}
 }

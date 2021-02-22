@@ -22,8 +22,7 @@ import (
 	"strings"
 	"text/template"
 
-	"github.com/Rhymen/go-whatsapp"
-
+	"github.com/karmanyaahm/groupme"
 	"maunium.net/go/mautrix/event"
 	"maunium.net/go/mautrix/id"
 
@@ -158,19 +157,19 @@ type UsernameTemplateArgs struct {
 	UserID id.UserID
 }
 
-func (bc BridgeConfig) FormatDisplayname(contact whatsapp.Contact) (string, int8) {
+func (bc BridgeConfig) FormatDisplayname(contact groupme.User) (string, int8) {
 	var buf bytes.Buffer
-	if index := strings.IndexRune(contact.Jid, '@'); index > 0 {
-		contact.Jid = "+" + contact.Jid[:index]
+	if index := strings.IndexRune(contact.ID.String(), '@'); index > 0 {
+		contact.ID = groupme.ID("+" + contact.ID.String()[:index])
 	}
 	bc.displaynameTemplate.Execute(&buf, contact)
 	var quality int8
 	switch {
-	case len(contact.Notify) > 0:
+	case len(contact.Name) > 0:
 		quality = 3
-	case len(contact.Name) > 0 || len(contact.Short) > 0:
+	case len(contact.Name) > 0 || len(contact.Name) > 0:
 		quality = 2
-	case len(contact.Jid) > 0:
+	case len(contact.ID) > 0:
 		quality = 1
 	default:
 		quality = 0

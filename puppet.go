@@ -21,7 +21,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/Rhymen/go-whatsapp"
+	"github.com/karmanyaahm/groupme"
 	log "maunium.net/go/maulogger/v2"
 
 	"maunium.net/go/mautrix/appservice"
@@ -232,7 +232,7 @@ func (puppet *Puppet) UpdateAvatar(source *User, avatar *whatsappExt.ProfilePicI
 	return true
 }
 
-func (puppet *Puppet) UpdateName(source *User, contact whatsapp.Contact) bool {
+func (puppet *Puppet) UpdateName(source *User, contact groupme.User) bool {
 	newName, quality := puppet.bridge.Config.Bridge.FormatDisplayname(contact)
 	if puppet.Displayname != newName && quality >= puppet.NameQuality {
 		err := puppet.DefaultIntent().SetDisplayName(newName)
@@ -284,20 +284,21 @@ func (puppet *Puppet) updatePortalName() {
 	})
 }
 
-func (puppet *Puppet) Sync(source *User, contact whatsapp.Contact) {
-	// err := puppet.DefaultIntent().EnsureRegistered()
-	// if err != nil {
-	// 	puppet.log.Errorln("Failed to ensure registered:", err)
-	// }
+func (puppet *Puppet) Sync(source *User, contact groupme.User) {
+	err := puppet.DefaultIntent().EnsureRegistered()
+	if err != nil {
+		puppet.log.Errorln("Failed to ensure registered:", err)
+	}
 
-	// if contact.Jid == source.JID {
-	// 	contact.Notify = source.Conn.Info.Pushname
-	// }
+	if contact.ID.String() == source.JID {
+		//TODO What is this
+		//		contact.Notify = source.Conn.Info.Pushname
+	}
 
-	// update := false
-	// update = puppet.UpdateName(source, contact) || update
-	// update = puppet.UpdateAvatar(source, nil) || update
-	// if update {
-	// 	puppet.Update()
-	// }
+	update := false
+	update = puppet.UpdateName(source, contact) || update
+	update = puppet.UpdateAvatar(source, nil) || update
+	if update {
+		puppet.Update()
+	}
 }

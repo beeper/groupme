@@ -52,8 +52,9 @@ func New(dbType string, uri string, baseLog log.Logger) (*Database, error) {
 	} else {
 		conn = postgres.Open(uri)
 	}
-	print("no")
+
 	gdb, err := gorm.Open(conn, &gorm.Config{
+		//	Logger: logger.Default.LogMode(logger.Info),
 		// Logger: baseLog,
 		NamingStrategy: schema.NamingStrategy{
 			NameReplacer: strings.NewReplacer("JID", "Jid", "MXID", "Mxid"),

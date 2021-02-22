@@ -154,8 +154,9 @@ func (user *User) UpdateLastConnection() {
 func (user *User) Update() {
 	ans := user.db.Save(&user)
 	if ans.Error != nil {
-		user.log.Warnfln("Failed to update last connection ts: %v", ans.Error)
+		user.log.Warnfln("Failed to update user: %v", ans.Error)
 	}
+
 }
 
 type PortalKeyWithMeta struct {
@@ -197,6 +198,7 @@ func (user *User) SetPortalKeys(newKeys []PortalKeyWithMeta) error {
 		}
 	}
 
+	println("portalkey transaction complete")
 	return tx.Commit().Error
 }
 

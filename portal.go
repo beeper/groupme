@@ -288,29 +288,30 @@ func init() {
 
 func (portal *Portal) markHandled(source *User, message *groupme.Message, mxid id.EventID) {
 	print("handle message")
-	// msg := portal.bridge.DB.Message.New()
-	// msg.Chat = portal.Key
-	// msg.JID = message.GetKey().GetId()
-	// msg.MXID = mxid
-	// msg.Timestamp = message.GetMessageTimestamp()
-	// if message.GetKey().GetFromMe() {
-	// 	msg.Sender = source.JID
-	// } else if portal.IsPrivateChat() {
-	// 	msg.Sender = portal.Key.JID
-	// } else {
-	// 	msg.Sender = message.GetKey().GetParticipant()
-	// 	if len(msg.Sender) == 0 {
-	// 		msg.Sender = message.GetParticipant()
-	// 	}
-	// }
-	// msg.Content = message.Message
-	// msg.Insert()
+	msg := portal.bridge.DB.Message.New()
+	msg.Chat = portal.Key
+	msg.JID = message.ID.String()
+	msg.MXID = mxid
+	msg.Timestamp = uint64(message.CreatedAt.ToTime().Unix())
+	if message.UserID.String() == source.JID {
+		msg.Sender = source.JID
+	} else if portal.IsPrivateChat() {
+		msg.Sender = portal.Key.JID
+	} else {
+		msg.Sender = message.ID.String()
+		if len(msg.Sender) == 0 {
+			println("AAAAAAAAAAAAAAAAAAAAAAAAAAIDK")
+			msg.Sender = message.SenderID.String()
+		}
+	}
+	msg.Content = &groupmeExt.Message{Message: *message}
+	msg.Insert()
 
-	// portal.recentlyHandledLock.Lock()
-	// index := portal.recentlyHandledIndex
-	// portal.recentlyHandledIndex = (portal.recentlyHandledIndex + 1) % recentlyHandledLength
-	// portal.recentlyHandledLock.Unlock()
-	// portal.recentlyHandled[index] = msg.JID
+	portal.recentlyHandledLock.Lock()
+	index := portal.recentlyHandledIndex
+	portal.recentlyHandledIndex = (portal.recentlyHandledIndex + 1) % recentlyHandledLength
+	portal.recentlyHandledLock.Unlock()
+	portal.recentlyHandled[index] = groupme.ID(msg.JID)
 }
 
 func (portal *Portal) getMessageIntent(user *User, info *groupme.Message) *appservice.IntentAPI {
@@ -703,10 +704,13 @@ func (portal *Portal) BackfillHistory(user *User, lastMessageTime uint64) error 
 	endBackfill := portal.beginBackfill()
 	defer endBackfill()
 
+	println("hi")
 	lastMessage := portal.bridge.DB.Message.GetLastInChat(portal.Key)
+	fmt.Println(lastMessage)
 	if lastMessage == nil {
 		return nil
 	}
+	println(lastMessage.Timestamp, lastMessageTime)
 	if lastMessage.Timestamp >= lastMessageTime {
 		portal.log.Debugln("Not backfilling: no new messages")
 		return nil

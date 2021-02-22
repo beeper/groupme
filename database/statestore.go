@@ -153,6 +153,8 @@ func (store *SQLStateStore) FindSharedRooms(userID id.UserID) (rooms []id.RoomID
 	rows, err := store.db.Table("mx_user_profile").Select("room_id").
 		Joins("LEFT JOIN portal ON portal.mxid=mx_user_profile.room_id").
 		Where("user_id = ? AND portal.encrypted=true", userID).Rows()
+	defer rows.Close()
+
 	if err != nil {
 		store.log.Warnfln("Failed to query shared rooms with %s: %v", userID, err)
 		return
@@ -198,7 +200,7 @@ func (store *SQLStateStore) SetMembership(roomID id.RoomID, userID id.UserID, me
 	print("weird thing 2 502650285")
 	print(user.Membership)
 
-	ans := store.db.Debug().Clauses(clause.OnConflict{
+	ans := store.db.Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "room_id"}, {Name: "user_id"}},
 		DoUpdates: clause.AssignmentColumns([]string{"membership"}),
 	}).Create(&user)

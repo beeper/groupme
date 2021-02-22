@@ -44,6 +44,10 @@ func (pq *PuppetQuery) GetAll() (puppets []*Puppet) {
 	if ans.Error != nil || len(puppets) == 0 {
 		return nil
 	}
+	for _, puppet := range puppets {
+		puppet.db = pq.db
+		puppet.log = pq.log
+	}
 	// defer rows.Close()
 	// for rows.Next() {
 	// 	puppets = append(puppets, pq.New().Scan(rows))
@@ -57,6 +61,8 @@ func (pq *PuppetQuery) Get(jid types.GroupMeID) *Puppet {
 	if ans.Error != nil || ans.RowsAffected == 0 {
 		return nil
 	}
+	puppet.db = pq.db
+	puppet.log = pq.log
 	return &puppet
 }
 
@@ -66,6 +72,8 @@ func (pq *PuppetQuery) GetByCustomMXID(mxid id.UserID) *Puppet {
 	if ans.Error != nil || ans.RowsAffected == 0 {
 		return nil
 	}
+	puppet.db = pq.db
+	puppet.log = pq.log
 	return &puppet
 }
 
@@ -74,6 +82,10 @@ func (pq *PuppetQuery) GetAllWithCustomMXID() (puppets []*Puppet) {
 	ans := pq.db.Find(&puppets, "custom_mxid <> ''")
 	if ans.Error != nil || len(puppets) != 0 {
 		return nil
+	}
+	for _, puppet := range puppets {
+		puppet.db = pq.db
+		puppet.log = pq.log
 	}
 	// defer rows.Close()
 	// for rows.Next() {
