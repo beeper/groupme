@@ -31,7 +31,7 @@
   * [ ] Chat types
     * [ ] Private chat
     * [x] Group chat
-  * [ ] Avatars
+  * [x] Avatars
   * [ ] Presence
   * [ ] Typing notifications
   * [ ] Read receipts
@@ -56,7 +56,7 @@
   * [ ] Automatic portal creation
     * [x] At startup
     * [ ] When receiving invite
-    * [ ] When receiving message
+    * [x] When receiving message
   * [ ] Private chat creation by inviting Matrix puppet of WhatsApp user to new room
   * [ ] Option to use own Matrix account for messages sent from WhatsApp mobile/other web clients
   * [ ] Shared group chat portals

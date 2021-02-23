@@ -339,6 +339,8 @@ func (portal *Portal) startHandling(source *User, info *groupme.Message) *appser
 		portal.log.Debugfln("Not handling %s: message was recently handled", info.ID)
 	} else if portal.isDuplicate(info.ID) {
 		portal.log.Debugfln("Not handling %s: message is duplicate", info.ID)
+	} else if info.System {
+		portal.log.Debugfln("Not handling %s: message is from system: %s", info.ID, info.Text)
 	} else {
 		portal.lastMessageTs = uint64(info.CreatedAt.ToTime().Unix())
 		intent := portal.getMessageIntent(source, info)

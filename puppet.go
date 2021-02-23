@@ -18,6 +18,8 @@ package main
 
 import (
 	"fmt"
+	"io/ioutil"
+	"net/http"
 	"regexp"
 	"strings"
 
@@ -180,55 +182,53 @@ func (puppet *Puppet) DefaultIntent() *appservice.IntentAPI {
 	return puppet.bridge.AS.Intent(puppet.MXID)
 }
 
-func (puppet *Puppet) UpdateAvatar(source *User, avatar *whatsappExt.ProfilePicInfo) bool {
-	// if avatar == nil {
-	// 	var err error
-	// 	avatar, err = source.Conn.GetProfilePicThumb(puppet.JID)
-	// 	if err != nil {
-	// 		puppet.log.Warnln("Failed to get avatar:", err)
-	// 		return false
-	// 	}
-	// }
+func (puppet *Puppet) UpdateAvatar(source *User, avatar string) bool {
+	if len(avatar) == 0 {
+		err := puppet.DefaultIntent().SetAvatarURL(id.ContentURI{})
+		if err != nil {
+			puppet.log.Warnln("Failed to remove avatar:", err)
+		}
+		puppet.AvatarURL = id.ContentURI{}
+		puppet.Avatar = avatar
+		go puppet.updatePortalAvatar()
+		return true
+	}
 
-	// if avatar.Status != 0 {
-	// 	return false
-	// }
+	if puppet.Avatar == avatar {
+		return false // up to date
+	}
 
-	// if avatar.Tag == puppet.Avatar {
-	// 	return false
-	// }
+	//TODO check its actually groupme?
+	response, err := http.Get(avatar + ".large")
+	if err != nil {
+		puppet.log.Warnln("Failed to download avatar:", err)
+		return false
+	}
+	defer response.Body.Close()
 
-	// if len(avatar.URL) == 0 {
-	// 	err := puppet.DefaultIntent().SetAvatarURL(id.ContentURI{})
-	// 	if err != nil {
-	// 		puppet.log.Warnln("Failed to remove avatar:", err)
-	// 	}
-	// 	puppet.AvatarURL = id.ContentURI{}
-	// 	puppet.Avatar = avatar.Tag
-	// 	go puppet.updatePortalAvatar()
-	// 	return true
-	// }
+	image, err := ioutil.ReadAll(response.Body)
+	if err != nil {
+		puppet.log.Warnln("Failed to read downloaded avatar:", err)
+		return false
+	}
 
-	// data, err := avatar.DownloadBytes()
-	// if err != nil {
-	// 	puppet.log.Warnln("Failed to download avatar:", err)
-	// 	return false
-	// }
+	mime := response.Header.Get("Content-Type")
+	if len(mime) == 0 {
+		mime = http.DetectContentType(image)
+	}
+	resp, err := puppet.DefaultIntent().UploadBytes(image, mime)
+	if err != nil {
+		puppet.log.Warnln("Failed to upload avatar:", err)
+		return false
+	}
 
-	// mime := http.DetectContentType(data)
-	// resp, err := puppet.DefaultIntent().UploadBytes(data, mime)
-	// if err != nil {
-	// 	puppet.log.Warnln("Failed to upload avatar:", err)
-	// 	return false
-	// }
-
-	// puppet.AvatarURL = resp.ContentURI
-	// err = puppet.DefaultIntent().SetAvatarURL(puppet.AvatarURL)
-	// if err != nil {
-	// 	puppet.log.Warnln("Failed to set avatar:", err)
-	// }
-	// puppet.Avatar = avatar.Tag
-	// go puppet.updatePortalAvatar()
+	puppet.AvatarURL = resp.ContentURI
+	err = puppet.DefaultIntent().SetAvatarURL(puppet.AvatarURL)
+	if err != nil {
+		puppet.log.Warnln("Failed to set avatar:", err)
+	}
+	puppet.Avatar = avatar
+	go puppet.updatePortalAvatar()
 	return true
 }
 
@@ -297,7 +297,7 @@ func (puppet *Puppet) Sync(source *User, contact groupme.User) {
 
 	update := false
 	update = puppet.UpdateName(source, contact) || update
-	update = puppet.UpdateAvatar(source, nil) || update
+	update = puppet.UpdateAvatar(source, contact.AvatarURL) || update
 	if update {
 		puppet.Update()
 	}

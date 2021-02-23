@@ -800,8 +800,9 @@ func (user *User) handleMessageLoop() {
 			puppet := user.bridge.GetPuppetByJID(msg.data.UserID.String())
 			if puppet != nil {
 				puppet.Sync(user, groupme.User{
-					ID:   msg.data.ID,
-					Name: msg.data.Name,
+					ID:        msg.data.ID,
+					Name:      msg.data.Name,
+					AvatarURL: msg.data.AvatarURL,
 				}) //TODO: add params or docs?
 			}
 			user.GetPortalByJID(msg.chat).messages <- msg
