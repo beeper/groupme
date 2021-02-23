@@ -34,5 +34,3 @@ replace github.com/Rhymen/go-whatsapp => github.com/tulir/go-whatsapp v0.3.16
 replace github.com/karmanyaahm/groupme => ../groupme
 
 replace maunium.net/go/mautrix => ../mautrix
-
-replace maunium.net/go/mautrix/i => ../mautrix_go/id

@@ -131,7 +131,7 @@ func (bridge *Bridge) NewManualPortal(key database.PortalKey) *Portal {
 		bridge: bridge,
 		log:    bridge.Log.Sub(fmt.Sprintf("Portal/%s", key)),
 
-		recentlyHandled: [recentlyHandledLength]groupme.ID{},
+		recentlyHandled: [recentlyHandledLength]string{},
 
 		messages: make(chan PortalMessage, bridge.Config.Bridge.PortalMessageBuffer),
 	}
@@ -146,7 +146,7 @@ func (bridge *Bridge) NewPortal(dbPortal *database.Portal) *Portal {
 		bridge: bridge,
 		log:    bridge.Log.Sub(fmt.Sprintf("Portal/%s", dbPortal.Key)),
 
-		recentlyHandled: [recentlyHandledLength]groupme.ID{},
+		recentlyHandled: [recentlyHandledLength]string{},
 
 		messages: make(chan PortalMessage, bridge.Config.Bridge.PortalMessageBuffer),
 	}
@@ -171,7 +171,7 @@ type Portal struct {
 
 	roomCreateLock sync.Mutex
 
-	recentlyHandled      [recentlyHandledLength]groupme.ID
+	recentlyHandled      [recentlyHandledLength]string
 	recentlyHandledLock  sync.Mutex
 	recentlyHandledIndex uint8
 
@@ -266,8 +266,9 @@ func (portal *Portal) handleMessage(msg PortalMessage) {
 
 func (portal *Portal) isRecentlyHandled(id groupme.ID) bool {
 	start := portal.recentlyHandledIndex
-	for i := start; i != start; i = (i - 1) % recentlyHandledLength {
-		if portal.recentlyHandled[i] == id {
+	idStr := id.String()
+	for i := (start - 1) % recentlyHandledLength; i != start; i = (i - 1) % recentlyHandledLength {
+		if portal.recentlyHandled[i] == idStr {
 			return true
 		}
 	}
@@ -279,6 +280,7 @@ func (portal *Portal) isDuplicate(id groupme.ID) bool {
 	if msg != nil {
 		return true
 	}
+
 	return false
 }
 
@@ -287,7 +289,6 @@ func init() {
 }
 
 func (portal *Portal) markHandled(source *User, message *groupme.Message, mxid id.EventID) {
-	print("handle message")
 	msg := portal.bridge.DB.Message.New()
 	msg.Chat = portal.Key
 	msg.JID = message.ID.String()
@@ -311,7 +312,7 @@ func (portal *Portal) markHandled(source *User, message *groupme.Message, mxid i
 	index := portal.recentlyHandledIndex
 	portal.recentlyHandledIndex = (portal.recentlyHandledIndex + 1) % recentlyHandledLength
 	portal.recentlyHandledLock.Unlock()
-	portal.recentlyHandled[index] = groupme.ID(msg.JID)
+	portal.recentlyHandled[index] = message.ID.String()
 }
 
 func (portal *Portal) getMessageIntent(user *User, info *groupme.Message) *appservice.IntentAPI {
@@ -704,7 +705,6 @@ func (portal *Portal) BackfillHistory(user *User, lastMessageTime uint64) error 
 	endBackfill := portal.beginBackfill()
 	defer endBackfill()
 
-	println("hi")
 	lastMessage := portal.bridge.DB.Message.GetLastInChat(portal.Key)
 	fmt.Println(lastMessage)
 	if lastMessage == nil {
@@ -1239,7 +1239,7 @@ func (portal *Portal) sendMessageDirect(intent *appservice.IntentAPI, eventType 
 	if timestamp == 0 {
 		return intent.SendMessageEvent(portal.MXID, eventType, &wrappedContent)
 	} else {
-		return intent.SendMassagedMessageEvent(portal.MXID, eventType, &wrappedContent, timestamp)
+		return intent.SendMassagedMessageEvent(portal.MXID, eventType, &wrappedContent, timestamp*1000) //milliseconds
 	}
 }
 
@@ -1259,7 +1259,7 @@ func (portal *Portal) HandleTextMessage(source *User, message *groupme.Message) 
 	//TODO: mentions
 
 	_, _ = intent.UserTyping(portal.MXID, false, 0)
-	resp, err := portal.sendMessage(intent, event.EventMessage, content, message.CreatedAt.ToTime().UnixNano())
+	resp, err := portal.sendMessage(intent, event.EventMessage, content, message.CreatedAt.ToTime().Unix())
 	if err != nil {
 		portal.log.Errorfln("Failed to handle message %s: %v", message.ID, err)
 		return
@@ -1835,151 +1835,157 @@ func (portal *Portal) addRelaybotFormat(sender *User, content *event.MessageEven
 	return true
 }
 
-func (portal *Portal) convertMatrixMessage(sender *User, evt *event.Event) (*groupme.Message, *User) {
-	print("convertMatrixMessage")
-	return nil, nil
-	// content, ok := evt.Content.Parsed.(*event.MessageEventContent)
-	// if !ok {
-	// 	portal.log.Debugfln("Failed to handle event %s: unexpected parsed content type %T", evt.ID, evt.Content.Parsed)
-	// 	return nil, sender
-	// }
+func (portal *Portal) convertMatrixMessage(sender *User, evt *event.Event) ([]*groupme.Message, *User) {
+	content, ok := evt.Content.Parsed.(*event.MessageEventContent)
+	if !ok {
+		portal.log.Debugfln("Failed to handle event %s: unexpected parsed content type %T", evt.ID, evt.Content.Parsed)
+		return nil, sender
+	}
 
-	// ts := uint64(evt.Timestamp / 1000)
-	// status := waProto.WebMessageInfo_ERROR
-	// fromMe := true
-	// info := &waProto.WebMessageInfo{
-	// 	Key: &waProto.MessageKey{
-	// 		FromMe:    &fromMe,
-	// 		Id:        makeMessageID(),
-	// 		RemoteJid: &portal.Key.JID,
-	// 	},
-	// 	MessageTimestamp: &ts,
-	// 	Message:          &waProto.Message{},
-	// 	Status:           &status,
-	// }
-	// ctxInfo := &waProto.ContextInfo{}
-	// replyToID := content.GetReplyTo()
-	// if len(replyToID) > 0 {
-	// 	content.RemoveReplyFallback()
-	// 	msg := portal.bridge.DB.Message.GetByMXID(replyToID)
-	// 	if msg != nil && msg.Content != nil {
-	// 		ctxInfo.StanzaId = &msg.JID
-	// 		ctxInfo.Participant = &msg.Sender
-	// 		ctxInfo.QuotedMessage = msg.Content
-	// 	}
-	// }
-	// relaybotFormatted := false
-	// if sender.NeedsRelaybot(portal) {
-	// 	if !portal.HasRelaybot() {
-	// 		if sender.HasSession() {
-	// 			portal.log.Debugln("Database says", sender.MXID, "not in chat and no relaybot, but trying to send anyway")
-	// 		} else {
-	// 			portal.log.Debugln("Ignoring message from", sender.MXID, "in chat with no relaybot")
-	// 			return nil, sender
-	// 		}
-	// 	} else {
-	// 		relaybotFormatted = portal.addRelaybotFormat(sender, content)
-	// 		sender = portal.bridge.Relaybot
-	// 	}
-	// }
-	// if evt.Type == event.EventSticker {
-	// 	content.MsgType = event.MsgImage
-	// } else if content.MsgType == event.MsgImage && content.GetInfo().MimeType == "image/gif" {
-	// 	content.MsgType = event.MsgVideo
-	// }
+	//ts := uint64(evt.Timestamp / 1000)
+	//status := waProto.WebMessageInfo_ERROR
+	//fromMe := true
+	//	info := &waProto.WebMessageInfo{
+	//		Key: &waProto.MessageKey{
+	//			FromMe:    &fromMe,
+	//			Id:        makeMessageID(),
+	//			RemoteJid: &portal.Key.JID,
+	//		},
+	//		MessageTimestamp: &ts,
+	//		Message:          &waProto.Message{},
+	//		Status:           &status,
+	//	}
+	//
+	info := groupme.Message{
+		SourceGUID: evt.ID.String(), //TODO Figure out for multiple messages
+		GroupID:    groupme.ID(portal.Key.JID),
+	}
+	replyToID := content.GetReplyTo()
+	if len(replyToID) > 0 {
+		//		content.RemoveReplyFallback()
+		//		msg := portal.bridge.DB.Message.GetByMXID(replyToID)
+		//		if msg != nil && msg.Content != nil {
+		//			ctxInfo.StanzaId = &msg.JID
+		//			ctxInfo.Participant = &msg.Sender
+		//			ctxInfo.QuotedMessage = msg.Content
+		//		}
+	}
+	relaybotFormatted := false
+	if sender.NeedsRelaybot(portal) {
+		if !portal.HasRelaybot() {
+			if sender.HasSession() {
+				portal.log.Debugln("Database says", sender.MXID, "not in chat and no relaybot, but trying to send anyway")
+			} else {
+				portal.log.Debugln("Ignoring message from", sender.MXID, "in chat with no relaybot")
+				return nil, sender
+			}
+		} else {
+			relaybotFormatted = portal.addRelaybotFormat(sender, content)
+			sender = portal.bridge.Relaybot
+		}
+	}
+	if evt.Type == event.EventSticker {
+		content.MsgType = event.MsgImage
+	} else if content.MsgType == event.MsgImage && content.GetInfo().MimeType == "image/gif" {
+		content.MsgType = event.MsgVideo
+	}
 
-	// switch content.MsgType {
-	// case event.MsgText, event.MsgEmote, event.MsgNotice:
-	// 	text := content.Body
-	// 	if content.Format == event.FormatHTML {
-	// 		text, ctxInfo.MentionedJid = portal.bridge.Formatter.ParseMatrix(content.FormattedBody)
-	// 	}
-	// 	if content.MsgType == event.MsgEmote && !relaybotFormatted {
-	// 		text = "/me " + text
-	// 	}
-	// 	if ctxInfo.StanzaId != nil || ctxInfo.MentionedJid != nil {
-	// 		info.Message.ExtendedTextMessage = &waProto.ExtendedTextMessage{
-	// 			Text:        &text,
-	// 			ContextInfo: ctxInfo,
-	// 		}
-	// 	} else {
-	// 		info.Message.Conversation = &text
-	// 	}
-	// case event.MsgImage:
-	// 	media := portal.preprocessMatrixMedia(sender, relaybotFormatted, content, evt.ID, whatsapp.MediaImage)
-	// 	if media == nil {
-	// 		return nil, sender
-	// 	}
-	// 	ctxInfo.MentionedJid = media.MentionedJIDs
-	// 	info.Message.ImageMessage = &waProto.ImageMessage{
-	// 		ContextInfo:   ctxInfo,
-	// 		Caption:       &media.Caption,
-	// 		JpegThumbnail: media.Thumbnail,
-	// 		Url:           &media.URL,
-	// 		MediaKey:      media.MediaKey,
-	// 		Mimetype:      &content.GetInfo().MimeType,
-	// 		FileEncSha256: media.FileEncSHA256,
-	// 		FileSha256:    media.FileSHA256,
-	// 		FileLength:    &media.FileLength,
-	// 	}
-	// case event.MsgVideo:
-	// 	gifPlayback := content.GetInfo().MimeType == "image/gif"
-	// 	media := portal.preprocessMatrixMedia(sender, relaybotFormatted, content, evt.ID, whatsapp.MediaVideo)
-	// 	if media == nil {
-	// 		return nil, sender
-	// 	}
-	// 	duration := uint32(content.GetInfo().Duration)
-	// 	ctxInfo.MentionedJid = media.MentionedJIDs
-	// 	info.Message.VideoMessage = &waProto.VideoMessage{
-	// 		ContextInfo:   ctxInfo,
-	// 		Caption:       &media.Caption,
-	// 		JpegThumbnail: media.Thumbnail,
-	// 		Url:           &media.URL,
-	// 		MediaKey:      media.MediaKey,
-	// 		Mimetype:      &content.GetInfo().MimeType,
-	// 		GifPlayback:   &gifPlayback,
-	// 		Seconds:       &duration,
-	// 		FileEncSha256: media.FileEncSHA256,
-	// 		FileSha256:    media.FileSHA256,
-	// 		FileLength:    &media.FileLength,
-	// 	}
-	// case event.MsgAudio:
-	// 	media := portal.preprocessMatrixMedia(sender, relaybotFormatted, content, evt.ID, whatsapp.MediaAudio)
-	// 	if media == nil {
-	// 		return nil, sender
-	// 	}
-	// 	duration := uint32(content.GetInfo().Duration)
-	// 	info.Message.AudioMessage = &waProto.AudioMessage{
-	// 		ContextInfo:   ctxInfo,
-	// 		Url:           &media.URL,
-	// 		MediaKey:      media.MediaKey,
-	// 		Mimetype:      &content.GetInfo().MimeType,
-	// 		Seconds:       &duration,
-	// 		FileEncSha256: media.FileEncSHA256,
-	// 		FileSha256:    media.FileSHA256,
-	// 		FileLength:    &media.FileLength,
-	// 	}
-	// case event.MsgFile:
-	// 	media := portal.preprocessMatrixMedia(sender, relaybotFormatted, content, evt.ID, whatsapp.MediaDocument)
-	// 	if media == nil {
-	// 		return nil, sender
-	// 	}
-	// 	info.Message.DocumentMessage = &waProto.DocumentMessage{
-	// 		ContextInfo:   ctxInfo,
-	// 		Url:           &media.URL,
-	// 		Title:         &content.Body,
-	// 		FileName:      &content.Body,
-	// 		MediaKey:      media.MediaKey,
-	// 		Mimetype:      &content.GetInfo().MimeType,
-	// 		FileEncSha256: media.FileEncSHA256,
-	// 		FileSha256:    media.FileSHA256,
-	// 		FileLength:    &media.FileLength,
-	// 	}
-	// default:
-	// 	portal.log.Debugln("Unhandled Matrix event %s: unknown msgtype %s", evt.ID, content.MsgType)
-	// 	return nil, sender
+	switch content.MsgType {
+	case event.MsgText, event.MsgEmote, event.MsgNotice:
+		text := content.Body
+		if content.Format == event.FormatHTML {
+			text, _ = portal.bridge.Formatter.ParseMatrix(content.FormattedBody)
+			//TODO mentions
+		}
+		if content.MsgType == event.MsgEmote && !relaybotFormatted {
+			text = "/me " + text
+		}
+		info.Text = text
+
+	//	if ctxInfo.StanzaId != nil || ctxInfo.MentionedJid != nil {
+	//		info.Message.ExtendedTextMessage = &waProto.ExtendedTextMessage{
+	//			Text:        &text,
+	//			ContextInfo: ctxInfo,
+	//		}
 	// }
-	// return info, sender
+	//else {
+	//			info.Message.Conversation = &text
+	//		}
+	//	 case event.MsgImage:
+	//	 	media := portal.preprocessMatrixMedia(sender, relaybotFormatted, content, evt.ID, whatsapp.MediaImage)
+	//	 	if media == nil {
+	//	 		return nil, sender
+	//	 	}
+	//	 	ctxInfo.MentionedJid = media.MentionedJIDs
+	//	 	info.Message.ImageMessage = &waProto.ImageMessage{
+	//	 		ContextInfo:   ctxInfo,
+	//	 		Caption:       &media.Caption,
+	//	 		JpegThumbnail: media.Thumbnail,
+	//	 		Url:           &media.URL,
+	//	 		MediaKey:      media.MediaKey,
+	//	 		Mimetype:      &content.GetInfo().MimeType,
+	//	 		FileEncSha256: media.FileEncSHA256,
+	//	 		FileSha256:    media.FileSHA256,
+	//	 		FileLength:    &media.FileLength,
+	//	 	}
+	//	 case event.MsgVideo:
+	//	 	gifPlayback := content.GetInfo().MimeType == "image/gif"
+	//	 	media := portal.preprocessMatrixMedia(sender, relaybotFormatted, content, evt.ID, whatsapp.MediaVideo)
+	//	 	if media == nil {
+	//	 		return nil, sender
+	//	 	}
+	//	 	duration := uint32(content.GetInfo().Duration)
+	//	 	ctxInfo.MentionedJid = media.MentionedJIDs
+	//	 	info.Message.VideoMessage = &waProto.VideoMessage{
+	//	 		ContextInfo:   ctxInfo,
+	//	 		Caption:       &media.Caption,
+	//	 		JpegThumbnail: media.Thumbnail,
+	//	 		Url:           &media.URL,
+	//	 		MediaKey:      media.MediaKey,
+	//	 		Mimetype:      &content.GetInfo().MimeType,
+	//	 		GifPlayback:   &gifPlayback,
+	//	 		Seconds:       &duration,
+	//	 		FileEncSha256: media.FileEncSHA256,
+	//	 		FileSha256:    media.FileSHA256,
+	//	 		FileLength:    &media.FileLength,
+	//	 	}
+	//	 case event.MsgAudio:
+	//	 	media := portal.preprocessMatrixMedia(sender, relaybotFormatted, content, evt.ID, whatsapp.MediaAudio)
+	//	 	if media == nil {
+	//	 		return nil, sender
+	//	 	}
+	//	 	duration := uint32(content.GetInfo().Duration)
+	//	 	info.Message.AudioMessage = &waProto.AudioMessage{
+	//	 		ContextInfo:   ctxInfo,
+	//	 		Url:           &media.URL,
+	//	 		MediaKey:      media.MediaKey,
+	//	 		Mimetype:      &content.GetInfo().MimeType,
+	//	 		Seconds:       &duration,
+	//	 		FileEncSha256: media.FileEncSHA256,
+	//	 		FileSha256:    media.FileSHA256,
+	//	 		FileLength:    &media.FileLength,
+	//	 	}
+	//	 case event.MsgFile:
+	//	 	media := portal.preprocessMatrixMedia(sender, relaybotFormatted, content, evt.ID, whatsapp.MediaDocument)
+	//	 	if media == nil {
+	//	 		return nil, sender
+	//	 	}
+	//	 	info.Message.DocumentMessage = &waProto.DocumentMessage{
+	//	 		ContextInfo:   ctxInfo,
+	//	 		Url:           &media.URL,
+	//	 		Title:         &content.Body,
+	//	 		FileName:      &content.Body,
+	//	 		MediaKey:      media.MediaKey,
+	//	 		Mimetype:      &content.GetInfo().MimeType,
+	//	 		FileEncSha256: media.FileEncSHA256,
+	//	 		FileSha256:    media.FileSHA256,
+	//	 		FileLength:    &media.FileLength,
+	//	 	}
+	default:
+		portal.log.Debugln("Unhandled Matrix event %s: unknown msgtype %s", evt.ID, content.MsgType)
+		return nil, sender
+	}
+	return []*groupme.Message{&info}, sender
 }
 
 func (portal *Portal) wasMessageSent(sender *User, id string) bool {
@@ -2017,23 +2023,37 @@ func (portal *Portal) sendDeliveryReceipt(eventID id.EventID) {
 var timeout = errors.New("message sending timed out")
 
 func (portal *Portal) HandleMatrixMessage(sender *User, evt *event.Event) {
-	println("handle matrix message")
-	return
-	//	if !portal.HasRelaybot() && ((portal.IsPrivateChat() && sender.JID != portal.Key.Receiver) ||
-	//		portal.sendMatrixConnectionError(sender, evt.ID)) {
-	//		return
-	//	}
-	//	portal.log.Debugfln("Received event %s", evt.ID)
-	//	info, sender := portal.convertMatrixMessage(sender, evt)
-	//	if info == nil {
-	//		return
-	//	}
-	//	portal.markHandled(sender, info, evt.ID)
-	//	portal.log.Debugln("Sending event", evt.ID, "to WhatsApp", info.ID)
-	//	portal.sendRaw(sender, evt, info, false)
+	if !portal.HasRelaybot() && ((portal.IsPrivateChat() && sender.JID != portal.Key.Receiver) ||
+		portal.sendMatrixConnectionError(sender, evt.ID)) {
+		return
+	}
+	portal.log.Debugfln("Received event %s", evt.ID)
+	info, sender := portal.convertMatrixMessage(sender, evt)
+	if info == nil {
+		return
+	}
+	for _, i := range info {
+		portal.log.Debugln("Sending event", evt.ID, "to WhatsApp", info[0].ID)
+		i = portal.sendRaw(sender, evt, info[0], false) //TODO deal with multiple messages for longer messages
+		portal.markHandled(sender, i, evt.ID)
+	}
+
 }
 
-func (portal *Portal) sendRaw(sender *User, evt *event.Event, info *waProto.WebMessageInfo, isRetry bool) {
+func (portal *Portal) sendRaw(sender *User, evt *event.Event, info *groupme.Message, isRetry bool) *groupme.Message {
+
+	m, err := sender.Client.CreateMessage(context.TODO(), info.GroupID, info)
+	id := ""
+	if m != nil {
+		id = m.ID.String()
+	}
+	if err != nil {
+		portal.log.Warnln(err, id, info.GroupID.String())
+	}
+	if isRetry && err != nil {
+		m, err = sender.Client.CreateMessage(context.TODO(), info.GroupID, info)
+	}
+	return m
 	// errChan := make(chan error, 1)
 	// go sender.Conn.SendRaw(info, errChan)
 

@@ -1,12 +1,12 @@
 # Features & roadmap
 * Matrix → GroupMe
   * [ ] Message content
-    * [ ] Plain text
+    * [x] Plain text
     * [ ] Formatted messages
     * [ ] Media/files
     * [ ] Replies
   * [ ] Message redactions
-  * [ ] Presence
+  * [ ] Presence - N/A
   * [ ] Typing notifications
   * [ ] Read receipts
   * [ ] Power level
@@ -22,7 +22,7 @@
   * [ ] Initial room metadata
 * GroupMe → Matrix
   * [ ] Message content
-    * [ ] Plain text
+    * [x] Plain text
     * [ ] Formatted messages
     * [ ] Media/files
     * [ ] Location messages
@@ -30,9 +30,7 @@
     * [ ] Replies
   * [ ] Chat types
     * [ ] Private chat
-    * [ ] Group chat
-    * [ ] Broadcast list<sup>[2]</sup>
-  * [ ] Message deletions
+    * [x] Group chat
   * [ ] Avatars
   * [ ] Presence
   * [ ] Typing notifications
@@ -49,14 +47,14 @@
     * [ ] Description
   * [ ] Initial group metadata
   * [ ] User metadata changes
-    * [ ] Display name<sup>[3]</sup>
+    * [x] Display name
     * [ ] Avatar
   * [ ] Initial user metadata
     * [ ] Display name
     * [ ] Avatar
 * Misc
   * [ ] Automatic portal creation
-    * [ ] At startup
+    * [x] At startup
     * [ ] When receiving invite
     * [ ] When receiving message
   * [ ] Private chat creation by inviting Matrix puppet of WhatsApp user to new room
