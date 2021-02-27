@@ -232,7 +232,7 @@ func (puppet *Puppet) UpdateAvatar(source *User, avatar string) bool {
 	return true
 }
 
-func (puppet *Puppet) UpdateName(source *User, contact groupme.User) bool {
+func (puppet *Puppet) UpdateName(source *User, contact groupme.Member) bool {
 	newName, quality := puppet.bridge.Config.Bridge.FormatDisplayname(contact)
 	if puppet.Displayname != newName && quality >= puppet.NameQuality {
 		err := puppet.DefaultIntent().SetDisplayName(newName)
@@ -284,20 +284,30 @@ func (puppet *Puppet) updatePortalName() {
 	})
 }
 
-func (puppet *Puppet) Sync(source *User, contact groupme.User) {
+func (puppet *Puppet) Sync(source *User, contact groupme.Member) {
+	if contact.UserID.String() == "system" {
+		puppet.log.Warnln("Trying to sync system puppet")
+
+		puppet.
+			portal.Sync(puppet.bridge.GetUserByJID(portal.Key.Receiver), groupme.Group{})
+		//TODO permissoins idk if its fine to use portal owner
+
+		return
+	}
+
 	err := puppet.DefaultIntent().EnsureRegistered()
 	if err != nil {
 		puppet.log.Errorln("Failed to ensure registered:", err)
 	}
 
-	if contact.ID.String() == source.JID {
-		//TODO What is this
-		//		contact.Notify = source.Conn.Info.Pushname
-	}
+	//if contact.ID.String() == source.JID {
+	//TODO What is this
+	//		contact.Notify = source.Conn.Info.Pushname
+	//}
 
 	update := false
 	update = puppet.UpdateName(source, contact) || update
-	update = puppet.UpdateAvatar(source, contact.AvatarURL) || update
+	update = puppet.UpdateAvatar(source, contact.ImageURL) || update
 	if update {
 		puppet.Update()
 	}

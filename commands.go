@@ -918,31 +918,31 @@ func (handler *CommandHandler) CommandPM(ce *CommandEvent) {
 const cmdLoginMatrixHelp = `login-matrix <_access token_> - Replace your WhatsApp account's Matrix puppet with your real Matrix account.'`
 
 func (handler *CommandHandler) CommandLoginMatrix(ce *CommandEvent) {
-	if len(ce.Args) == 0 {
-		ce.Reply("**Usage:** `login-matrix <access token>`")
-		return
-	}
-	puppet := handler.bridge.GetPuppetByJID(ce.User.JID)
-	err := puppet.SwitchCustomMXID(ce.Args[0], ce.User.MXID)
-	if err != nil {
-		ce.Reply("Failed to switch puppet: %v", err)
-		return
-	}
-	ce.Reply("Successfully switched puppet")
+	//if len(ce.Args) == 0 {
+	//	ce.Reply("**Usage:** `login-matrix <access token>`")
+	//	return
+	//}
+	//puppet := handler.bridge.GetPuppetByJID(ce.User.JID)
+	//err := puppet.SwitchCustomMXID(ce.Args[0], ce.User.MXID)
+	//if err != nil {
+	//	ce.Reply("Failed to switch puppet: %v", err)
+	//	return
+	//}
+	//ce.Reply("Successfully switched puppet")
 }
 
 const cmdLogoutMatrixHelp = `logout-matrix - Switch your WhatsApp account's Matrix puppet back to the default one.`
 
 func (handler *CommandHandler) CommandLogoutMatrix(ce *CommandEvent) {
-	puppet := handler.bridge.GetPuppetByJID(ce.User.JID)
-	if len(puppet.CustomMXID) == 0 {
-		ce.Reply("You had not changed your WhatsApp account's Matrix puppet.")
-		return
-	}
-	err := puppet.SwitchCustomMXID("", "")
-	if err != nil {
-		ce.Reply("Failed to remove custom puppet: %v", err)
-		return
-	}
-	ce.Reply("Successfully removed custom puppet")
+	//puppet := handler.bridge.GetPuppetByJID(ce.User.JID)
+	//if len(puppet.CustomMXID) == 0 {
+	//	ce.Reply("You had not changed your WhatsApp account's Matrix puppet.")
+	//	return
+	//}
+	//err := puppet.SwitchCustomMXID("", "")
+	//if err != nil {
+	//	ce.Reply("Failed to remove custom puppet: %v", err)
+	//	return
+	//}
+	//ce.Reply("Successfully removed custom puppet")
 }

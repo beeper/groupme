@@ -20,7 +20,7 @@ func NewClient(authToken string) *Client {
 }
 func (c Client) IndexAllGroups() ([]*groupme.Group, error) {
 	return c.IndexGroups(context.TODO(), &groupme.GroupsQuery{
-		Omit:    "memberships",
+		//	Omit:    "memberships",
 		PerPage: 100, //TODO: Configurable and add multipage support
 	})
 }

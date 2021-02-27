@@ -799,10 +799,11 @@ func (user *User) handleMessageLoop() {
 			user.bridge.Metrics.TrackBufferLength(user.MXID, len(user.messageOutput))
 			puppet := user.bridge.GetPuppetByJID(msg.data.UserID.String())
 			if puppet != nil {
-				puppet.Sync(user, groupme.User{
-					ID:        msg.data.ID,
-					Name:      msg.data.Name,
-					AvatarURL: msg.data.AvatarURL,
+				puppet.Sync(user, groupme.Member{
+					ID:       msg.data.ID,
+					UserID:   msg.data.UserID,
+					Nickname: msg.data.Name,
+					ImageURL: msg.data.AvatarURL,
 				}) //TODO: add params or docs?
 			}
 			user.GetPortalByJID(msg.chat).messages <- msg
@@ -846,6 +847,11 @@ func (user *User) handleMessageLoop() {
 
 func (user *User) HandleTextMessage(message groupme.Message) {
 	user.messageInput <- PortalMessage{message.GroupID.String(), user, &message, uint64(message.CreatedAt.ToTime().Unix())}
+}
+
+func (user *User) HandleJoin(id groupme.ID) {
+	user.HandleChatList()
+	//TODO: efficient
 }
 
 //func (user *User) HandleImageMessage(message whatsapp.ImageMessage) {

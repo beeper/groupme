@@ -75,7 +75,7 @@ bridge:
     # {{.Short}}  - short display name from contact list
     # To use multiple if's, you need to use: {{else if .Name}}, for example:
     # "{{if .Notify}}{{.Notify}}{{else if .Name}}{{.Name}}{{else}}{{.Jid}}{{end}} (WA)"
-    displayname_template: "{{if .Notify}}{{.Notify}}{{else}}{{.Jid}}{{end}} (WA)"
+    displayname_template: "{{if .Nickname}}{{.Nickname}}{{else}}{{call .ID.String}}{{end}} (WA)"
     # Localpart template for per-user room grouping community IDs.
     # On startup, the bridge will try to create these communities, add all of the specific user's
     # portals to the community, and invite the Matrix user to it.

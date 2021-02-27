@@ -370,7 +370,6 @@ func (portal *Portal) SyncParticipants(metadata *groupme.Group) {
 	participantMap := make(map[string]bool)
 	for _, participant := range metadata.Members {
 		participantMap[participant.ID.String()] = true
-		fmt.Println(participant.ID.String())
 		user := portal.bridge.GetUserByJID(participant.ID.String())
 		portal.userMXIDAction(user, portal.ensureMXIDInvited)
 
@@ -390,6 +389,7 @@ func (portal *Portal) SyncParticipants(metadata *groupme.Group) {
 		if user != nil {
 			changed = levels.EnsureUserLevel(user.MXID, expectedLevel) || changed
 		}
+		puppet.Sync(nil, *participant) //why nil whynot
 	}
 	if changed {
 		_, err = portal.MainIntent().SetPowerLevels(portal.MXID, levels)
@@ -405,7 +405,6 @@ func (portal *Portal) SyncParticipants(metadata *groupme.Group) {
 			jid, ok := portal.bridge.ParsePuppetMXID(member)
 			if ok {
 				_, shouldBePresent := participantMap[jid]
-				fmt.Println(jid)
 				if !shouldBePresent {
 					_, err := portal.MainIntent().KickUser(portal.MXID, &mautrix.ReqKickUser{
 						UserID: member,
@@ -708,11 +707,9 @@ func (portal *Portal) BackfillHistory(user *User, lastMessageTime uint64) error 
 	defer endBackfill()
 
 	lastMessage := portal.bridge.DB.Message.GetLastInChat(portal.Key)
-	fmt.Println(lastMessage)
 	if lastMessage == nil {
 		return nil
 	}
-	println(lastMessage.Timestamp, lastMessageTime)
 	if lastMessage.Timestamp >= lastMessageTime {
 		portal.log.Debugln("Not backfilling: no new messages")
 		return nil
@@ -2036,13 +2033,21 @@ func (portal *Portal) HandleMatrixMessage(sender *User, evt *event.Event) {
 	}
 	for _, i := range info {
 		portal.log.Debugln("Sending event", evt.ID, "to WhatsApp", info[0].ID)
-		i = portal.sendRaw(sender, evt, info[0], false) //TODO deal with multiple messages for longer messages
-		portal.markHandled(sender, i, evt.ID)
+
+		var err error
+		i, err = portal.sendRaw(sender, evt, info[0], false) //TODO deal with multiple messages for longer messages
+		if err != nil {
+			portal.log.Warnln("Unable to handle message from Matrix", evt.ID)
+			//TODO handle deleted room and such
+		} else {
+
+			portal.markHandled(sender, i, evt.ID)
+		}
 	}
 
 }
 
-func (portal *Portal) sendRaw(sender *User, evt *event.Event, info *groupme.Message, isRetry bool) *groupme.Message {
+func (portal *Portal) sendRaw(sender *User, evt *event.Event, info *groupme.Message, isRetry bool) (*groupme.Message, error) {
 
 	m, err := sender.Client.CreateMessage(context.TODO(), info.GroupID, info)
 	id := ""
@@ -2055,7 +2060,10 @@ func (portal *Portal) sendRaw(sender *User, evt *event.Event, info *groupme.Mess
 	if isRetry && err != nil {
 		m, err = sender.Client.CreateMessage(context.TODO(), info.GroupID, info)
 	}
-	return m
+	if err != nil {
+		return nil, err
+	}
+	return m, nil
 	// errChan := make(chan error, 1)
 	// go sender.Conn.SendRaw(info, errChan)
 
