@@ -592,6 +592,7 @@ func (user *User) syncPortals(chatMap map[string]groupme.Group, createAll bool) 
 			}
 		}
 	}
+	//TODO: handle leave from groupme side
 	user.UpdateDirectChats(nil)
 	user.log.Infoln("Finished syncing portals")
 	select {

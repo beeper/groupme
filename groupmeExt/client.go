@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/karmanyaahm/groupme"
+	"maunium.net/go/mautrix-whatsapp/types"
 )
 
 type Client struct {
@@ -49,4 +50,13 @@ func (c Client) LoadMessagesBefore(groupID, lastMessageID string, num int) ([]*g
 		return nil, e
 	}
 	return i.Messages, nil
+}
+
+func (c *Client) RemoveFromGroup(uid, groupID types.GroupMeID) error {
+
+	group, err := c.ShowGroup(context.TODO(), groupme.ID(groupID))
+	if err != nil {
+		return err
+	}
+	return c.RemoveMember(context.TODO(), groupme.ID(groupID), group.GetMemberByUserID(groupme.ID(uid)).ID)
 }

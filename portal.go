@@ -2238,21 +2238,20 @@ func (portal *Portal) Cleanup(puppetsOnly bool) {
 }
 
 func (portal *Portal) HandleMatrixLeave(sender *User) {
-	// if portal.IsPrivateChat() {
-	// 	portal.log.Debugln("User left private chat portal, cleaning up and deleting...")
-	// 	portal.Delete()
-	// 	portal.Cleanup(false)
-	// 	return
-	// } else {
-	// 	// TODO should we somehow deduplicate this call if this leave was sent by the bridge?
-	// 	resp, err := sender.Conn.LeaveGroup(portal.Key.JID)
-	// 	if err != nil {
-	// 		portal.log.Errorfln("Failed to leave group as %s: %v", sender.MXID, err)
-	// 		return
-	// 	}
-	// 	portal.log.Infoln("Leave response:", <-resp)
-	// 	portal.CleanupIfEmpty()
-	// }
+	if portal.IsPrivateChat() {
+		portal.log.Debugln("User left private chat portal, cleaning up and deleting...")
+		portal.Delete()
+		portal.Cleanup(false)
+		return
+	} else {
+		// TODO should we somehow deduplicate this call if this leave was sent by the bridge?
+		err := sender.Client.RemoveFromGroup(sender.JID, portal.Key.JID)
+		if err != nil {
+			portal.log.Errorfln("Failed to leave group as %s: %v", sender.MXID, err)
+			return
+		}
+		portal.CleanupIfEmpty()
+	}
 }
 
 func (portal *Portal) HandleMatrixKick(sender *User, evt *event.Event) {

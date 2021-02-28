@@ -171,7 +171,7 @@ func (portal *Portal) Update() {
 }
 
 func (portal *Portal) Delete() {
-	ans := portal.db.Delete(&portal)
+	ans := portal.db.Where("jid = ? AND receiver = ?", portal.Key.JID, portal.Key.Receiver).Delete(&portal)
 	if ans.Error != nil {
 		portal.log.Warnfln("Failed to delete %s: %v", portal.Key, ans.Error)
 	}

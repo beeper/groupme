@@ -288,8 +288,7 @@ func (puppet *Puppet) Sync(source *User, contact groupme.Member) {
 	if contact.UserID.String() == "system" {
 		puppet.log.Warnln("Trying to sync system puppet")
 
-		puppet.
-			portal.Sync(puppet.bridge.GetUserByJID(portal.Key.Receiver), groupme.Group{})
+		//		portal.Sync(puppet.bridge.GetUserByJID(portal.Key.Receiver), groupme.Group{})
 		//TODO permissoins idk if its fine to use portal owner
 
 		return
