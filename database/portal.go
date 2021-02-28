@@ -17,8 +17,6 @@
 package database
 
 import (
-	"strings"
-
 	"gorm.io/gorm"
 	log "maunium.net/go/maulogger/v2"
 	"maunium.net/go/mautrix/id"
@@ -27,8 +25,8 @@ import (
 )
 
 type PortalKey struct {
-	JID      types.GroupMeID
-	Receiver types.GroupMeID
+	JID      types.GroupMeID `gorm:"primaryKey"`
+	Receiver types.GroupMeID `gorm:"primaryKey"`
 }
 
 func GroupPortalKey(jid types.GroupMeID) PortalKey {
@@ -39,9 +37,6 @@ func GroupPortalKey(jid types.GroupMeID) PortalKey {
 }
 
 func NewPortalKey(jid, receiver types.GroupMeID) PortalKey {
-	if strings.HasSuffix(jid, "@g.us") {
-		receiver = jid
-	}
 	return PortalKey{
 		JID:      jid,
 		Receiver: receiver,
@@ -127,8 +122,8 @@ type Portal struct {
 	Name      string
 	Topic     string
 	Avatar    string
-	AvatarURL id.ContentURI //`gorm:"-"` //TODO:STORE AVATAR
-	Encrypted bool          `gorm:"notNull;default:false"`
+	AvatarURL id.ContentURI
+	Encrypted bool `gorm:"notNull;default:false"`
 }
 
 // func (portal *Portal) Scan(row Scannable) *Portal {

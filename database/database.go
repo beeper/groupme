@@ -17,6 +17,7 @@
 package database
 
 import (
+	"os"
 	"strings"
 
 	_ "github.com/lib/pq"
@@ -48,6 +49,8 @@ func New(dbType string, uri string, baseLog log.Logger) (*Database, error) {
 
 	if dbType == "sqlite3" {
 		//_, _ = conn.Exec("PRAGMA foreign_keys = ON")
+		log.Fatalln("no sqlite for now only postgresql")
+		os.Exit(1)
 		conn = sqlite.Open(uri)
 	} else {
 		conn = postgres.Open(uri)

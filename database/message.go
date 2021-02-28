@@ -83,7 +83,7 @@ type Message struct {
 	Timestamp uint64              `gorm:"notNull;default:0"`
 	Content   *groupmeExt.Message `gorm:"type:TEXT;notNull"`
 
-	//	Portal Portal `gorm:"foreignKey:JID;"` //`gorm:"foreignKey:Chat.Receiver,Chat.JID;references:jid,receiver;constraint:onDelete:CASCADE;"`TODO
+	Portal Portal `gorm:"foreignKey:chat_jid,chat_receiver;references:jid,receiver;constraint:onDelete:CASCADE;"`
 }
 
 // func (msg *Message) Scan(row Scannable) *Message {

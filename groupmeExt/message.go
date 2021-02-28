@@ -12,13 +12,13 @@ import (
 type Message struct{ groupme.Message }
 
 func (m *Message) Scan(value interface{}) error {
-	bytes, ok := value.([]byte)
+	bytes, ok := value.(string)
 	if !ok {
-		return errors.New(fmt.Sprint("Failed to unmarshal JSONB value:", value))
+		return errors.New(fmt.Sprint("Failed to unmarshal json value:", value))
 	}
 
 	message := Message{}
-	err := json.Unmarshal(bytes, &message)
+	err := json.Unmarshal([]byte(bytes), &message)
 
 	*m = Message(message)
 	return err
