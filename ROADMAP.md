@@ -13,7 +13,7 @@
   * [ ] Membership actions
     * [ ] Invite
     * [ ] Join
-    * [ ] Leave
+    * [x] Leave
     * [ ] Kick
   * [ ] Room metadata changes
     * [ ] Name
@@ -45,17 +45,17 @@
     * [ ] Title
     * [ ] Avatar
     * [ ] Description
-  * [ ] Initial group metadata
-  * [ ] User metadata changes
+  * [x] Initial group metadata
+  * [x] User metadata changes
     * [x] Display name
-    * [ ] Avatar
-  * [ ] Initial user metadata
-    * [ ] Display name
-    * [ ] Avatar
+    * [x] Avatar
+  * [x] Initial user metadata
+    * [x] Display name
+    * [x] Avatar
 * Misc
-  * [ ] Automatic portal creation
+  * [x] Automatic portal creation
     * [x] At startup
-    * [ ] When receiving invite
+    * [x] When receiving invite
     * [x] When receiving message
   * [ ] Private chat creation by inviting Matrix puppet of WhatsApp user to new room
   * [ ] Option to use own Matrix account for messages sent from WhatsApp mobile/other web clients
