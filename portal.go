@@ -158,6 +158,7 @@ const recentlyHandledLength = 100
 
 type PortalMessage struct {
 	chat      string
+	group     bool
 	source    *User
 	data      *groupme.Message
 	timestamp uint64
@@ -265,9 +266,12 @@ func (portal *Portal) handleMessage(msg PortalMessage) {
 }
 
 func (portal *Portal) isRecentlyHandled(id groupme.ID) bool {
-	start := portal.recentlyHandledIndex
+	start := int(portal.recentlyHandledIndex) //int bc -1 loops over to 255 in uint8
 	idStr := id.String()
 	for i := (start - 1) % recentlyHandledLength; i != start; i = (i - 1) % recentlyHandledLength {
+		if i < 0 { //do this to get modulo not remainder
+			i += recentlyHandledLength
+		}
 		if portal.recentlyHandled[i] == idStr {
 			return true
 		}
@@ -884,7 +888,7 @@ func (portal *Portal) handleHistory(user *User, messages []*groupme.Message) {
 		if portal.privateChatBackfillInvitePuppet != nil && message.UserID.String() == user.JID && portal.IsPrivateChat() {
 			portal.privateChatBackfillInvitePuppet()
 		}
-		portal.handleMessage(PortalMessage{portal.Key.JID, user, message, uint64(message.CreatedAt.ToTime().Unix())})
+		portal.handleMessage(PortalMessage{portal.Key.JID, portal.Key.JID == portal.Key.Receiver, user, message, uint64(message.CreatedAt.ToTime().Unix())})
 	}
 }
 
