@@ -58,6 +58,9 @@ type User struct {
 	ConnectionErrors int
 	CommunityID      string
 
+	ChatList  map[types.GroupMeID]groupme.Chat
+	GroupList map[types.GroupMeID]groupme.Group
+
 	cleanDisconnection  bool
 	batteryWarningsSent int
 	lastReconnection    int64
@@ -535,6 +538,7 @@ func (user *User) HandleChatList() {
 	}
 	user.chatListReceived <- struct{}{}
 	user.log.Infoln("Chat list received")
+	user.GroupList = chatMap
 	go user.syncPortals(chatMap, false)
 }
 

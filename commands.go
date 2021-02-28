@@ -20,14 +20,18 @@ import (
 	// "errors"
 	"context"
 	"fmt"
+	"math"
+	"sort"
 
 	// "math"
 
 	"strconv"
 	"strings"
 
-	"github.com/Rhymen/go-whatsapp"
 	"maunium.net/go/maulogger/v2"
+	"maunium.net/go/mautrix-whatsapp/database"
+	"maunium.net/go/mautrix-whatsapp/types"
+	whatsappExt "maunium.net/go/mautrix-whatsapp/whatsapp-ext"
 
 	"maunium.net/go/mautrix"
 	"maunium.net/go/mautrix/appservice"
@@ -752,109 +756,124 @@ func (handler *CommandHandler) CommandDeleteAllPortals(ce *CommandEvent) {
 
 const cmdListHelp = `list <contacts|groups> [page] [items per page] - Get a list of all contacts and groups.`
 
-func formatContacts(contacts bool, input map[string]whatsapp.Contact) (result []string) {
-	//	for jid, contact := range input {
-	//		if strings.HasSuffix(jid, whatsappExt.NewUserSuffix) != contacts {
-	//			continue
-	//		}
-	//
-	//		if contacts {
-	//			result = append(result, fmt.Sprintf("* %s / %s - `%s`", contact.Name, contact.Notify, contact.Jid[:len(contact.Jid)-len(whatsappExt.NewUserSuffix)]))
-	//		} else {
-	//			result = append(result, fmt.Sprintf("* %s - `%s`", contact.Name, contact.Jid))
-	//		}
-	//	}
-	//	sort.Sort(sort.StringSlice(result))
+func formatContacts(contacts bool, input map[string]string) (result []string) {
+	for jid, contact := range input {
+		if strings.HasSuffix(jid, whatsappExt.NewUserSuffix) != contacts {
+			continue
+		}
+
+		if contacts {
+			result = append(result, fmt.Sprintf("* %s / %s - `%s`", contact, jid))
+		} else {
+			result = append(result, fmt.Sprintf("* %s - `%s`", contact, jid))
+		}
+	}
+	sort.Sort(sort.StringSlice(result))
 	return
 }
 
 func (handler *CommandHandler) CommandList(ce *CommandEvent) {
-	// if len(ce.Args) == 0 {
-	// 	ce.Reply("**Usage:** `list <contacts|groups> [page] [items per page]`")
-	// 	return
-	// }
-	// mode := strings.ToLower(ce.Args[0])
-	// if mode[0] != 'g' && mode[0] != 'c' {
-	// 	ce.Reply("**Usage:** `list <contacts|groups> [page] [items per page]`")
-	// 	return
-	// }
-	// var err error
-	// page := 1
-	// max := 100
-	// if len(ce.Args) > 1 {
-	// 	page, err = strconv.Atoi(ce.Args[1])
-	// 	if err != nil || page <= 0 {
-	// 		ce.Reply("\"%s\" isn't a valid page number", ce.Args[1])
-	// 		return
-	// 	}
-	// }
-	// if len(ce.Args) > 2 {
-	// 	max, err = strconv.Atoi(ce.Args[2])
-	// 	if err != nil || max <= 0 {
-	// 		ce.Reply("\"%s\" isn't a valid number of items per page", ce.Args[2])
-	// 		return
-	// 	} else if max > 400 {
-	// 		ce.Reply("Warning: a high number of items per page may fail to send a reply")
-	// 	}
-	// }
-	// contacts := mode[0] == 'c'
-	// typeName := "Groups"
-	// if contacts {
-	// 	typeName = "Contacts"
-	// }
-	// result := formatContacts(contacts, ce.User.Conn.Store.Contacts)
-	// if len(result) == 0 {
-	// 	ce.Reply("No %s found", strings.ToLower(typeName))
-	// 	return
-	// }
-	// pages := int(math.Ceil(float64(len(result)) / float64(max)))
-	// if (page-1)*max >= len(result) {
-	// 	if pages == 1 {
-	// 		ce.Reply("There is only 1 page of %s", strings.ToLower(typeName))
-	// 	} else {
-	// 		ce.Reply("There are only %d pages of %s", pages, strings.ToLower(typeName))
-	// 	}
-	// 	return
-	// }
-	// lastIndex := page * max
-	// if lastIndex > len(result) {
-	// 	lastIndex = len(result)
-	// }
-	// result = result[(page-1)*max : lastIndex]
-	// ce.Reply("### %s (page %d of %d)\n\n%s", typeName, page, pages, strings.Join(result, "\n"))
+	if len(ce.Args) == 0 {
+		ce.Reply("**Usage:** `list <contacts|groups> [page] [items per page]`")
+		return
+	}
+	mode := strings.ToLower(ce.Args[0])
+	if mode[0] != 'g' && mode[0] != 'c' {
+		ce.Reply("**Usage:** `list <contacts|groups> [page] [items per page]`")
+		return
+	}
+	var err error
+	page := 1
+	max := 100
+	if len(ce.Args) > 1 {
+		page, err = strconv.Atoi(ce.Args[1])
+		if err != nil || page <= 0 {
+			ce.Reply("\"%s\" isn't a valid page number", ce.Args[1])
+			return
+		}
+	}
+	if len(ce.Args) > 2 {
+		max, err = strconv.Atoi(ce.Args[2])
+		if err != nil || max <= 0 {
+			ce.Reply("\"%s\" isn't a valid number of items per page", ce.Args[2])
+			return
+		} else if max > 400 {
+			ce.Reply("Warning: a high number of items per page may fail to send a reply")
+		}
+	}
+	contacts := mode[0] == 'c'
+	typeName := "Groups"
+	if contacts {
+		typeName = "Contacts"
+	}
+
+	//real deal
+	v := make(map[types.GroupMeID]string)
+
+	if contacts {
+		for i, j := range ce.User.ChatList {
+			v[i] = j.OtherUser.Name
+		}
+	} else {
+		for i, j := range ce.User.GroupList {
+			v[i] = j.Name
+		}
+
+	}
+	result := formatContacts(contacts, v)
+
+	if len(result) == 0 {
+		ce.Reply("No %s found", strings.ToLower(typeName))
+		return
+	}
+	pages := int(math.Ceil(float64(len(result)) / float64(max)))
+	if (page-1)*max >= len(result) {
+		if pages == 1 {
+			ce.Reply("There is only 1 page of %s", strings.ToLower(typeName))
+		} else {
+			ce.Reply("There are only %d pages of %s", pages, strings.ToLower(typeName))
+		}
+		return
+	}
+	lastIndex := page * max
+	if lastIndex > len(result) {
+		lastIndex = len(result)
+	}
+	result = result[(page-1)*max : lastIndex]
+	ce.Reply("### %s (page %d of %d)\n\n%s", typeName, page, pages, strings.Join(result, "\n"))
 }
 
 const cmdOpenHelp = `open <_group JID_> - Open a group chat portal.`
 
 func (handler *CommandHandler) CommandOpen(ce *CommandEvent) {
-	// if len(ce.Args) == 0 {
-	// 	ce.Reply("**Usage:** `open <group JID>`")
-	// 	return
-	// }
+	if len(ce.Args) == 0 {
+		ce.Reply("**Usage:** `open <group JID>`")
+		return
+	}
 
-	// user := ce.User
-	// jid := ce.Args[0]
+	user := ce.User
+	jid := ce.Args[0]
 
-	// if strings.HasSuffix(jid, whatsappExt.NewUserSuffix) {
-	// 	ce.Reply("That looks like a user JID. Did you mean `pm %s`?", jid[:len(jid)-len(whatsappExt.NewUserSuffix)])
-	// 	return
-	// }
+	if strings.HasSuffix(jid, whatsappExt.NewUserSuffix) {
+		ce.Reply("That looks like a user JID. Did you mean `pm %s`?", jid[:len(jid)-len(whatsappExt.NewUserSuffix)])
+		return
+	}
 
-	// contact, ok := user.Conn.Store.Contacts[jid]
-	// if !ok {
-	// 	ce.Reply("Group JID not found in contacts. Try syncing contacts with `sync` first.")
-	// 	return
-	// }
-	// handler.log.Debugln("Importing", jid, "for", user)
-	// portal := user.bridge.GetPortalByJID(database.GroupPortalKey(jid))
-	// if len(portal.MXID) > 0 {
-	// 	portal.Sync(user, contact)
-	// 	ce.Reply("Portal room synced.")
-	// } else {
-	// 	portal.Sync(user, contact)
-	// 	ce.Reply("Portal room created.")
-	// }
-	// _, _ = portal.MainIntent().InviteUser(portal.MXID, &mautrix.ReqInviteUser{UserID: user.MXID})
+	contact, ok := user.GroupList[jid]
+	if !ok {
+		ce.Reply("Group JID not found in contacts. Try syncing contacts with `sync` first.")
+		return
+	}
+	handler.log.Debugln("Importing", jid, "for", user)
+	portal := user.bridge.GetPortalByJID(database.GroupPortalKey(jid))
+	if len(portal.MXID) > 0 {
+		portal.Sync(user, contact)
+		ce.Reply("Portal room synced.")
+	} else {
+		portal.Sync(user, contact)
+		ce.Reply("Portal room created.")
+	}
+	_, _ = portal.MainIntent().InviteUser(portal.MXID, &mautrix.ReqInviteUser{UserID: user.MXID})
 }
 
 const cmdPMHelp = `pm [--force] <_international phone number_> - Open a private chat with the given phone number.`
