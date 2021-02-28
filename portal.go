@@ -369,11 +369,11 @@ func (portal *Portal) SyncParticipants(metadata *groupme.Group) {
 	}
 	participantMap := make(map[string]bool)
 	for _, participant := range metadata.Members {
-		participantMap[participant.ID.String()] = true
-		user := portal.bridge.GetUserByJID(participant.ID.String())
+		participantMap[participant.UserID.String()] = true
+		user := portal.bridge.GetUserByJID(participant.UserID.String())
 		portal.userMXIDAction(user, portal.ensureMXIDInvited)
 
-		puppet := portal.bridge.GetPuppetByJID(participant.ID.String())
+		puppet := portal.bridge.GetPuppetByJID(participant.UserID.String())
 		err := puppet.IntentFor(portal).EnsureJoined(portal.MXID)
 		if err != nil {
 			portal.log.Warnfln("Failed to make puppet of %s join %s: %v", participant.ID.String(), portal.MXID, err)

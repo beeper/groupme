@@ -553,7 +553,7 @@ func (user *User) syncPortals(chatMap map[string]groupme.Group, createAll bool) 
 	existingKeys := user.GetInCommunityMap()
 	portalKeys := make([]database.PortalKeyWithMeta, 0, len(chatMap))
 	for _, chat := range chatMap {
-		portal := user.GetPortalByJID(chat.ID.String())
+		portal := user.bridge.GetPortalByJID(database.GroupPortalKey(chat.ID.String()))
 
 		chats = append(chats, Chat{
 			Portal:          portal,
@@ -805,13 +805,12 @@ func (user *User) handleMessageLoop() {
 			puppet := user.bridge.GetPuppetByJID(msg.data.UserID.String())
 			if puppet != nil {
 				puppet.Sync(user, groupme.Member{
-					ID:       msg.data.ID,
 					UserID:   msg.data.UserID,
 					Nickname: msg.data.Name,
 					ImageURL: msg.data.AvatarURL,
 				}) //TODO: add params or docs?
 			}
-			user.GetPortalByJID(msg.chat).messages <- msg
+			user.bridge.GetPortalByJID(database.GroupPortalKey(msg.chat)).messages <- msg
 		case <-user.syncStart:
 			user.log.Debugln("Processing of incoming messages is locked")
 			user.bridge.Metrics.TrackSyncLock(user.JID, true)
@@ -851,7 +850,19 @@ func (user *User) handleMessageLoop() {
 //}
 
 func (user *User) HandleTextMessage(message groupme.Message) {
-	user.messageInput <- PortalMessage{message.GroupID.String(), user, &message, uint64(message.CreatedAt.ToTime().Unix())}
+	var group bool
+	var id string
+	if message.GroupID.String() != "" {
+		group = true
+		id = message.GroupID.String()
+	} else if message.ConversationID.String() != "" {
+		group = false
+		id = message.ConversationID.String()
+	} else {
+		user.log.Errorln("Message received without conversation or groupid")
+		return
+	}
+	user.messageInput <- PortalMessage{id, group, user, &message, uint64(message.CreatedAt.ToTime().Unix())}
 }
 
 func (user *User) HandleJoin(id groupme.ID) {

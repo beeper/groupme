@@ -160,7 +160,7 @@ type UsernameTemplateArgs struct {
 func (bc BridgeConfig) FormatDisplayname(contact groupme.Member) (string, int8) {
 	var buf bytes.Buffer
 	if index := strings.IndexRune(contact.ID.String(), '@'); index > 0 {
-		contact.ID = groupme.ID("+" + contact.ID.String()[:index])
+		contact.ID = groupme.ID("+" + contact.UserID.String()[:index])
 	}
 	bc.displaynameTemplate.Execute(&buf, contact)
 	var quality int8
@@ -168,7 +168,7 @@ func (bc BridgeConfig) FormatDisplayname(contact groupme.Member) (string, int8) 
 	case len(contact.Nickname) > 0:
 		quality = 3
 		//TODO what
-	case len(contact.ID) > 0:
+	case len(contact.UserID) > 0:
 		quality = 1
 	default:
 		quality = 0
