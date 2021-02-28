@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"runtime/pprof"
 	"strings"
 	"sync"
 	"syscall"
@@ -397,6 +398,8 @@ func (bridge *Bridge) Stop() {
 	}
 }
 
+var cpuprofile = flag.MakeFull("", "cpuprofile", "write cpu profile to `file`", "").String()
+
 func (bridge *Bridge) Main() {
 
 	if *generateRegistration {
@@ -411,6 +414,19 @@ func (bridge *Bridge) Main() {
 	bridge.Start()
 	bridge.Log.Infoln("Bridge started!")
 
+	if *cpuprofile != "" {
+		println("profiling")
+		f, err := os.Create(*cpuprofile)
+		if err != nil {
+			log.Fatal("could not create CPU profile: ", err)
+		}
+		defer f.Close() // error handling omitted for example
+		if err := pprof.StartCPUProfile(f); err != nil {
+			log.Fatal("could not start CPU profile: ", err)
+		}
+		defer pprof.StopCPUProfile()
+	}
+
 	c := make(chan os.Signal)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
 	<-c
@@ -418,7 +434,7 @@ func (bridge *Bridge) Main() {
 	bridge.Log.Infoln("Interrupt received, stopping...")
 	bridge.Stop()
 	bridge.Log.Infoln("Bridge stopped.")
-	os.Exit(0)
+	//os.Exit(0)
 }
 
 func main() {
