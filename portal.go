@@ -417,48 +417,68 @@ func (portal *Portal) SyncParticipants(metadata *groupme.Group) {
 }
 
 func (portal *Portal) UpdateAvatar(user *User, avatar string, updateInfo bool) bool {
-	// if avatar == nil {
-	// 	var err error
-	// 	avatar, err = user.Conn.GetProfilePicThumb(portal.Key.JID)
-	// 	if err != nil {
-	// 		portal.log.Errorln(err)
-	// 		return false
-	// 	}
-	// }
+	//	if len(avatar) == 0 {
+	//		var err error
+	//		avatar, err = user.Conn.GetProfilePicThumb(portal.Key.JID)
+	//		if err != nil {
+	//			portal.log.Errorln(err)
+	//			return false
+	//		}
+	//	}
+	//TODO: duplicated code from puppet.UpdateAvatar
+	if len(avatar) == 0 {
+		if len(portal.Avatar) == 0 {
+			return false
+		}
+		err := portal.MainIntent().SetAvatarURL(id.ContentURI{})
+		if err != nil {
+			portal.log.Warnln("Failed to remove avatar:", err)
+		}
+		portal.AvatarURL = types.ContentURI{}
+		portal.Avatar = avatar
+		return true
+	}
 
-	// if avatar.Status != 0 {
-	// 	return false
-	// }
+	if portal.Avatar == avatar {
+		return false
+	}
 
-	// if portal.Avatar == avatar.Tag {
-	// 	return false
-	// }
+	//TODO check its actually groupme?
+	response, err := http.Get(avatar + ".large")
+	if err != nil {
+		portal.log.Warnln("Failed to download avatar:", err)
+		return false
+	}
+	defer response.Body.Close()
 
-	// data, err := avatar.DownloadBytes()
-	// if err != nil {
-	// 	portal.log.Warnln("Failed to download avatar:", err)
-	// 	return false
-	// }
+	image, err := ioutil.ReadAll(response.Body)
+	if err != nil {
+		portal.log.Warnln("Failed to read downloaded avatar:", err)
+		return false
+	}
 
-	// mimeType := http.DetectContentType(data)
-	// resp, err := portal.MainIntent().UploadBytes(data, mimeType)
-	// if err != nil {
-	// 	portal.log.Warnln("Failed to upload avatar:", err)
-	// 	return false
-	// }
+	mime := response.Header.Get("Content-Type")
+	if len(mime) == 0 {
+		mime = http.DetectContentType(image)
+	}
+	resp, err := portal.MainIntent().UploadBytes(image, mime)
+	if err != nil {
+		portal.log.Warnln("Failed to upload avatar:", err)
+		return false
+	}
 
-	// portal.AvatarURL = resp.ContentURI
-	// if len(portal.MXID) > 0 {
-	// 	_, err = portal.MainIntent().SetRoomAvatar(portal.MXID, resp.ContentURI)
-	// 	if err != nil {
-	// 		portal.log.Warnln("Failed to set room topic:", err)
-	// 		return false
-	// 	}
-	// }
-	// portal.Avatar = avatar.Tag
-	// if updateInfo {
-	// 	portal.UpdateBridgeInfo()
-	// }
+	portal.AvatarURL = types.ContentURI{resp.ContentURI}
+	if len(portal.MXID) > 0 {
+		_, err = portal.MainIntent().SetRoomAvatar(portal.MXID, resp.ContentURI)
+		if err != nil {
+			portal.log.Warnln("Failed to set room topic:", err)
+			return false
+		}
+	}
+	portal.Avatar = avatar
+	if updateInfo {
+		portal.UpdateBridgeInfo()
+	}
 	return true
 }
 
@@ -503,11 +523,6 @@ func (portal *Portal) UpdateTopic(topic string, setBy types.GroupMeID, updateInf
 func (portal *Portal) UpdateMetadata(user *User) bool {
 	if portal.IsPrivateChat() {
 		return false
-	} else if portal.IsStatusBroadcastRoom() {
-		update := false
-		update = portal.UpdateName("WhatsApp Status Broadcast", "", false) || update
-		update = portal.UpdateTopic("WhatsApp status updates from your contacts", "", false) || update
-		return update
 	}
 	group, err := user.Client.ShowGroup(context.TODO(), groupme.ID(strings.Replace(portal.Key.JID, groupmeExt.NewUserSuffix, "", 1)))
 	if err != nil {
@@ -521,7 +536,7 @@ func (portal *Portal) UpdateMetadata(user *User) bool {
 
 	// TODO: update the room, e.g. change priority level
 	//   to send messages to moderator
-	return false
+	//return false
 	//	}
 
 	portal.SyncParticipants(group)
@@ -591,9 +606,8 @@ func (portal *Portal) Sync(user *User, group groupme.Group) {
 
 	update := false
 	update = portal.UpdateMetadata(user) || update
-	if !portal.IsStatusBroadcastRoom() {
-		update = portal.UpdateAvatar(user, "", false) || update
-	}
+	update = portal.UpdateAvatar(user, group.ImageURL, false) || update
+
 	if update {
 		portal.Update()
 		portal.UpdateBridgeInfo()
@@ -977,7 +991,7 @@ func (portal *Portal) CreateMatrixRoom(user *User) error {
 			portal.Name = metadata.Name
 			portal.Topic = metadata.Description
 		}
-		portal.UpdateAvatar(user, "", false)
+		portal.UpdateAvatar(user, metadata.ImageURL, false)
 	}
 
 	bridgeInfoStateKey, bridgeInfo := portal.getBridgeInfo()

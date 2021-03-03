@@ -587,21 +587,28 @@ func (user *User) syncPortals(chatMap map[string]groupme.Group, createAll bool) 
 	}
 	now := uint64(time.Now().Unix())
 	user.log.Infoln("Syncing portals")
+
+	wg := sync.WaitGroup{}
 	for i, chat := range chats {
 		if chat.LastMessageTime+user.bridge.Config.Bridge.SyncChatMaxAge < now {
 			break
 		}
-		create := (chat.LastMessageTime >= user.LastConnection && user.LastConnection > 0) || i < limit
-		if len(chat.Portal.MXID) > 0 || create || createAll {
-			go func() {
+		go func(chat Chat) {
+			wg.Add(1)
+			create := (chat.LastMessageTime >= user.LastConnection && user.LastConnection > 0) || i < limit
+			if len(chat.Portal.MXID) > 0 || create || createAll {
 				chat.Portal.Sync(user, chat.Group)
 				err := chat.Portal.BackfillHistory(user, chat.LastMessageTime)
 				if err != nil {
 					chat.Portal.log.Errorln("Error backfilling history:", err)
 				}
-			}()
-		}
+			}
+
+			wg.Done()
+		}(chat)
+
 	}
+	wg.Wait()
 	//TODO: handle leave from groupme side
 	user.UpdateDirectChats(nil)
 	user.log.Infoln("Finished syncing portals")
