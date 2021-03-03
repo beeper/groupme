@@ -1001,7 +1001,7 @@ func (portal *Portal) CreateMatrixRoom(user *User) error {
 		initialState = append(initialState, &event.Event{
 			Type: event.StateRoomAvatar,
 			Content: event.Content{
-				Parsed: event.RoomAvatarEventContent{URL: portal.AvatarURL},
+				Parsed: event.RoomAvatarEventContent{URL: portal.AvatarURL.ContentURI},
 			},
 		})
 	}

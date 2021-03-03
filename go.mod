@@ -29,5 +29,3 @@ require (
 )
 
 replace github.com/karmanyaahm/groupme => ../groupme
-
-replace maunium.net/go/mautrix => ../mautrix

@@ -101,7 +101,7 @@ type Puppet struct {
 
 	JID         types.GroupMeID `gorm:"primaryKey"`
 	Avatar      string
-	AvatarURL   id.ContentURI
+	AvatarURL   types.ContentURI
 	Displayname string
 	NameQuality int8
 

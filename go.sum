@@ -644,5 +644,7 @@ maunium.net/go/mauflag v1.0.0 h1:YiaRc0tEI3toYtJMRIfjP+jklH45uDHtT80nUamyD4M=
 maunium.net/go/mauflag v1.0.0/go.mod h1:nLivPOpTpHnpzEh8jEdSL9UqO9+/KBJFmNRlwKfkPeA=
 maunium.net/go/maulogger/v2 v2.1.1 h1:NAZNc6XUFJzgzfewCzVoGkxNAsblLCSSEdtDuIjP0XA=
 maunium.net/go/maulogger/v2 v2.1.1/go.mod h1:TYWy7wKwz/tIXTpsx8G3mZseIRiC5DoMxSZazOHy68A=
+maunium.net/go/mautrix v0.8.2 h1:E3NudQ/QolmE/yhHau8iCkbmcq6gCLvoEvukdqPFJu4=
+maunium.net/go/mautrix v0.8.2/go.mod h1:KiViCshKBUZwrVRvTOXsJBFfstvR/btxckHUbOPdu54=
 sigs.k8s.io/yaml v1.1.0/go.mod h1:UJmg0vDUVViEyp3mgSv9WPwZCDxu4rQW1olrI1uml+o=
 sourcegraph.com/sourcegraph/appdash v0.0.0-20190731080439-ebfcffb1b5c0/go.mod h1:hI742Nqp5OhwiqlzhgfbWU4mW4yO10fP+LoT9WOswdU=

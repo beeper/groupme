@@ -171,7 +171,7 @@ func (mx *MatrixHandler) createPrivatePortalFromInvite(roomID id.RoomID, inviter
 		print("possible bug with pointer above")
 		portal.Avatar = puppet.Avatar
 		_, _ = portal.MainIntent().SetRoomName(portal.MXID, portal.Name)
-		_, _ = portal.MainIntent().SetRoomAvatar(portal.MXID, portal.AvatarURL)
+		_, _ = portal.MainIntent().SetRoomAvatar(portal.MXID, portal.AvatarURL.ContentURI)
 	} else {
 		portal.Name = ""
 	}

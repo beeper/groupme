@@ -188,7 +188,7 @@ func (puppet *Puppet) UpdateAvatar(source *User, avatar string) bool {
 		if err != nil {
 			puppet.log.Warnln("Failed to remove avatar:", err)
 		}
-		puppet.AvatarURL = id.ContentURI{}
+		puppet.AvatarURL = types.ContentURI{}
 		puppet.Avatar = avatar
 		go puppet.updatePortalAvatar()
 		return true
@@ -222,8 +222,8 @@ func (puppet *Puppet) UpdateAvatar(source *User, avatar string) bool {
 		return false
 	}
 
-	puppet.AvatarURL = resp.ContentURI
-	err = puppet.DefaultIntent().SetAvatarURL(puppet.AvatarURL)
+	puppet.AvatarURL = types.ContentURI{resp.ContentURI}
+	err = puppet.DefaultIntent().SetAvatarURL(resp.ContentURI)
 	if err != nil {
 		puppet.log.Warnln("Failed to set avatar:", err)
 	}
@@ -260,7 +260,7 @@ func (puppet *Puppet) updatePortalMeta(meta func(portal *Portal)) {
 func (puppet *Puppet) updatePortalAvatar() {
 	puppet.updatePortalMeta(func(portal *Portal) {
 		if len(portal.MXID) > 0 {
-			_, err := portal.MainIntent().SetRoomAvatar(portal.MXID, puppet.AvatarURL)
+			_, err := portal.MainIntent().SetRoomAvatar(portal.MXID, puppet.AvatarURL.ContentURI)
 			if err != nil {
 				portal.log.Warnln("Failed to set avatar:", err)
 			}
