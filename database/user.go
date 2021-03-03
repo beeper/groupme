@@ -222,7 +222,7 @@ func (user *User) GetPortalKeys() []PortalKey {
 	var keys []PortalKey
 	for _, i := range up {
 		key := PortalKey{
-			JID:      i.UserJID,
+			JID:      i.PortalJID,
 			Receiver: i.PortalReceiver,
 		}
 		keys = append(keys, key)

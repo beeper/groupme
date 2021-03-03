@@ -19,7 +19,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"encoding/gob"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -43,7 +42,6 @@ import (
 	"maunium.net/go/mautrix/crypto/attachment"
 
 	"github.com/Rhymen/go-whatsapp"
-	waProto "github.com/Rhymen/go-whatsapp/binary/proto"
 	"github.com/karmanyaahm/groupme"
 
 	"maunium.net/go/mautrix"
@@ -131,7 +129,7 @@ func (bridge *Bridge) NewManualPortal(key database.PortalKey) *Portal {
 		bridge: bridge,
 		log:    bridge.Log.Sub(fmt.Sprintf("Portal/%s", key)),
 
-		recentlyHandled: [recentlyHandledLength]string{},
+		recentlyHandled: make([]string, recentlyHandledLength),
 
 		messages: make(chan PortalMessage, bridge.Config.Bridge.PortalMessageBuffer),
 	}
@@ -146,7 +144,7 @@ func (bridge *Bridge) NewPortal(dbPortal *database.Portal) *Portal {
 		bridge: bridge,
 		log:    bridge.Log.Sub(fmt.Sprintf("Portal/%s", dbPortal.Key)),
 
-		recentlyHandled: [recentlyHandledLength]string{},
+		recentlyHandled: make([]string, recentlyHandledLength),
 
 		messages: make(chan PortalMessage, bridge.Config.Bridge.PortalMessageBuffer),
 	}
@@ -172,7 +170,7 @@ type Portal struct {
 
 	roomCreateLock sync.Mutex
 
-	recentlyHandled      [recentlyHandledLength]string
+	recentlyHandled      []string
 	recentlyHandledLock  sync.Mutex
 	recentlyHandledIndex uint8
 
@@ -266,12 +264,8 @@ func (portal *Portal) handleMessage(msg PortalMessage) {
 }
 
 func (portal *Portal) isRecentlyHandled(id groupme.ID) bool {
-	start := int(portal.recentlyHandledIndex) //int bc -1 loops over to 255 in uint8
 	idStr := id.String()
-	for i := (start - 1) % recentlyHandledLength; i != start; i = (i - 1) % recentlyHandledLength {
-		if i < 0 { //do this to get modulo not remainder
-			i += recentlyHandledLength
-		}
+	for i := recentlyHandledLength - 1; i >= 0; i-- {
 		if portal.recentlyHandled[i] == idStr {
 			return true
 		}
@@ -289,7 +283,6 @@ func (portal *Portal) isDuplicate(id groupme.ID) bool {
 }
 
 func init() {
-	gob.Register(&waProto.Message{})
 }
 
 func (portal *Portal) markHandled(source *User, message *groupme.Message, mxid id.EventID) {
@@ -313,10 +306,10 @@ func (portal *Portal) markHandled(source *User, message *groupme.Message, mxid i
 	msg.Insert()
 
 	portal.recentlyHandledLock.Lock()
-	index := portal.recentlyHandledIndex
-	portal.recentlyHandledIndex = (portal.recentlyHandledIndex + 1) % recentlyHandledLength
+	portal.recentlyHandled[0] = "" //FIFO queue being implemented here //TODO: is this efficent
+	portal.recentlyHandled = portal.recentlyHandled[1:]
+	portal.recentlyHandled = append(portal.recentlyHandled, message.ID.String())
 	portal.recentlyHandledLock.Unlock()
-	portal.recentlyHandled[index] = message.ID.String()
 }
 
 func (portal *Portal) getMessageIntent(user *User, info *groupme.Message) *appservice.IntentAPI {
@@ -393,7 +386,7 @@ func (portal *Portal) SyncParticipants(metadata *groupme.Group) {
 		if user != nil {
 			changed = levels.EnsureUserLevel(user.MXID, expectedLevel) || changed
 		}
-		puppet.Sync(nil, *participant) //why nil whynot
+		go puppet.Sync(nil, *participant) //why nil whynot
 	}
 	if changed {
 		_, err = portal.MainIntent().SetPowerLevels(portal.MXID, levels)
@@ -423,7 +416,7 @@ func (portal *Portal) SyncParticipants(metadata *groupme.Group) {
 	}
 }
 
-func (portal *Portal) UpdateAvatar(user *User, avatar *whatsappExt.ProfilePicInfo, updateInfo bool) bool {
+func (portal *Portal) UpdateAvatar(user *User, avatar string, updateInfo bool) bool {
 	// if avatar == nil {
 	// 	var err error
 	// 	avatar, err = user.Conn.GetProfilePicThumb(portal.Key.JID)
@@ -599,7 +592,7 @@ func (portal *Portal) Sync(user *User, group groupme.Group) {
 	update := false
 	update = portal.UpdateMetadata(user) || update
 	if !portal.IsStatusBroadcastRoom() {
-		update = portal.UpdateAvatar(user, nil, false) || update
+		update = portal.UpdateAvatar(user, "", false) || update
 	}
 	if update {
 		portal.Update()
@@ -984,7 +977,7 @@ func (portal *Portal) CreateMatrixRoom(user *User) error {
 			portal.Name = metadata.Name
 			portal.Topic = metadata.Description
 		}
-		portal.UpdateAvatar(user, nil, false)
+		portal.UpdateAvatar(user, "", false)
 	}
 
 	bridgeInfoStateKey, bridgeInfo := portal.getBridgeInfo()

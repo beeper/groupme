@@ -119,8 +119,8 @@ func (handler *CommandHandler) CommandMux(ce *CommandEvent) {
 		handler.CommandReconnect(ce)
 	case "disconnect":
 		handler.CommandDisconnect(ce)
-	case "ping":
-		handler.CommandPing(ce)
+		//	case "ping":
+		//		handler.CommandPing(ce)
 	case "delete-connection":
 		handler.CommandDeleteConnection(ce)
 	case "delete-session":
@@ -379,7 +379,7 @@ func (handler *CommandHandler) CommandSetPowerLevel(ce *CommandEvent) {
 	}
 }
 
-const cmdLoginHelp = `login - Authenticate this Bridge as WhatsApp Web Client`
+const cmdLoginHelp = `login - Authenticate this Bridge as a GroupMe Client, requires an access token from https://dev.groupme.com/`
 
 // CommandLogin handles login command
 func (handler *CommandHandler) CommandLogin(ce *CommandEvent) {
@@ -492,10 +492,9 @@ func (handler *CommandHandler) CommandDeleteSession(ce *CommandEvent) {
 	// ce.Reply("Session information purged")
 }
 
-const cmdReconnectHelp = `reconnect - Reconnect to WhatsApp`
+const cmdReconnectHelp = `reconnect - Reconnect to GroupMe`
 
 func (handler *CommandHandler) CommandReconnect(ce *CommandEvent) {
-	fmt.Println(ce.User.Conn)
 	if ce.User.Conn == nil {
 		if len(ce.User.Token) == 0 {
 			ce.Reply("No existing connection and no token. Did you mean `login`?")
@@ -506,8 +505,11 @@ func (handler *CommandHandler) CommandReconnect(ce *CommandEvent) {
 		return
 	}
 
-	// wasConnected := true
-	// sess, err := ce.User.Conn.Disconnect()
+	wasConnected := true
+	ce.User.Conn.Stop(context.TODO())
+	ce.User.Conn = nil
+	//TODO: better connection handling
+
 	// if err == whatsapp.ErrNotConnected {
 	// 	wasConnected = false
 	// } else if err != nil {
@@ -553,14 +555,19 @@ func (handler *CommandHandler) CommandReconnect(ce *CommandEvent) {
 	// 	return
 	// }
 	// ce.User.ConnectionErrors = 0
+	connected := ce.User.Connect()
+	if !connected {
+		ce.Reply("Unsuccessful connection")
+		return
+	}
 
-	// var msg string
-	// if wasConnected {
-	// 	msg = "Reconnected successfully."
-	// } else {
-	// 	msg = "Connected successfully."
-	// }
-	// ce.Reply(msg)
+	var msg string
+	if wasConnected {
+		msg = "Reconnected successfully."
+	} else {
+		msg = "Connected successfully."
+	}
+	ce.Reply(msg)
 	// ce.User.PostLogin()
 }
 
@@ -635,35 +642,36 @@ func (handler *CommandHandler) CommandHelp(ce *CommandEvent) {
 	ce.Reply("* " + strings.Join([]string{
 		cmdPrefix + cmdHelpHelp,
 		cmdPrefix + cmdLoginHelp,
-		cmdPrefix + cmdLogoutHelp,
-		cmdPrefix + cmdDeleteSessionHelp,
+		//	cmdPrefix + cmdLogoutHelp,
+		//	cmdPrefix + cmdDeleteSessionHelp,
 		cmdPrefix + cmdReconnectHelp,
-		cmdPrefix + cmdDisconnectHelp,
-		cmdPrefix + cmdDeleteConnectionHelp,
-		cmdPrefix + cmdPingHelp,
-		cmdPrefix + cmdLoginMatrixHelp,
-		cmdPrefix + cmdLogoutMatrixHelp,
-		cmdPrefix + cmdToggleHelp,
+		//	cmdPrefix + cmdDisconnectHelp,
+		//	cmdPrefix + cmdDeleteConnectionHelp,
+		//	cmdPrefix + cmdPingHelp,
+		//	cmdPrefix + cmdLoginMatrixHelp,
+		//	cmdPrefix + cmdLogoutMatrixHelp,
+		//	cmdPrefix + cmdToggleHelp,
 		cmdPrefix + cmdSyncHelp,
 		cmdPrefix + cmdListHelp,
 		cmdPrefix + cmdOpenHelp,
-		cmdPrefix + cmdPMHelp,
-		cmdPrefix + cmdInviteLinkHelp,
-		cmdPrefix + cmdJoinHelp,
-		cmdPrefix + cmdCreateHelp,
-		cmdPrefix + cmdSetPowerLevelHelp,
+		//	cmdPrefix + cmdPMHelp,
+		//	cmdPrefix + cmdInviteLinkHelp,
+		//	cmdPrefix + cmdJoinHelp,
+		//	cmdPrefix + cmdCreateHelp,
+		//	cmdPrefix + cmdSetPowerLevelHelp,
 		cmdPrefix + cmdDeletePortalHelp,
 		cmdPrefix + cmdDeleteAllPortalsHelp,
 	}, "\n* "))
 }
 
-const cmdSyncHelp = `sync [--create-all] - Synchronize contacts from phone and optionally create portals for group chats.`
+const cmdSyncHelp = `sync - Synchronize contacts from phone and optionally create portals for group chats.` //TODO: add [--create-all]
 
 // CommandSync handles sync command
 func (handler *CommandHandler) CommandSync(ce *CommandEvent) {
-	// user := ce.User
-	// create := len(ce.Args) > 0 && ce.Args[0] == "--create-all"
+	user := ce.User
+	//create := len(ce.Args) > 0 && ce.Args[0] == "--create-all"
 
+	go user.HandleChatList()
 	// ce.Reply("Updating contact and chat list...")
 	// handler.log.Debugln("Importing contacts of", user.MXID)
 	// _, err := user.Conn.Contacts()
@@ -685,7 +693,7 @@ func (handler *CommandHandler) CommandSync(ce *CommandEvent) {
 	// ce.Reply("Syncing chats...")
 	// user.syncPortals(nil, create)
 
-	// ce.Reply("Sync complete.")
+	ce.Reply("Syncing...")
 }
 
 const cmdDeletePortalHelp = `delete-portal - Delete the current portal. If the portal is used by other people, this is limited to bridge admins.`
@@ -754,7 +762,9 @@ func (handler *CommandHandler) CommandDeleteAllPortals(ce *CommandEvent) {
 	}()
 }
 
-const cmdListHelp = `list <contacts|groups> [page] [items per page] - Get a list of all contacts and groups.`
+const cmdListHelp = `list groups [page] [items per page] - Get a list of all contacts and groups.`
+
+//<contacts|groups> //TODO
 
 func formatContacts(contacts bool, input map[string]string) (result []string) {
 	for jid, contact := range input {

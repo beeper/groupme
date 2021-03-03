@@ -173,13 +173,12 @@ func (portal *Portal) Delete() {
 }
 
 func (portal *Portal) GetUserIDs() []id.UserID {
-	println("HI AAAAAAAAAAAAAAAAAAAa")
-	rows, err := portal.db.Raw(`SELECT "user".mxid FROM "user", user_portal
-		WHERE "user".jid=user_portal.user_jid
-			AND user_portal.portal_jid=$1
-			AND user_portal.portal_receiver=$2`,
+	//TODO: gorm this
+	rows, err := portal.db.Raw(`SELECT "users".mxid FROM "users", user_portals
+		WHERE "users".jid=user_portals.user_jid
+			AND user_portals.portal_jid = ?
+			AND user_portals.portal_receiver = ?`,
 		portal.Key.JID, portal.Key.Receiver).Rows()
-	print("maybe maybe sql 760476084")
 	if err != nil {
 		portal.log.Debugln("Failed to get portal user ids:", err)
 		return nil
