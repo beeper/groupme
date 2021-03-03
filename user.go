@@ -593,11 +593,13 @@ func (user *User) syncPortals(chatMap map[string]groupme.Group, createAll bool) 
 		}
 		create := (chat.LastMessageTime >= user.LastConnection && user.LastConnection > 0) || i < limit
 		if len(chat.Portal.MXID) > 0 || create || createAll {
-			chat.Portal.Sync(user, chat.Group)
-			err := chat.Portal.BackfillHistory(user, chat.LastMessageTime)
-			if err != nil {
-				chat.Portal.log.Errorln("Error backfilling history:", err)
-			}
+			go func() {
+				chat.Portal.Sync(user, chat.Group)
+				err := chat.Portal.BackfillHistory(user, chat.LastMessageTime)
+				if err != nil {
+					chat.Portal.log.Errorln("Error backfilling history:", err)
+				}
+			}()
 		}
 	}
 	//TODO: handle leave from groupme side
