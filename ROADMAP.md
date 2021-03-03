@@ -17,7 +17,7 @@
     * [ ] Kick
   * [ ] Room metadata changes
     * [ ] Name
-    * [ ] Avatar<sup>[1]</sup>
+    * [ ] Avatar
     * [ ] Topic
   * [ ] Initial room metadata
 * GroupMe → Matrix
