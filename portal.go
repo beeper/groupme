@@ -53,10 +53,10 @@ import (
 	"maunium.net/go/mautrix/id"
 	"maunium.net/go/mautrix/pushrules"
 
-	"maunium.net/go/mautrix-whatsapp/database"
-	"maunium.net/go/mautrix-whatsapp/groupmeExt"
-	"maunium.net/go/mautrix-whatsapp/types"
-	whatsappExt "maunium.net/go/mautrix-whatsapp/whatsapp-ext"
+	"github.com/karmanyaahm/matrix-groupme-go/database"
+	"github.com/karmanyaahm/matrix-groupme-go/groupmeExt"
+	"github.com/karmanyaahm/matrix-groupme-go/types"
+	whatsappExt "github.com/karmanyaahm/matrix-groupme-go/whatsapp-ext"
 )
 
 func (bridge *Bridge) GetPortalByMXID(mxid id.RoomID) *Portal {

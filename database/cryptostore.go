@@ -39,7 +39,7 @@ func NewSQLCryptoStore(db *Database, userID id.UserID, ghostIDFormat string) *SQ
 	raw, _ := db.DB.DB()
 	return &SQLCryptoStore{
 		SQLCryptoStore: crypto.NewSQLCryptoStore(raw, db.dialect, "", "",
-			[]byte("maunium.net/go/mautrix-whatsapp"),
+			[]byte("github.com/karmanyaahm/matrix-groupme-go"),
 			&cryptoLogger{db.log.Sub("CryptoStore")}),
 		UserID:        userID,
 		GhostIDFormat: ghostIDFormat,

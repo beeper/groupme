@@ -30,7 +30,7 @@ import (
 	"maunium.net/go/mautrix/format"
 	"maunium.net/go/mautrix/id"
 
-	"maunium.net/go/mautrix-whatsapp/database"
+	"github.com/karmanyaahm/matrix-groupme-go/database"
 )
 
 type MatrixHandler struct {

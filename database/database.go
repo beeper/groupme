@@ -24,7 +24,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 
 	log "maunium.net/go/maulogger/v2"
-	"maunium.net/go/mautrix-whatsapp/database/upgrades"
+	"github.com/karmanyaahm/matrix-groupme-go/database/upgrades"
 
 	"gorm.io/driver/postgres"
 	"gorm.io/driver/sqlite"

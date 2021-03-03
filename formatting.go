@@ -26,8 +26,8 @@ import (
 	"maunium.net/go/mautrix/format"
 	"maunium.net/go/mautrix/id"
 
-	"maunium.net/go/mautrix-whatsapp/types"
-	whatsappExt "maunium.net/go/mautrix-whatsapp/whatsapp-ext"
+	"github.com/karmanyaahm/matrix-groupme-go/types"
+	whatsappExt "github.com/karmanyaahm/matrix-groupme-go/whatsapp-ext"
 )
 
 var italicRegex = regexp.MustCompile("([\\s>~*]|^)_(.+?)_([^a-zA-Z\\d]|$)")

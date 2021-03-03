@@ -1,4 +1,4 @@
-module maunium.net/go/mautrix-whatsapp
+module github.com/karmanyaahm/matrix-groupme-go
 
 go 1.15
 
@@ -13,7 +13,6 @@ require (
 	github.com/prometheus/client_golang v1.9.0
 	github.com/prometheus/procfs v0.6.0 // indirect
 	github.com/russross/blackfriday/v2 v2.1.0 // indirect
-	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	github.com/tidwall/sjson v1.1.5 // indirect
 	golang.org/x/crypto v0.0.0-20201221181555-eec23a3978ad // indirect
 	golang.org/x/net v0.0.0-20210119194325-5f4716e94777 // indirect
@@ -28,8 +27,6 @@ require (
 	maunium.net/go/maulogger/v2 v2.1.1
 	maunium.net/go/mautrix v0.8.2
 )
-
-replace github.com/Rhymen/go-whatsapp => github.com/tulir/go-whatsapp v0.3.16
 
 replace github.com/karmanyaahm/groupme => ../groupme
 

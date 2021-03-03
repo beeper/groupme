@@ -26,7 +26,7 @@ import (
 	"maunium.net/go/mautrix/event"
 	"maunium.net/go/mautrix/id"
 
-	"maunium.net/go/mautrix-whatsapp/types"
+	"github.com/karmanyaahm/matrix-groupme-go/types"
 )
 
 type BridgeConfig struct {

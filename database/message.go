@@ -19,8 +19,8 @@ package database
 import (
 	log "maunium.net/go/maulogger/v2"
 
-	"maunium.net/go/mautrix-whatsapp/groupmeExt"
-	"maunium.net/go/mautrix-whatsapp/types"
+	"github.com/karmanyaahm/matrix-groupme-go/groupmeExt"
+	"github.com/karmanyaahm/matrix-groupme-go/types"
 	"maunium.net/go/mautrix/id"
 )
 

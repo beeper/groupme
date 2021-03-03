@@ -28,10 +28,10 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/karmanyaahm/matrix-groupme-go/database"
+	"github.com/karmanyaahm/matrix-groupme-go/types"
+	whatsappExt "github.com/karmanyaahm/matrix-groupme-go/whatsapp-ext"
 	"maunium.net/go/maulogger/v2"
-	"maunium.net/go/mautrix-whatsapp/database"
-	"maunium.net/go/mautrix-whatsapp/types"
-	whatsappExt "maunium.net/go/mautrix-whatsapp/whatsapp-ext"
 
 	"maunium.net/go/mautrix"
 	"maunium.net/go/mautrix/appservice"

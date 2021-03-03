@@ -17,7 +17,7 @@
 package whatsappExt
 
 import (
-	"maunium.net/go/mautrix-whatsapp/types"
+	"github.com/karmanyaahm/matrix-groupme-go/types"
 )
 
 type CreateGroupResponse struct {

@@ -35,10 +35,10 @@ import (
 	"maunium.net/go/mautrix/id"
 
 	"github.com/karmanyaahm/groupme"
-	"maunium.net/go/mautrix-whatsapp/database"
-	"maunium.net/go/mautrix-whatsapp/groupmeExt"
-	"maunium.net/go/mautrix-whatsapp/types"
-	whatsappExt "maunium.net/go/mautrix-whatsapp/whatsapp-ext"
+	"github.com/karmanyaahm/matrix-groupme-go/database"
+	"github.com/karmanyaahm/matrix-groupme-go/groupmeExt"
+	"github.com/karmanyaahm/matrix-groupme-go/types"
+	whatsappExt "github.com/karmanyaahm/matrix-groupme-go/whatsapp-ext"
 )
 
 type User struct {

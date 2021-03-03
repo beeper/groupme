@@ -5,7 +5,7 @@ import (
 	"fmt"
 
 	"github.com/karmanyaahm/groupme"
-	"maunium.net/go/mautrix-whatsapp/types"
+	"github.com/karmanyaahm/matrix-groupme-go/types"
 )
 
 type Client struct {
