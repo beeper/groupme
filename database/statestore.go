@@ -198,7 +198,6 @@ func (store *SQLStateStore) SetMembership(roomID id.RoomID, userID id.UserID, me
 		Membership: string(membership),
 	}
 	print("weird thing 2 502650285")
-	print(user.Membership)
 
 	ans := store.db.Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "room_id"}, {Name: "user_id"}},

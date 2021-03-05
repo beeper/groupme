@@ -874,7 +874,7 @@ func (handler *CommandHandler) CommandOpen(ce *CommandEvent) {
 		ce.Reply("Group JID not found in contacts. Try syncing contacts with `sync` first.")
 		return
 	}
-	handler.log.Debugln("Importing", jid, "for", user)
+	handler.log.Debugln("Importing", jid, "for", user.MXID)
 	portal := user.bridge.GetPortalByJID(database.GroupPortalKey(jid))
 	if len(portal.MXID) > 0 {
 		portal.Sync(user, contact)

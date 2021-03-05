@@ -2,7 +2,6 @@ package groupmeExt
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/karmanyaahm/groupme"
 	"github.com/karmanyaahm/matrix-groupme-go/types"
@@ -45,7 +44,7 @@ func (c Client) LoadMessagesBefore(groupID, lastMessageID string, num int) ([]*g
 		BeforeID: groupme.ID(lastMessageID),
 		Limit:    num,
 	})
-	fmt.Println(groupID, lastMessageID, num, i.Count, e)
+	//fmt.Println(groupID, lastMessageID, num, i.Count, e)
 	if e != nil {
 		return nil, e
 	}

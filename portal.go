@@ -587,6 +587,11 @@ func (portal *Portal) Sync(user *User, group groupme.Group) {
 		portal.hasRelaybot = &yes
 	}
 
+	err := user.Conn.SubscribeToGroup(context.TODO(), group.ID, user.Token)
+	if err != nil {
+		portal.log.Errorln("Subscribing failed, live metadata updates won't work", err)
+	}
+
 	if len(portal.MXID) == 0 {
 		if !portal.IsPrivateChat() {
 			portal.Name = group.Name
