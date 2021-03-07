@@ -423,13 +423,13 @@ func (handler *CommandHandler) CommandLogout(ce *CommandEvent) {
 	ce.User.Conn = nil
 	ce.User.removeFromJIDMap()
 	ce.User.Token = ""
-	ce.User.JID = ""
+	//ce.User.JID = ""
 	ce.User.Client = nil
 	ce.User.Update()
 	// // TODO this causes a foreign key violation, which should be fixed
 	// //ce.User.JID = ""
 	// ce.User.SetSession(nil)
-	// ce.Reply("Logged out successfully.")
+	ce.Reply("Logged out successfully.")
 }
 
 const cmdToggleHelp = `toggle <presence|receipts> - Toggle bridging of presence or read receipts`
@@ -649,7 +649,7 @@ func (handler *CommandHandler) CommandHelp(ce *CommandEvent) {
 		//	cmdPrefix + cmdDeleteConnectionHelp,
 		//	cmdPrefix + cmdPingHelp,
 		//	cmdPrefix + cmdLoginMatrixHelp,
-		//	cmdPrefix + cmdLogoutMatrixHelp,
+		cmdPrefix + cmdLogoutMatrixHelp,
 		//	cmdPrefix + cmdToggleHelp,
 		cmdPrefix + cmdSyncHelp,
 		cmdPrefix + cmdListHelp,
