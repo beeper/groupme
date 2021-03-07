@@ -18,8 +18,6 @@ package main
 
 import (
 	"fmt"
-	"io/ioutil"
-	"net/http"
 	"regexp"
 	"strings"
 
@@ -30,6 +28,7 @@ import (
 	"maunium.net/go/mautrix/id"
 
 	"github.com/karmanyaahm/matrix-groupme-go/database"
+	"github.com/karmanyaahm/matrix-groupme-go/groupmeExt"
 	"github.com/karmanyaahm/matrix-groupme-go/types"
 	whatsappExt "github.com/karmanyaahm/matrix-groupme-go/whatsapp-ext"
 )
@@ -199,24 +198,13 @@ func (puppet *Puppet) UpdateAvatar(source *User, avatar string) bool {
 	}
 
 	//TODO check its actually groupme?
-	response, err := http.Get(avatar + ".large")
+	image, mime, err := groupmeExt.DownloadImage(avatar + ".large")
 	if err != nil {
-		puppet.log.Warnln("Failed to download avatar:", err)
-		return false
-	}
-	defer response.Body.Close()
-
-	image, err := ioutil.ReadAll(response.Body)
-	if err != nil {
-		puppet.log.Warnln("Failed to read downloaded avatar:", err)
+		puppet.log.Warnln(err)
 		return false
 	}
 
-	mime := response.Header.Get("Content-Type")
-	if len(mime) == 0 {
-		mime = http.DetectContentType(image)
-	}
-	resp, err := puppet.DefaultIntent().UploadBytes(image, mime)
+	resp, err := puppet.DefaultIntent().UploadBytes(*image, mime)
 	if err != nil {
 		puppet.log.Warnln("Failed to upload avatar:", err)
 		return false

@@ -30,6 +30,7 @@ import (
 	"io/ioutil"
 	"math/rand"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1258,6 +1259,219 @@ func (portal *Portal) sendMessageDirect(intent *appservice.IntentAPI, eventType 
 	}
 }
 
+func (portal *Portal) handleAttachment(intent *appservice.IntentAPI, attachment *groupme.Attachment, ts int64) error {
+	switch attachment.Type {
+	case "image":
+		imgData, mime, err := groupmeExt.DownloadImage(attachment.URL)
+		if err != nil {
+			return fmt.Errorf("failed to load media info: %w", err)
+		}
+
+		var width, height int
+		if strings.HasPrefix(mime, "image/") {
+			cfg, _, _ := image.DecodeConfig(bytes.NewReader(*imgData))
+			width, height = cfg.Width, cfg.Height
+		}
+		data, uploadMimeType, file := portal.encryptFile(*imgData, mime)
+
+		uploaded, err := portal.uploadWithRetry(intent, data, uploadMimeType, MediaUploadRetries)
+		if err != nil {
+			if errors.Is(err, mautrix.MTooLarge) {
+				return errors.New("homeserver rejected too large file")
+			} else if httpErr := err.(mautrix.HTTPError); httpErr.IsStatus(413) {
+				return errors.New("proxy rejected too large file")
+			} else {
+				return fmt.Errorf("failed to upload media: %w", err)
+			}
+		}
+		attachmentUrl, _ := url.Parse(attachment.URL)
+		urlParts := strings.Split(attachmentUrl.Path, ".")
+		var fname1, fname2 string
+		if len(urlParts) == 2 {
+			fname1, fname2 = urlParts[1], urlParts[0]
+		} else if len(urlParts) > 2 {
+			fname1, fname2 = urlParts[2], urlParts[1]
+		} //TODO abstract groupme url parsing in groupmeExt
+		fname := fmt.Sprintf("%s.%s", fname1, fname2)
+
+		content := &event.MessageEventContent{
+			Body: fname,
+			File: file,
+			Info: &event.FileInfo{
+				Size:     len(data),
+				MimeType: mime,
+				Width:    width,
+				Height:   height,
+				//Duration: int(msg.length),
+			},
+		}
+		if content.File != nil {
+			content.File.URL = uploaded.ContentURI.CUString()
+		} else {
+			content.URL = uploaded.ContentURI.CUString()
+		}
+		//TODO thumbnail since groupme supports it anyway
+		content.MsgType = event.MsgImage
+		_, _ = intent.UserTyping(portal.MXID, false, 0)
+
+		eventType := event.EventMessage
+
+		_, err = portal.sendMessage(intent, eventType, content, ts)
+		if err != nil {
+			portal.log.Errorfln("Failed to handle message %s: %v", "TODOID", err)
+			return nil
+		}
+
+	default:
+		portal.log.Warnln("Unable to handle groupme attachment type", attachment.Type)
+		return fmt.Errorf("Unable to handle groupme attachment type %s", attachment.Type)
+	}
+	return nil
+}
+func (portal *Portal) HandleMediaMessage(source *User, msg mediaMessage) {
+	//	intent := portal.startHandling(source, msg.info)
+	//	if intent == nil {
+	//		return
+	//	}
+	//
+	//	data, err := msg.download()
+	//	if err == whatsapp.ErrMediaDownloadFailedWith404 || err == whatsapp.ErrMediaDownloadFailedWith410 {
+	//		portal.log.Warnfln("Failed to download media for %s: %v. Calling LoadMediaInfo and retrying download...", msg.info.Id, err)
+	//		_, err = source.Conn.LoadMediaInfo(msg.info.RemoteJid, msg.info.Id, msg.info.FromMe)
+	//		if err != nil {
+	//			portal.sendMediaBridgeFailure(source, intent, msg.info, fmt.Errorf("failed to load media info: %w", err))
+	//			return
+	//		}
+	//		data, err = msg.download()
+	//	}
+	//	if err == whatsapp.ErrNoURLPresent {
+	//		portal.log.Debugfln("No URL present error for media message %s, ignoring...", msg.info.Id)
+	//		return
+	//	} else if err != nil {
+	//		portal.sendMediaBridgeFailure(source, intent, msg.info, err)
+	//		return
+	//	}
+	//
+	//	var width, height int
+	//	if strings.HasPrefix(msg.mimeType, "image/") {
+	//		cfg, _, _ := image.DecodeConfig(bytes.NewReader(data))
+	//		width, height = cfg.Width, cfg.Height
+	//	}
+	//
+	//	data, uploadMimeType, file := portal.encryptFile(data, msg.mimeType)
+	//
+	//	uploaded, err := portal.uploadWithRetry(intent, data, uploadMimeType, MediaUploadRetries)
+	//	if err != nil {
+	//		if errors.Is(err, mautrix.MTooLarge) {
+	//			portal.sendMediaBridgeFailure(source, intent, msg.info, errors.New("homeserver rejected too large file"))
+	//		} else if httpErr := err.(mautrix.HTTPError); httpErr.IsStatus(413) {
+	//			portal.sendMediaBridgeFailure(source, intent, msg.info, errors.New("proxy rejected too large file"))
+	//		} else {
+	//			portal.sendMediaBridgeFailure(source, intent, msg.info, fmt.Errorf("failed to upload media: %w", err))
+	//		}
+	//		return
+	//	}
+	//
+	//	if msg.fileName == "" {
+	//		mimeClass := strings.Split(msg.mimeType, "/")[0]
+	//		switch mimeClass {
+	//		case "application":
+	//			msg.fileName = "file"
+	//		default:
+	//			msg.fileName = mimeClass
+	//		}
+	//
+	//		exts, _ := mime.ExtensionsByType(msg.mimeType)
+	//		if exts != nil && len(exts) > 0 {
+	//			msg.fileName += exts[0]
+	//		}
+	//	}
+	//
+	//	content := &event.MessageEventContent{
+	//		Body: msg.fileName,
+	//		File: file,
+	//		Info: &event.FileInfo{
+	//			Size:     len(data),
+	//			MimeType: msg.mimeType,
+	//			Width:    width,
+	//			Height:   height,
+	//			Duration: int(msg.length),
+	//		},
+	//	}
+	//	if content.File != nil {
+	//		content.File.URL = uploaded.ContentURI.CUString()
+	//	} else {
+	//		content.URL = uploaded.ContentURI.CUString()
+	//	}
+	//	portal.SetReply(content, msg.context)
+	//
+	//	if msg.thumbnail != nil && portal.bridge.Config.Bridge.WhatsappThumbnail {
+	//		thumbnailMime := http.DetectContentType(msg.thumbnail)
+	//		thumbnailCfg, _, _ := image.DecodeConfig(bytes.NewReader(msg.thumbnail))
+	//		thumbnailSize := len(msg.thumbnail)
+	//		thumbnail, thumbnailUploadMime, thumbnailFile := portal.encryptFile(msg.thumbnail, thumbnailMime)
+	//		uploadedThumbnail, err := intent.UploadBytes(thumbnail, thumbnailUploadMime)
+	//		if err != nil {
+	//			portal.log.Warnfln("Failed to upload thumbnail for %s: %v", msg.info.Id, err)
+	//		} else if uploadedThumbnail != nil {
+	//			if thumbnailFile != nil {
+	//				thumbnailFile.URL = uploadedThumbnail.ContentURI.CUString()
+	//				content.Info.ThumbnailFile = thumbnailFile
+	//			} else {
+	//				content.Info.ThumbnailURL = uploadedThumbnail.ContentURI.CUString()
+	//			}
+	//			content.Info.ThumbnailInfo = &event.FileInfo{
+	//				Size:     thumbnailSize,
+	//				Width:    thumbnailCfg.Width,
+	//				Height:   thumbnailCfg.Height,
+	//				MimeType: thumbnailMime,
+	//			}
+	//		}
+	//	}
+	//
+	//	switch strings.ToLower(strings.Split(msg.mimeType, "/")[0]) {
+	//	case "image":
+	//		if !msg.sendAsSticker {
+	//			content.MsgType = event.MsgImage
+	//		}
+	//	case "video":
+	//		content.MsgType = event.MsgVideo
+	//	case "audio":
+	//		content.MsgType = event.MsgAudio
+	//	default:
+	//		content.MsgType = event.MsgFile
+	//	}
+	//
+	//	_, _ = intent.UserTyping(portal.MXID, false, 0)
+	//	ts := int64(msg.info.Timestamp * 1000)
+	//	eventType := event.EventMessage
+	//	if msg.sendAsSticker {
+	//		eventType = event.EventSticker
+	//	}
+	//	resp, err := portal.sendMessage(intent, eventType, content, ts)
+	//	if err != nil {
+	//		portal.log.Errorfln("Failed to handle message %s: %v", msg.info.Id, err)
+	//		return
+	//	}
+	//
+	//	if len(msg.caption) > 0 {
+	//		captionContent := &event.MessageEventContent{
+	//			Body:    msg.caption,
+	//			MsgType: event.MsgNotice,
+	//		}
+	//
+	//		portal.bridge.Formatter.ParseWhatsApp(captionContent, msg.context.MentionedJID)
+	//
+	//		_, err := portal.sendMessage(intent, event.EventMessage, captionContent, ts)
+	//		if err != nil {
+	//			portal.log.Warnfln("Failed to handle caption of message %s: %v", msg.info.Id, err)
+	//		}
+	//		// TODO store caption mxid?
+	//	}
+	//
+	//	portal.finishHandling(source, msg.info.Source, resp.EventID)
+}
+
 func (portal *Portal) HandleTextMessage(source *User, message *groupme.Message) {
 	intent := portal.startHandling(source, message)
 	if intent == nil {
@@ -1267,6 +1481,12 @@ func (portal *Portal) HandleTextMessage(source *User, message *groupme.Message) 
 	content := &event.MessageEventContent{
 		Body:    message.Text,
 		MsgType: event.MsgText,
+	}
+	for _, a := range message.Attachments {
+		err := portal.handleAttachment(intent, a, message.CreatedAt.ToTime().Unix())
+		if err != nil {
+			portal.sendMediaBridgeFailure(source, intent, *message, err)
+		}
 	}
 
 	//	portal.bridge.Formatter.ParseWhatsApp(content, message.ContextInfo.MentionedJID)
@@ -1384,18 +1604,18 @@ func (portal *Portal) HandleTextMessage(source *User, message *groupme.Message) 
 //	portal.finishHandling(source, message.Info.Source, resp.EventID)
 //}
 
-//func (portal *Portal) sendMediaBridgeFailure(source *User, intent *appservice.IntentAPI, info whatsapp.MessageInfo, bridgeErr error) {
-//	portal.log.Errorfln("Failed to bridge media for %s: %v", info.Id, bridgeErr)
-//	resp, err := portal.sendMessage(intent, event.EventMessage, &event.MessageEventContent{
-//		MsgType: event.MsgNotice,
-//		Body:    "Failed to bridge media",
-//	}, int64(info.Timestamp*1000))
-//	if err != nil {
-//		portal.log.Errorfln("Failed to send media download error message for %s: %v", info.Id, err)
-//	} else {
-//		portal.finishHandling(source, info.Source, resp.EventID)
-//	}
-//}
+func (portal *Portal) sendMediaBridgeFailure(source *User, intent *appservice.IntentAPI, message groupme.Message, bridgeErr error) {
+	portal.log.Errorfln("Failed to bridge media for %s: %v", message.UserID.String(), bridgeErr)
+	resp, err := portal.sendMessage(intent, event.EventMessage, &event.MessageEventContent{
+		MsgType: event.MsgNotice,
+		Body:    "Failed to bridge media",
+	}, int64(message.CreatedAt.ToTime().Unix()*1000))
+	if err != nil {
+		portal.log.Errorfln("Failed to send media download error message for %s: %v", message.UserID.String(), err)
+	} else {
+		portal.finishHandling(source, &message, resp.EventID)
+	}
+}
 
 func (portal *Portal) encryptFile(data []byte, mimeType string) ([]byte, string, *event.EncryptedFileInfo) {
 	if !portal.Encrypted {
@@ -1502,150 +1722,6 @@ func (portal *Portal) uploadWithRetry(intent *appservice.IntentAPI, data []byte,
 			return uploaded, err
 		}
 	}
-}
-
-func (portal *Portal) HandleMediaMessage(source *User, msg mediaMessage) {
-	// intent := portal.startHandling(source, msg.info)
-	// if intent == nil {
-	// 	return
-	// }
-
-	// data, err := msg.download()
-	// if err == whatsapp.ErrMediaDownloadFailedWith404 || err == whatsapp.ErrMediaDownloadFailedWith410 {
-	// 	portal.log.Warnfln("Failed to download media for %s: %v. Calling LoadMediaInfo and retrying download...", msg.info.Id, err)
-	// 	_, err = source.Conn.LoadMediaInfo(msg.info.RemoteJid, msg.info.Id, msg.info.FromMe)
-	// 	if err != nil {
-	// 		portal.sendMediaBridgeFailure(source, intent, msg.info, fmt.Errorf("failed to load media info: %w", err))
-	// 		return
-	// 	}
-	// 	data, err = msg.download()
-	// }
-	// if err == whatsapp.ErrNoURLPresent {
-	// 	portal.log.Debugfln("No URL present error for media message %s, ignoring...", msg.info.Id)
-	// 	return
-	// } else if err != nil {
-	// 	portal.sendMediaBridgeFailure(source, intent, msg.info, err)
-	// 	return
-	// }
-
-	// var width, height int
-	// if strings.HasPrefix(msg.mimeType, "image/") {
-	// 	cfg, _, _ := image.DecodeConfig(bytes.NewReader(data))
-	// 	width, height = cfg.Width, cfg.Height
-	// }
-
-	// data, uploadMimeType, file := portal.encryptFile(data, msg.mimeType)
-
-	// uploaded, err := portal.uploadWithRetry(intent, data, uploadMimeType, MediaUploadRetries)
-	// if err != nil {
-	// 	if errors.Is(err, mautrix.MTooLarge) {
-	// 		portal.sendMediaBridgeFailure(source, intent, msg.info, errors.New("homeserver rejected too large file"))
-	// 	} else if httpErr := err.(mautrix.HTTPError); httpErr.IsStatus(413) {
-	// 		portal.sendMediaBridgeFailure(source, intent, msg.info, errors.New("proxy rejected too large file"))
-	// 	} else {
-	// 		portal.sendMediaBridgeFailure(source, intent, msg.info, fmt.Errorf("failed to upload media: %w", err))
-	// 	}
-	// 	return
-	// }
-
-	// if msg.fileName == "" {
-	// 	mimeClass := strings.Split(msg.mimeType, "/")[0]
-	// 	switch mimeClass {
-	// 	case "application":
-	// 		msg.fileName = "file"
-	// 	default:
-	// 		msg.fileName = mimeClass
-	// 	}
-
-	// 	exts, _ := mime.ExtensionsByType(msg.mimeType)
-	// 	if exts != nil && len(exts) > 0 {
-	// 		msg.fileName += exts[0]
-	// 	}
-	// }
-
-	// content := &event.MessageEventContent{
-	// 	Body: msg.fileName,
-	// 	File: file,
-	// 	Info: &event.FileInfo{
-	// 		Size:     len(data),
-	// 		MimeType: msg.mimeType,
-	// 		Width:    width,
-	// 		Height:   height,
-	// 		Duration: int(msg.length),
-	// 	},
-	// }
-	// if content.File != nil {
-	// 	content.File.URL = uploaded.ContentURI.CUString()
-	// } else {
-	// 	content.URL = uploaded.ContentURI.CUString()
-	// }
-	// portal.SetReply(content, msg.context)
-
-	// if msg.thumbnail != nil && portal.bridge.Config.Bridge.WhatsappThumbnail {
-	// 	thumbnailMime := http.DetectContentType(msg.thumbnail)
-	// 	thumbnailCfg, _, _ := image.DecodeConfig(bytes.NewReader(msg.thumbnail))
-	// 	thumbnailSize := len(msg.thumbnail)
-	// 	thumbnail, thumbnailUploadMime, thumbnailFile := portal.encryptFile(msg.thumbnail, thumbnailMime)
-	// 	uploadedThumbnail, err := intent.UploadBytes(thumbnail, thumbnailUploadMime)
-	// 	if err != nil {
-	// 		portal.log.Warnfln("Failed to upload thumbnail for %s: %v", msg.info.Id, err)
-	// 	} else if uploadedThumbnail != nil {
-	// 		if thumbnailFile != nil {
-	// 			thumbnailFile.URL = uploadedThumbnail.ContentURI.CUString()
-	// 			content.Info.ThumbnailFile = thumbnailFile
-	// 		} else {
-	// 			content.Info.ThumbnailURL = uploadedThumbnail.ContentURI.CUString()
-	// 		}
-	// 		content.Info.ThumbnailInfo = &event.FileInfo{
-	// 			Size:     thumbnailSize,
-	// 			Width:    thumbnailCfg.Width,
-	// 			Height:   thumbnailCfg.Height,
-	// 			MimeType: thumbnailMime,
-	// 		}
-	// 	}
-	// }
-
-	// switch strings.ToLower(strings.Split(msg.mimeType, "/")[0]) {
-	// case "image":
-	// 	if !msg.sendAsSticker {
-	// 		content.MsgType = event.MsgImage
-	// 	}
-	// case "video":
-	// 	content.MsgType = event.MsgVideo
-	// case "audio":
-	// 	content.MsgType = event.MsgAudio
-	// default:
-	// 	content.MsgType = event.MsgFile
-	// }
-
-	// _, _ = intent.UserTyping(portal.MXID, false, 0)
-	// ts := int64(msg.info.Timestamp * 1000)
-	// eventType := event.EventMessage
-	// if msg.sendAsSticker {
-	// 	eventType = event.EventSticker
-	// }
-	// resp, err := portal.sendMessage(intent, eventType, content, ts)
-	// if err != nil {
-	// 	portal.log.Errorfln("Failed to handle message %s: %v", msg.info.Id, err)
-	// 	return
-	// }
-
-	// if len(msg.caption) > 0 {
-	// 	captionContent := &event.MessageEventContent{
-	// 		Body:    msg.caption,
-	// 		MsgType: event.MsgNotice,
-	// 	}
-
-	// 	portal.bridge.Formatter.ParseWhatsApp(captionContent, msg.context.MentionedJID)
-
-	// 	_, err := portal.sendMessage(intent, event.EventMessage, captionContent, ts)
-	// 	if err != nil {
-	// 		portal.log.Warnfln("Failed to handle caption of message %s: %v", msg.info.Id, err)
-	// 	}
-	// 	// TODO store caption mxid?
-	// }
-
-	// portal.finishHandling(source, msg.info.Source, resp.EventID)
 }
 
 func makeMessageID() *string {
