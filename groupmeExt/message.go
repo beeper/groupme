@@ -1,6 +1,7 @@
 package groupmeExt
 
 import (
+	"bytes"
 	"database/sql/driver"
 	"encoding/json"
 	"errors"
@@ -9,6 +10,7 @@ import (
 	"net/http"
 
 	"github.com/karmanyaahm/groupme"
+	"github.com/karmanyaahm/matrix-groupme-go/types"
 )
 
 type Message struct{ groupme.Message }
@@ -55,4 +57,44 @@ func DownloadImage(URL string) (bytes *[]byte, mime string, err error) {
 		mime = http.DetectContentType(image)
 	}
 	return
+}
+
+func DownloadFile(RoomJID types.GroupMeID, FileID string, token string) (contents []byte, fname, mime string) {
+	client := &http.Client{}
+	b, _ := json.Marshal(struct {
+		FileIDS []string `json:"file_ids"`
+	}{
+		FileIDS: []string{FileID},
+	})
+
+	req, _ := http.NewRequest("POST", fmt.Sprintf("https://file.groupme.com/v1/%s/fileData", RoomJID), bytes.NewReader(b))
+	req.Header.Add("X-Access-Token", token)
+	req.Header.Add("Content-Type", "application/json")
+	resp, _ := client.Do(req)
+
+	defer resp.Body.Close()
+	data := []ImgData{}
+	json.NewDecoder(resp.Body).Decode(&data)
+	fmt.Println(data, RoomJID, FileID, token)
+	if len(data) < 1 {
+		return
+	}
+
+	req, _ = http.NewRequest("POST", fmt.Sprintf("https://file.groupme.com/v1/%s/files/%s", RoomJID, FileID), nil)
+	req.URL.Query().Add("token", token)
+	req.Header.Add("X-Access-Token", token)
+	resp, _ = client.Do(req)
+	defer resp.Body.Close()
+
+	bytes, _ := ioutil.ReadAll(resp.Body)
+	return bytes, data[0].FileData.FileName, data[0].FileData.Mime
+
+}
+
+type ImgData struct {
+	FileData struct {
+		FileName string `json:"file_name"`
+		FileSize int    `json:"file_size"`
+		Mime     string `json:"mime_type"`
+	} `json:"file_data"`
 }

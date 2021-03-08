@@ -4,6 +4,7 @@ go 1.15
 
 require (
 	github.com/Rhymen/go-whatsapp v0.1.1
+	github.com/gabriel-vasile/mimetype v1.1.2
 	github.com/gorilla/websocket v1.4.2
 	github.com/jackc/pgproto3/v2 v2.0.7 // indirect
 	github.com/karmanyaahm/groupme v0.2.0
