@@ -362,7 +362,7 @@ func (user *User) Login(ce *CommandEvent) {
 	// //      Also between the two logout methods (commands.go and provisioning.go)
 	// user.ConnectionErrors = 0
 	// user.JID = strings.Replace(user.Conn.Info.Wid, whatsappExt.OldUserSuffix, whatsappExt.NewUserSuffix, 1)
-	if len(ce.Args) == 0 {
+	if len(ce.Args) < 1 {
 		ce.Reply(`Get your access token from https://dev.groupme.com/ which should be the first argument to login`)
 		return
 	}
@@ -372,6 +372,7 @@ func (user *User) Login(ce *CommandEvent) {
 	//user.SetSession(&session)
 	ce.Reply("Successfully logged in, synchronizing chats...")
 	user.PostLogin()
+	user.Connect()
 }
 
 type Chat struct {
@@ -483,8 +484,8 @@ func (user *User) intPostLogin() {
 			log.Fatal(err) //TODO
 		}
 		user.JID = myuser.ID.String()
-		user.Update()
 	}
+	user.Update()
 
 	user.createCommunity()
 	user.tryAutomaticDoublePuppeting()
