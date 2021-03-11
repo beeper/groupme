@@ -26,8 +26,8 @@
     * [ ] Formatted messages
     * [ ] Media/files
       * [x] Images
-      * [ ] Videos
-      * [x] Other Files
+      * [x] Videos
+      * [x] Random Files
     * [ ] Location messages
     * [ ] Contact messages
     * [ ] Replies

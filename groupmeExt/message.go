@@ -91,6 +91,28 @@ func DownloadFile(RoomJID types.GroupMeID, FileID string, token string) (content
 
 }
 
+func DownloadVideo(previewURL, videoURL, token string) (vidContents []byte, mime string) {
+	//preview TODO
+	client := &http.Client{}
+
+	req, _ := http.NewRequest("GET", videoURL, nil)
+	req.AddCookie(&http.Cookie{Name: "token", Value: token})
+	resp, err := client.Do(req)
+	if err != nil {
+		fmt.Println(err)
+		return nil, ""
+	}
+	defer resp.Body.Close()
+
+	bytes, _ := ioutil.ReadAll(resp.Body)
+	mime = resp.Header.Get("Content-Type")
+	if len(mime) == 0 {
+		mime = http.DetectContentType(bytes)
+	}
+	return bytes, mime
+
+}
+
 type ImgData struct {
 	FileData struct {
 		FileName string `json:"file_name"`

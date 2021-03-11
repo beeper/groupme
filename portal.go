@@ -1260,7 +1260,7 @@ func (portal *Portal) sendMessageDirect(intent *appservice.IntentAPI, eventType 
 	}
 }
 
-func (portal *Portal) handleAttachment(intent *appservice.IntentAPI, attachment *groupme.Attachment, ts int64, source *User) (err error, sendText bool) {
+func (portal *Portal) handleAttachment(intent *appservice.IntentAPI, attachment *groupme.Attachment, source *User, message *groupme.Message) (err error, sendText bool) {
 	sendText = true
 	switch attachment.Type {
 	case "image":
@@ -1319,11 +1319,60 @@ func (portal *Portal) handleAttachment(intent *appservice.IntentAPI, attachment 
 
 		eventType := event.EventMessage
 
-		_, err = portal.sendMessage(intent, eventType, content, ts)
+		_, err = portal.sendMessage(intent, eventType, content, message.CreatedAt.ToTime().Unix())
 		if err != nil {
 			portal.log.Errorfln("Failed to handle message %s: %v", "TODOID", err)
 			return nil, true
 		}
+	case "video":
+		vidContents, mime := groupmeExt.DownloadVideo(attachment.VideoPreviewURL, attachment.URL, source.Token)
+		if mime == "" {
+			mime = mimetype.Detect(vidContents).String()
+		}
+
+		data, uploadMimeType, file := portal.encryptFile(vidContents, mime)
+		uploaded, err := portal.uploadWithRetry(intent, data, uploadMimeType, MediaUploadRetries)
+		if err != nil {
+			if errors.Is(err, mautrix.MTooLarge) {
+				err = errors.New("homeserver rejected too large file")
+			} else if httpErr := err.(mautrix.HTTPError); httpErr.IsStatus(413) {
+				err = errors.New("proxy rejected too large file")
+			} else {
+				err = fmt.Errorf("failed to upload media: %w", err)
+			}
+			return err, true
+		}
+
+		text := strings.Split(attachment.URL, "/")
+		content := &event.MessageEventContent{
+			Body: text[len(text)-1],
+			File: file,
+			Info: &event.FileInfo{
+				Size:     len(data),
+				MimeType: mime,
+				//Width:    width,
+				//Height:   height,
+				//Duration: int(msg.length),
+			},
+		}
+		if content.File != nil {
+			content.File.URL = uploaded.ContentURI.CUString()
+		} else {
+			content.URL = uploaded.ContentURI.CUString()
+		}
+		content.MsgType = event.MsgVideo
+		_, _ = intent.UserTyping(portal.MXID, false, 0)
+
+		eventType := event.EventMessage
+
+		_, err = portal.sendMessage(intent, eventType, content, message.CreatedAt.ToTime().Unix())
+		if err != nil {
+			portal.log.Errorfln("Failed to handle message %s: %v", "TODOID", err)
+			return nil, true
+		}
+
+		message.Text = strings.Replace(message.Text, attachment.URL, "", 1)
+		return nil, true
 	case "file":
 		fileData, fname, fmime := groupmeExt.DownloadFile(portal.Key.JID, attachment.FileID, source.Token)
 		if fmime == "" {
@@ -1371,7 +1420,7 @@ func (portal *Portal) handleAttachment(intent *appservice.IntentAPI, attachment 
 
 		eventType := event.EventMessage
 
-		_, err = portal.sendMessage(intent, eventType, content, ts)
+		_, err = portal.sendMessage(intent, eventType, content, message.CreatedAt.ToTime().Unix())
 		if err != nil {
 			portal.log.Errorfln("Failed to handle message %s: %v", "TODOID", err)
 			return nil, true
@@ -1533,13 +1582,9 @@ func (portal *Portal) HandleTextMessage(source *User, message *groupme.Message) 
 		return
 	}
 
-	content := &event.MessageEventContent{
-		Body:    message.Text,
-		MsgType: event.MsgText,
-	}
 	sendText := true
 	for _, a := range message.Attachments {
-		err, text := portal.handleAttachment(intent, a, message.CreatedAt.ToTime().Unix(), source)
+		err, text := portal.handleAttachment(intent, a, source, message)
 		if err != nil {
 			portal.sendMediaBridgeFailure(source, intent, *message, err)
 		}
@@ -1549,6 +1594,10 @@ func (portal *Portal) HandleTextMessage(source *User, message *groupme.Message) 
 	//	portal.bridge.Formatter.ParseWhatsApp(content, message.ContextInfo.MentionedJID)
 	//	portal.SetReply(content, message.ContextInfo)
 	//TODO: mentions
+	content := &event.MessageEventContent{
+		Body:    message.Text,
+		MsgType: event.MsgText,
+	}
 
 	_, _ = intent.UserTyping(portal.MXID, false, 0)
 	if sendText {
