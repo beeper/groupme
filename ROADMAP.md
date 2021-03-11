@@ -27,7 +27,7 @@
     * [ ] Media/files
       * [x] Images
       * [ ] Videos
-      * [ ] Other Files
+      * [x] Other Files
     * [ ] Location messages
     * [ ] Contact messages
     * [ ] Replies
