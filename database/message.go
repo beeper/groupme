@@ -78,7 +78,7 @@ type Message struct {
 
 	Chat      PortalKey           `gorm:"primaryKey;embedded;embeddedPrefix:chat_"`
 	JID       types.GroupMeID     `gorm:"primaryKey"`
-	MXID      id.EventID          `gorm:"unique;notNull"`
+	MXID      id.EventID          `gorm:"primaryKey;unique;notNull"`
 	Sender    types.GroupMeID     `gorm:"notNull"`
 	Timestamp uint64              `gorm:"notNull;default:0"`
 	Content   *groupmeExt.Message `gorm:"type:TEXT;notNull"`

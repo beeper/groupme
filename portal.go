@@ -28,12 +28,14 @@ import (
 	"image/jpeg"
 	"image/png"
 	"io/ioutil"
+	"math"
 	"math/rand"
 	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -1260,13 +1262,13 @@ func (portal *Portal) sendMessageDirect(intent *appservice.IntentAPI, eventType 
 	}
 }
 
-func (portal *Portal) handleAttachment(intent *appservice.IntentAPI, attachment *groupme.Attachment, source *User, message *groupme.Message) (err error, sendText bool) {
+func (portal *Portal) handleAttachment(intent *appservice.IntentAPI, attachment *groupme.Attachment, source *User, message *groupme.Message) (msg *event.MessageEventContent, sendText bool, err error) {
 	sendText = true
 	switch attachment.Type {
 	case "image":
 		imgData, mime, err := groupmeExt.DownloadImage(attachment.URL)
 		if err != nil {
-			return fmt.Errorf("failed to load media info: %w", err), true
+			return nil, true, fmt.Errorf("failed to load media info: %w", err)
 		}
 
 		var width, height int
@@ -1285,7 +1287,7 @@ func (portal *Portal) handleAttachment(intent *appservice.IntentAPI, attachment 
 			} else {
 				err = fmt.Errorf("failed to upload media: %w", err)
 			}
-			return err, true
+			return nil, true, err
 		}
 		attachmentUrl, _ := url.Parse(attachment.URL)
 		urlParts := strings.Split(attachmentUrl.Path, ".")
@@ -1315,15 +1317,8 @@ func (portal *Portal) handleAttachment(intent *appservice.IntentAPI, attachment 
 		}
 		//TODO thumbnail since groupme supports it anyway
 		content.MsgType = event.MsgImage
-		_, _ = intent.UserTyping(portal.MXID, false, 0)
 
-		eventType := event.EventMessage
-
-		_, err = portal.sendMessage(intent, eventType, content, message.CreatedAt.ToTime().Unix())
-		if err != nil {
-			portal.log.Errorfln("Failed to handle message %s: %v", "TODOID", err)
-			return nil, true
-		}
+		return content, true, nil
 	case "video":
 		vidContents, mime := groupmeExt.DownloadVideo(attachment.VideoPreviewURL, attachment.URL, source.Token)
 		if mime == "" {
@@ -1340,7 +1335,7 @@ func (portal *Portal) handleAttachment(intent *appservice.IntentAPI, attachment 
 			} else {
 				err = fmt.Errorf("failed to upload media: %w", err)
 			}
-			return err, true
+			return nil, true, err
 		}
 
 		text := strings.Split(attachment.URL, "/")
@@ -1361,18 +1356,9 @@ func (portal *Portal) handleAttachment(intent *appservice.IntentAPI, attachment 
 			content.URL = uploaded.ContentURI.CUString()
 		}
 		content.MsgType = event.MsgVideo
-		_, _ = intent.UserTyping(portal.MXID, false, 0)
-
-		eventType := event.EventMessage
-
-		_, err = portal.sendMessage(intent, eventType, content, message.CreatedAt.ToTime().Unix())
-		if err != nil {
-			portal.log.Errorfln("Failed to handle message %s: %v", "TODOID", err)
-			return nil, true
-		}
 
 		message.Text = strings.Replace(message.Text, attachment.URL, "", 1)
-		return nil, true
+		return content, true, nil
 	case "file":
 		fileData, fname, fmime := groupmeExt.DownloadFile(portal.Key.JID, attachment.FileID, source.Token)
 		if fmime == "" {
@@ -1389,7 +1375,7 @@ func (portal *Portal) handleAttachment(intent *appservice.IntentAPI, attachment 
 			} else {
 				err = fmt.Errorf("failed to upload media: %w", err)
 			}
-			return err, true
+			return nil, true, err
 		}
 
 		content := &event.MessageEventContent{
@@ -1416,21 +1402,34 @@ func (portal *Portal) handleAttachment(intent *appservice.IntentAPI, attachment 
 		} else {
 			content.MsgType = event.MsgFile
 		}
-		_, _ = intent.UserTyping(portal.MXID, false, 0)
 
-		eventType := event.EventMessage
-
-		_, err = portal.sendMessage(intent, eventType, content, message.CreatedAt.ToTime().Unix())
-		if err != nil {
-			portal.log.Errorfln("Failed to handle message %s: %v", "TODOID", err)
-			return nil, true
+		return content, false, nil
+	case "location":
+		name := attachment.Name
+		lat, _ := strconv.ParseFloat(attachment.Latitude, 64)
+		lng, _ := strconv.ParseFloat(attachment.Longitude, 64)
+		latChar := 'N'
+		if lat < 0 {
+			latChar = 'S'
 		}
-		return nil, false
+		longChar := 'E'
+		if lng < 0 {
+			longChar = 'W'
+		}
+		formattedLoc := fmt.Sprintf("%.4f° %c %.4f° %c", math.Abs(lat), latChar, math.Abs(lng), longChar)
+
+		content := &event.MessageEventContent{
+			MsgType: event.MsgLocation,
+			Body:    fmt.Sprintf("Location: %s\n%s", name, formattedLoc), //TODO link and stuff
+			GeoURI:  fmt.Sprintf("geo:%.5f,%.5f", lat, lng),
+		}
+
+		return content, false, nil
 	default:
 		portal.log.Warnln("Unable to handle groupme attachment type", attachment.Type)
-		return fmt.Errorf("Unable to handle groupme attachment type %s", attachment.Type), true
+		return nil, true, fmt.Errorf("Unable to handle groupme attachment type %s", attachment.Type)
 	}
-	return nil, true
+	return nil, true, errors.New("Unknown type")
 }
 func (portal *Portal) HandleMediaMessage(source *User, msg mediaMessage) {
 	//	intent := portal.startHandling(source, msg.info)
@@ -1583,11 +1582,26 @@ func (portal *Portal) HandleTextMessage(source *User, message *groupme.Message) 
 	}
 
 	sendText := true
+	var sentID id.EventID
 	for _, a := range message.Attachments {
-		err, text := portal.handleAttachment(intent, a, source, message)
+		msg, text, err := portal.handleAttachment(intent, a, source, message)
+
 		if err != nil {
+			portal.log.Errorfln("Failed to handle message %s: %v", "TODOID", err)
 			portal.sendMediaBridgeFailure(source, intent, *message, err)
+			continue
 		}
+		if msg == nil {
+			continue
+		}
+		resp, err := portal.sendMessage(intent, event.EventMessage, msg, message.CreatedAt.ToTime().Unix())
+		if err != nil {
+			portal.log.Errorfln("Failed to handle message %s: %v", "TODOID", err)
+			portal.sendMediaBridgeFailure(source, intent, *message, err)
+			continue
+		}
+		sentID = resp.EventID
+
 		sendText = sendText && text
 	}
 
@@ -1606,69 +1620,70 @@ func (portal *Portal) HandleTextMessage(source *User, message *groupme.Message) 
 			portal.log.Errorfln("Failed to handle message %s: %v", message.ID, err)
 			return
 		}
+		sentID = resp.EventID
 
-		portal.finishHandling(source, message, resp.EventID)
 	}
+	portal.finishHandling(source, message, sentID)
 }
 
-//func (portal *Portal) HandleLocationMessage(source *User, message whatsapp.LocationMessage) {
-//	intent := portal.startHandling(source, message.Info)
-//	if intent == nil {
-//		return
-//	}
-//
-//	url := message.Url
-//	if len(url) == 0 {
-//		url = fmt.Sprintf("https://maps.google.com/?q=%.5f,%.5f", message.DegreesLatitude, message.DegreesLongitude)
-//	}
-//	name := message.Name
-//	if len(name) == 0 {
-//		latChar := 'N'
-//		if message.DegreesLatitude < 0 {
-//			latChar = 'S'
-//		}
-//		longChar := 'E'
-//		if message.DegreesLongitude < 0 {
-//			longChar = 'W'
-//		}
-//		name = fmt.Sprintf("%.4f° %c %.4f° %c", math.Abs(message.DegreesLatitude), latChar, math.Abs(message.DegreesLongitude), longChar)
-//	}
-//
-//	content := &event.MessageEventContent{
-//		MsgType:       event.MsgLocation,
-//		Body:          fmt.Sprintf("Location: %s\n%s\n%s", name, message.Address, url),
-//		Format:        event.FormatHTML,
-//		FormattedBody: fmt.Sprintf("Location: <a href='%s'>%s</a><br>%s", url, name, message.Address),
-//		GeoURI:        fmt.Sprintf("geo:%.5f,%.5f", message.DegreesLatitude, message.DegreesLongitude),
-//	}
-//
-//	if len(message.JpegThumbnail) > 0 {
-//		thumbnailMime := http.DetectContentType(message.JpegThumbnail)
-//		uploadedThumbnail, _ := intent.UploadBytes(message.JpegThumbnail, thumbnailMime)
-//		if uploadedThumbnail != nil {
-//			cfg, _, _ := image.DecodeConfig(bytes.NewReader(message.JpegThumbnail))
-//			content.Info = &event.FileInfo{
-//				ThumbnailInfo: &event.FileInfo{
-//					Size:     len(message.JpegThumbnail),
-//					Width:    cfg.Width,
-//					Height:   cfg.Height,
-//					MimeType: thumbnailMime,
-//				},
-//				ThumbnailURL: uploadedThumbnail.ContentURI.CUString(),
-//			}
-//		}
-//	}
-//
-//	portal.SetReply(content, message.ContextInfo)
-//
-//	_, _ = intent.UserTyping(portal.MXID, false, 0)
-//	resp, err := portal.sendMessage(intent, event.EventMessage, content, int64(message.Info.Timestamp*1000))
-//	if err != nil {
-//		portal.log.Errorfln("Failed to handle message %s: %v", message.Info.Id, err)
-//		return
-//	}
-//	portal.finishHandling(source, message.Info.Source, resp.EventID)
-//}
+func (portal *Portal) HandleLocationMessage(source *User, message whatsapp.LocationMessage) {
+	//	intent := portal.startHandling(source, message.Info)
+	//	if intent == nil {
+	//		return
+	//	}
+	//
+	//	url := message.Url
+	//	if len(url) == 0 {
+	//		url = fmt.Sprintf("https://maps.google.com/?q=%.5f,%.5f", message.DegreesLatitude, message.DegreesLongitude)
+	//	}
+	//	name := message.Name
+	//	if len(name) == 0 {
+	//		latChar := 'N'
+	//		if message.DegreesLatitude < 0 {
+	//			latChar = 'S'
+	//		}
+	//		longChar := 'E'
+	//		if message.DegreesLongitude < 0 {
+	//			longChar = 'W'
+	//		}
+	//		name = fmt.Sprintf("%.4f° %c %.4f° %c", math.Abs(message.DegreesLatitude), latChar, math.Abs(message.DegreesLongitude), longChar)
+	//	}
+	//
+	//	content := &event.MessageEventContent{
+	//		MsgType:       event.MsgLocation,
+	//		Body:          fmt.Sprintf("Location: %s\n%s\n%s", name, message.Address, url),
+	//		Format:        event.FormatHTML,
+	//		FormattedBody: fmt.Sprintf("Location: <a href='%s'>%s</a><br>%s", url, name, message.Address),
+	//		GeoURI:        fmt.Sprintf("geo:%.5f,%.5f", message.DegreesLatitude, message.DegreesLongitude),
+	//	}
+	//
+	//	if len(message.JpegThumbnail) > 0 {
+	//		thumbnailMime := http.DetectContentType(message.JpegThumbnail)
+	//		uploadedThumbnail, _ := intent.UploadBytes(message.JpegThumbnail, thumbnailMime)
+	//		if uploadedThumbnail != nil {
+	//			cfg, _, _ := image.DecodeConfig(bytes.NewReader(message.JpegThumbnail))
+	//			content.Info = &event.FileInfo{
+	//				ThumbnailInfo: &event.FileInfo{
+	//					Size:     len(message.JpegThumbnail),
+	//					Width:    cfg.Width,
+	//					Height:   cfg.Height,
+	//					MimeType: thumbnailMime,
+	//				},
+	//				ThumbnailURL: uploadedThumbnail.ContentURI.CUString(),
+	//			}
+	//		}
+	//	}
+	//
+	//	portal.SetReply(content, message.ContextInfo)
+	//
+	//	_, _ = intent.UserTyping(portal.MXID, false, 0)
+	//	resp, err := portal.sendMessage(intent, event.EventMessage, content, int64(message.Info.Timestamp*1000))
+	//	if err != nil {
+	//		portal.log.Errorfln("Failed to handle message %s: %v", message.Info.Id, err)
+	//		return
+	//	}
+	//	portal.finishHandling(source, message.Info.Source, resp.EventID)
+}
 
 //func (portal *Portal) HandleContactMessage(source *User, message whatsapp.ContactMessage) {
 //	intent := portal.startHandling(source, message.Info)

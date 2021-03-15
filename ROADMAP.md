@@ -2,7 +2,7 @@
 * Matrix → GroupMe
   * [ ] Message content
     * [x] Plain text
-    * [ ] Formatted messages
+    * [ ] Formatted messages<sup>3</sup>
     * [ ] Media/files
     * [ ] Replies
   * [ ] Message redactions
@@ -23,13 +23,12 @@
 * GroupMe → Matrix
   * [ ] Message content
     * [x] Plain text
-    * [ ] Formatted messages
-    * [ ] Media/files
+    * [x] Media/files
       * [x] Images
       * [x] Videos
       * [x] Random Files
-    * [ ] Location messages
-    * [ ] Contact messages
+    * [x] Location messages<sup>1</sup>
+    * [ ] Polls<sup>3</sup>
     * [ ] Replies
   * [ ] Chat types
     * [ ] Private chat
@@ -38,6 +37,10 @@
   * [ ] Presence
   * [ ] Typing notifications
   * [ ] Read receipts
+  * [ ] Calendar things
+    * [ ] Events created
+    * [ ] Events modified
+    * [ ] Going/Not
   * [ ] Admin/superadmin status
   * [ ] Membership actions
     * [ ] Invite
@@ -64,6 +67,6 @@
   * [ ] Option to use own Matrix account for messages sent from WhatsApp mobile/other web clients
   * [ ] Shared group chat portals
 
-<sup>[1]</sup> May involve reverse-engineering the WhatsApp Web API and/or editing go-whatsapp  
+<sup>[1]</sup> Basic feature works. Improvements are TODO. 
 <sup>[2]</sup> May already work  
 <sup>[3]</sup> May not be possible  
