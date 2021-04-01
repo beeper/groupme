@@ -76,8 +76,8 @@ type Message struct {
 	db  *Database
 	log log.Logger
 
-	Chat      PortalKey           `gorm:"primaryKey;embedded;embeddedPrefix:chat_"`
-	JID       types.GroupMeID     `gorm:"primaryKey"`
+	Chat      PortalKey           `gorm:"embedded;embeddedPrefix:chat_"`
+	JID       types.GroupMeID     `gorm:"primaryKey;unique;notNull"`
 	MXID      id.EventID          `gorm:"primaryKey;unique;notNull"`
 	Sender    types.GroupMeID     `gorm:"notNull"`
 	Timestamp uint64              `gorm:"notNull;default:0"`

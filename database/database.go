@@ -24,7 +24,6 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 
 	log "maunium.net/go/maulogger/v2"
-	"github.com/karmanyaahm/matrix-groupme-go/database/upgrades"
 
 	"gorm.io/driver/postgres"
 	"gorm.io/driver/sqlite"
@@ -37,10 +36,11 @@ type Database struct {
 	log     log.Logger
 	dialect string
 
-	User    *UserQuery
-	Portal  *PortalQuery
-	Puppet  *PuppetQuery
-	Message *MessageQuery
+	User     *UserQuery
+	Portal   *PortalQuery
+	Puppet   *PuppetQuery
+	Message  *MessageQuery
+	Reaction *ReactionQuery
 }
 
 func New(dbType string, uri string, baseLog log.Logger) (*Database, error) {
@@ -59,6 +59,8 @@ func New(dbType string, uri string, baseLog log.Logger) (*Database, error) {
 	gdb, err := gorm.Open(conn, &gorm.Config{
 		//	Logger: logger.Default.LogMode(logger.Info),
 		// Logger: baseLog,
+
+		DisableForeignKeyConstraintWhenMigrating: true,
 		NamingStrategy: schema.NamingStrategy{
 			NameReplacer: strings.NewReplacer("JID", "Jid", "MXID", "Mxid"),
 		},
@@ -87,16 +89,17 @@ func New(dbType string, uri string, baseLog log.Logger) (*Database, error) {
 		db:  db,
 		log: db.log.Sub("Message"),
 	}
+	db.Reaction = &ReactionQuery{
+		db:  db,
+		log: db.log.Sub("Reaction"),
+	}
+
 	return db, nil
 }
 
 func (db *Database) Init() error {
 	println("actual upgrade")
-	err := db.AutoMigrate(&Portal{})
-	if err != nil {
-		return err
-	}
-	err = db.AutoMigrate(&Puppet{})
+	err := db.AutoMigrate(&Portal{}, &Puppet{})
 	if err != nil {
 		return err
 	}
@@ -105,12 +108,12 @@ func (db *Database) Init() error {
 		return err
 	}
 
-	err = db.AutoMigrate(&mxRegistered{})
+	err = db.AutoMigrate(&Reaction{})
 	if err != nil {
 		return err
 	}
 
-	err = db.AutoMigrate(&mxUserProfile{})
+	err = db.AutoMigrate(&mxRegistered{}, &mxUserProfile{})
 	if err != nil {
 		return err
 	}
@@ -123,7 +126,7 @@ func (db *Database) Init() error {
 	if err != nil {
 		return err
 	}
-	return upgrades.Run(db.log.Sub("Upgrade"), db.dialect, db.DB)
+	return nil //upgrades.Run(db.log.Sub("Upgrade"), db.dialect, db.DB)
 }
 
 type Scannable interface {

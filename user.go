@@ -879,6 +879,10 @@ func (user *User) HandleTextMessage(message groupme.Message) {
 	user.messageInput <- PortalMessage{id, group, user, &message, uint64(message.CreatedAt.ToTime().Unix())}
 }
 
+func (user *User) HandleLike(msg groupme.Message) {
+	user.HandleTextMessage(msg)
+}
+
 func (user *User) HandleJoin(id groupme.ID) {
 	user.HandleChatList()
 	//TODO: efficient
