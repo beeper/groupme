@@ -1608,10 +1608,6 @@ func (portal *Portal) handleReaction(msgID types.GroupMeID, ppl []types.GroupMeI
 		}
 		eventID = message.MXID
 	}
-	for _, i := range reactions {
-		fmt.Printf("%+v, ", i.User)
-	}
-	fmt.Println(newLikes, ppl)
 
 	for _, jid := range newLikes {
 		intent := portal.getReactionIntent(jid)
@@ -1625,18 +1621,18 @@ func (portal *Portal) handleReaction(msgID types.GroupMeID, ppl []types.GroupMeI
 		newReaction.MXID = resp.EventID
 		newReaction.MessageJID = msgID
 		newReaction.MessageMXID = eventID
-		newReaction.UserMXID = portal.bridge.GetPuppetByJID(jid).MXID
+		newReaction.PuppetJID = jid
 
 		newReaction.Insert()
 
 	}
 
 	for _, reaction := range removeLikes {
-		if len(reaction.User.JID) == 0 {
+		if len(reaction.Puppet.JID) == 0 {
 			portal.log.Warnln("Reaction user state wrong", reaction.MXID, msgID)
 			continue
 		}
-		intent := portal.getReactionIntent(reaction.User.JID)
+		intent := portal.getReactionIntent(reaction.PuppetJID)
 		_, err := intent.RedactEvent(portal.MXID, reaction.MXID)
 		if err != nil {
 			portal.log.Errorln("Something wrong with reaction redaction", reaction.MXID)
@@ -1651,7 +1647,7 @@ func oldReactions(a []*database.Reaction, b []string) (ans []*database.Reaction)
 	for _, i := range a {
 		flag := false
 		for _, j := range b {
-			if i.User.JID == j {
+			if i.PuppetJID == j {
 				flag = true
 				break
 			}
@@ -1668,7 +1664,7 @@ func newReactions(a []*database.Reaction, b []string) (ans []string) {
 	for _, j := range b {
 		flag := false
 		for _, i := range a {
-			if i.User.JID == j {
+			if i.PuppetJID == j {
 				flag = true
 				break
 			}

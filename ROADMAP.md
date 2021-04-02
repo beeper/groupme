@@ -6,6 +6,9 @@
     * [ ] Media/files
     * [ ] Replies
   * [ ] Message redactions
+  * [ ] Reactions
+    * [ ] Addition
+    * [ ] Deletion
   * [ ] Presence - N/A
   * [ ] Typing notifications
   * [ ] Read receipts
@@ -41,6 +44,9 @@
     * [ ] Events created
     * [ ] Events modified
     * [ ] Going/Not
+  * [ ] Reactions
+    * [x] Addition
+    * [ ] Deletion <sup>[3]</sup>
   * [ ] Admin/superadmin status
   * [ ] Membership actions
     * [ ] Invite

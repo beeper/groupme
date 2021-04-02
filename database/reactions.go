@@ -20,7 +20,7 @@ func (mq *ReactionQuery) New() *Reaction {
 
 func (mq *ReactionQuery) GetByJID(jid types.GroupMeID) (reactions []*Reaction) {
 	ans := mq.db.Model(&Reaction{}).
-		Joins("Users"). // TODO: Do this in seperate function?
+		Preload("Puppet"). // TODO: Do this in seperate function?
 		Where("message_jid = ?", jid).
 		Limit(1).Find(&reactions)
 
@@ -54,8 +54,8 @@ type Reaction struct {
 	Message Message `gorm:"foreignKey:MessageMXID,MessageJID;references:MXID,JID;"`
 
 	//User
-	UserMXID id.UserID `gorm:"notNull"`
-	User     User      `gorm:"foreignKey:UserMXID;references:MXID;"`
+	PuppetJID types.GroupMeID `gorm:"notNull"`
+	Puppet    Puppet          `gorm:"foreignKey:PuppetJID;references:jid;"`
 }
 
 func (reaction *Reaction) Insert() {
