@@ -76,18 +76,19 @@ func (store *SQLStateStore) MarkRegistered(userID id.UserID) {
 	}
 }
 
-type mxUserProfile struct {
+type MxUserProfile struct {
 	RoomID     string `gorm:"primaryKey"`
 	UserID     string `gorm:"primaryKey"`
 	Membership string `gorm:"notNull"`
 
 	DisplayName string
 	AvatarURL   string
+	Avatar      string
 }
 
 func (store *SQLStateStore) GetRoomMembers(roomID id.RoomID) map[id.UserID]*event.MemberEventContent {
 	members := make(map[id.UserID]*event.MemberEventContent)
-	var users []mxUserProfile
+	var users []MxUserProfile
 	ans := store.db.Where("room_id = ?", roomID.String()).Find(&users)
 	if ans.Error != nil {
 		return members
@@ -113,7 +114,7 @@ func (store *SQLStateStore) GetRoomMembers(roomID id.RoomID) map[id.UserID]*even
 }
 
 func (store *SQLStateStore) GetMembership(roomID id.RoomID, userID id.UserID) event.Membership {
-	var user mxUserProfile
+	var user MxUserProfile
 	ans := store.db.Where("room_id = ? AND user_id = ?", roomID, userID).Limit(1).Find(&user)
 	membership := event.MembershipLeave
 	if ans.Error != nil && ans.Error != gorm.ErrRecordNotFound {
@@ -133,7 +134,7 @@ func (store *SQLStateStore) GetMember(roomID id.RoomID, userID id.UserID) *event
 }
 
 func (store *SQLStateStore) TryGetMember(roomID id.RoomID, userID id.UserID) (*event.MemberEventContent, bool) {
-	var user mxUserProfile
+	var user MxUserProfile
 	ans := store.db.Where("room_id = ? AND user_id = ?", roomID, userID).Take(&user)
 
 	if ans.Error != nil && ans.Error != gorm.ErrRecordNotFound {
@@ -146,6 +147,32 @@ func (store *SQLStateStore) TryGetMember(roomID id.RoomID, userID id.UserID) (*e
 	}
 
 	return &eventMember, ans.Error != nil
+}
+
+func (store *SQLStateStore) TryGetMemberRaw(roomID id.RoomID, userID id.UserID) (user MxUserProfile, err bool) {
+	ans := store.db.Where("room_id = ? AND user_id = ?", roomID, userID).Take(&user)
+
+	if ans.Error == gorm.ErrRecordNotFound {
+		err = true
+		return
+	}
+	if ans.Error != nil && ans.Error != gorm.ErrRecordNotFound {
+		store.log.Warnfln("Failed to scan member info of %s in %s: %v", userID, roomID, ans.Error)
+		err = true
+		return
+	}
+
+	return user, false
+}
+
+func (store *SQLStateStore) SetMemberRaw(member *MxUserProfile) {
+	ans := store.db.Clauses(clause.OnConflict{
+		UpdateAll: true,
+	}).Create(member)
+
+	if ans.Error != nil {
+		store.log.Warnfln("Failed to set membership of %s in %s to %s: %v", member.UserID, member.RoomID, member, ans.Error)
+	}
 }
 
 func (store *SQLStateStore) FindSharedRooms(userID id.UserID) (rooms []id.RoomID) {
@@ -192,7 +219,7 @@ func (store *SQLStateStore) IsMembership(roomID id.RoomID, userID id.UserID, all
 
 func (store *SQLStateStore) SetMembership(roomID id.RoomID, userID id.UserID, membership event.Membership) {
 	var err error
-	user := mxUserProfile{
+	user := MxUserProfile{
 		RoomID:     roomID.String(),
 		UserID:     userID.String(),
 		Membership: string(membership),
@@ -208,19 +235,18 @@ func (store *SQLStateStore) SetMembership(roomID id.RoomID, userID id.UserID, me
 		store.log.Warnfln("Failed to set membership of %s in %s to %s: %v", userID, roomID, membership, err)
 	}
 }
-
 func (store *SQLStateStore) SetMember(roomID id.RoomID, userID id.UserID, member *event.MemberEventContent) {
 
-	user := mxUserProfile{
+	user := MxUserProfile{
 		RoomID:      roomID.String(),
 		UserID:      userID.String(),
 		Membership:  string(member.Membership),
 		DisplayName: member.Displayname,
-		AvatarURL:   string(member.AvatarURL),
+		//	AvatarURL:   string(member.AvatarURL),//try ignoring
 	}
 	ans := store.db.Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "room_id"}, {Name: "user_id"}},
-		DoUpdates: clause.AssignmentColumns([]string{"membership"}),
+		DoUpdates: clause.AssignmentColumns([]string{"membership", "display_name"}),
 	}).Create(&user)
 
 	if ans.Error != nil {

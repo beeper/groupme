@@ -817,14 +817,15 @@ func (user *User) handleMessageLoop() {
 		case msg := <-user.messageOutput:
 			user.bridge.Metrics.TrackBufferLength(user.MXID, len(user.messageOutput))
 			puppet := user.bridge.GetPuppetByJID(msg.data.UserID.String())
+			portal := user.bridge.GetPortalByJID(database.GroupPortalKey(msg.chat))
 			if puppet != nil {
-				puppet.Sync(user, groupme.Member{
+				puppet.Sync(user, portal.MXID, groupme.Member{
 					UserID:   msg.data.UserID,
 					Nickname: msg.data.Name,
 					ImageURL: msg.data.AvatarURL,
 				}) //TODO: add params or docs?
 			}
-			user.bridge.GetPortalByJID(database.GroupPortalKey(msg.chat)).messages <- msg
+			portal.messages <- msg
 		case <-user.syncStart:
 			user.log.Debugln("Processing of incoming messages is locked")
 			user.bridge.Metrics.TrackSyncLock(user.JID, true)

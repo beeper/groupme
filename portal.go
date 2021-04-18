@@ -348,7 +348,7 @@ func (portal *Portal) SyncParticipants(metadata *groupme.Group) {
 		if user != nil {
 			changed = levels.EnsureUserLevel(user.MXID, expectedLevel) || changed
 		}
-		go puppet.Sync(nil, *participant) //why nil whynot
+		puppet.Sync(nil, portal.MXID, *participant) //why nil whynot
 	}
 	if changed {
 		_, err = portal.MainIntent().SetPowerLevels(portal.MXID, levels)
@@ -940,10 +940,11 @@ func (portal *Portal) CreateMatrixRoom(user *User) error {
 	var metadata *groupme.Group
 	if portal.IsPrivateChat() {
 		puppet := portal.bridge.GetPuppetByJID(portal.Key.JID)
+		m, _ := portal.bridge.StateStore.TryGetMemberRaw(portal.MXID, puppet.MXID)
 		if portal.bridge.Config.Bridge.PrivateChatPortalMeta {
-			portal.Name = puppet.Displayname
-			portal.AvatarURL = puppet.AvatarURL
-			portal.Avatar = puppet.Avatar
+			portal.Name = m.DisplayName
+			portal.AvatarURL = types.ContentURI{id.MustParseContentURI(m.AvatarURL)}
+			portal.Avatar = m.Avatar
 		} else {
 			portal.Name = ""
 		}

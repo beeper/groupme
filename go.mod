@@ -31,3 +31,5 @@ require (
 replace github.com/karmanyaahm/groupme => ../groupme
 
 replace github.com/karmanyaahm/wray => ../wray
+
+replace maunium.net/go/mautrix => ../mautrix

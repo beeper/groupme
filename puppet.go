@@ -18,6 +18,7 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"regexp"
 	"strings"
 
@@ -181,19 +182,32 @@ func (puppet *Puppet) DefaultIntent() *appservice.IntentAPI {
 	return puppet.bridge.AS.Intent(puppet.MXID)
 }
 
-func (puppet *Puppet) UpdateAvatar(source *User, avatar string) bool {
+//func (puppet *Puppet) SetRoomMetadata(name, avatarURL string) bool {
+//
+//}
+
+func (puppet *Puppet) UpdateAvatar(source *User, portalMXID id.RoomID, avatar string) bool {
+	memberRaw, _ := puppet.bridge.StateStore.TryGetMemberRaw(portalMXID, puppet.MXID) //TODO Handle
+	fmt.Println(len(avatar), avatar, memberRaw.Avatar)
+
 	if len(avatar) == 0 {
-		err := puppet.DefaultIntent().SetAvatarURL(id.ContentURI{})
+		var err error
+		err = puppet.DefaultIntent().SetRoomAvatarURL(portalMXID, id.ContentURI{})
+
 		if err != nil {
-			puppet.log.Warnln("Failed to remove avatar:", err)
+			puppet.log.Warnln("Failed to remove avatar:", err, puppet.MXID)
+			os.Exit(1)
 		}
-		puppet.AvatarURL = types.ContentURI{}
-		puppet.Avatar = avatar
+		memberRaw.Avatar = avatar
+		memberRaw.AvatarURL = ""
+
 		go puppet.updatePortalAvatar()
+
+		puppet.bridge.StateStore.SetMemberRaw(&memberRaw) //TODO handle
 		return true
 	}
 
-	if puppet.Avatar == avatar {
+	if memberRaw.Avatar == avatar {
 		return false // up to date
 	}
 
@@ -209,24 +223,32 @@ func (puppet *Puppet) UpdateAvatar(source *User, avatar string) bool {
 		puppet.log.Warnln("Failed to upload avatar:", err)
 		return false
 	}
-
-	puppet.AvatarURL = types.ContentURI{resp.ContentURI}
-	err = puppet.DefaultIntent().SetAvatarURL(resp.ContentURI)
+	err = puppet.DefaultIntent().SetRoomAvatarURL(portalMXID, resp.ContentURI)
 	if err != nil {
 		puppet.log.Warnln("Failed to set avatar:", err)
 	}
-	puppet.Avatar = avatar
+
+	memberRaw.AvatarURL = resp.ContentURI.String()
+	memberRaw.Avatar = avatar
+
+	puppet.bridge.StateStore.SetMemberRaw(&memberRaw) //TODO handle
+
 	go puppet.updatePortalAvatar()
 	return true
 }
 
-func (puppet *Puppet) UpdateName(source *User, contact groupme.Member) bool {
+func (puppet *Puppet) UpdateName(source *User, portalMXID id.RoomID, contact groupme.Member) bool {
 	newName, quality := puppet.bridge.Config.Bridge.FormatDisplayname(contact)
-	if puppet.Displayname != newName && quality >= puppet.NameQuality {
-		err := puppet.DefaultIntent().SetDisplayName(newName)
+
+	memberRaw, _ := puppet.bridge.StateStore.TryGetMemberRaw(portalMXID, puppet.MXID) //TODO Handle
+	quality = quality                                                                 //quality not used
+	if memberRaw.DisplayName != newName {                                             //&& quality >= puppet.NameQuality[portalMXID] {
+		var err error
+		err = puppet.DefaultIntent().SetRoomDisplayName(portalMXID, newName)
+
 		if err == nil {
-			puppet.Displayname = newName
-			puppet.NameQuality = quality
+			memberRaw.DisplayName = newName
+			//	puppet.NameQuality[portalMXID] = quality
 			go puppet.updatePortalName()
 			puppet.Update()
 		} else {
@@ -247,38 +269,37 @@ func (puppet *Puppet) updatePortalMeta(meta func(portal *Portal)) {
 
 func (puppet *Puppet) updatePortalAvatar() {
 	puppet.updatePortalMeta(func(portal *Portal) {
+
+		m, _ := puppet.bridge.StateStore.TryGetMemberRaw(portal.MXID, puppet.MXID)
 		if len(portal.MXID) > 0 {
-			_, err := portal.MainIntent().SetRoomAvatar(portal.MXID, puppet.AvatarURL.ContentURI)
+			_, err := portal.MainIntent().SetRoomAvatar(portal.MXID, id.MustParseContentURI(m.AvatarURL))
 			if err != nil {
 				portal.log.Warnln("Failed to set avatar:", err)
 			}
 		}
-		portal.AvatarURL = puppet.AvatarURL
-		portal.Avatar = puppet.Avatar
+		portal.AvatarURL = types.ContentURI{id.MustParseContentURI(m.AvatarURL)}
+		portal.Avatar = m.Avatar
 		portal.Update()
 	})
 }
 
 func (puppet *Puppet) updatePortalName() {
 	puppet.updatePortalMeta(func(portal *Portal) {
+		m, _ := puppet.bridge.StateStore.TryGetMemberRaw(portal.MXID, puppet.MXID)
 		if len(portal.MXID) > 0 {
-			_, err := portal.MainIntent().SetRoomName(portal.MXID, puppet.Displayname)
+			_, err := portal.MainIntent().SetRoomName(portal.MXID, m.DisplayName)
 			if err != nil {
 				portal.log.Warnln("Failed to set name:", err)
 			}
 		}
-		portal.Name = puppet.Displayname
+		portal.Name = m.DisplayName
 		portal.Update()
 	})
 }
 
-func (puppet *Puppet) Sync(source *User, contact groupme.Member) {
+func (puppet *Puppet) Sync(source *User, portalMXID id.RoomID, contact groupme.Member) {
 	if contact.UserID.String() == "system" {
 		puppet.log.Warnln("Trying to sync system puppet")
-
-		//		portal.Sync(puppet.bridge.GetUserByJID(portal.Key.Receiver), groupme.Group{})
-		//TODO permissoins idk if its fine to use portal owner
-
 		return
 	}
 
@@ -287,14 +308,9 @@ func (puppet *Puppet) Sync(source *User, contact groupme.Member) {
 		puppet.log.Errorln("Failed to ensure registered:", err)
 	}
 
-	//if contact.ID.String() == source.JID {
-	//TODO What is this
-	//		contact.Notify = source.Conn.Info.Pushname
-	//}
-
 	update := false
-	update = puppet.UpdateName(source, contact) || update
-	update = puppet.UpdateAvatar(source, contact.ImageURL) || update
+	update = puppet.UpdateName(source, portalMXID, contact) || update
+	update = puppet.UpdateAvatar(source, portalMXID, contact.ImageURL) || update
 	if update {
 		puppet.Update()
 	}

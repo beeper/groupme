@@ -45,8 +45,7 @@ func (pq *PuppetQuery) GetAll() (puppets []*Puppet) {
 		return nil
 	}
 	for _, puppet := range puppets {
-		puppet.db = pq.db
-		puppet.log = pq.log
+		pq.initializePuppet(puppet)
 	}
 	// defer rows.Close()
 	// for rows.Next() {
@@ -61,8 +60,7 @@ func (pq *PuppetQuery) Get(jid types.GroupMeID) *Puppet {
 	if ans.Error != nil || ans.RowsAffected == 0 {
 		return nil
 	}
-	puppet.db = pq.db
-	puppet.log = pq.log
+	pq.initializePuppet(&puppet)
 	return &puppet
 }
 
@@ -72,8 +70,7 @@ func (pq *PuppetQuery) GetByCustomMXID(mxid id.UserID) *Puppet {
 	if ans.Error != nil || ans.RowsAffected == 0 {
 		return nil
 	}
-	puppet.db = pq.db
-	puppet.log = pq.log
+	pq.initializePuppet(&puppet)
 	return &puppet
 }
 
@@ -84,8 +81,7 @@ func (pq *PuppetQuery) GetAllWithCustomMXID() (puppets []*Puppet) {
 		return nil
 	}
 	for _, puppet := range puppets {
-		puppet.db = pq.db
-		puppet.log = pq.log
+		pq.initializePuppet(puppet)
 	}
 	// defer rows.Close()
 	// for rows.Next() {
@@ -94,16 +90,21 @@ func (pq *PuppetQuery) GetAllWithCustomMXID() (puppets []*Puppet) {
 	return
 }
 
+func (pq *PuppetQuery) initializePuppet(p *Puppet) {
+	p.db = pq.db
+	p.log = pq.log
+}
+
 //Puppet is comment
 type Puppet struct {
 	db  *Database
 	log log.Logger
 
-	JID         types.GroupMeID `gorm:"primaryKey"`
-	Avatar      string
-	AvatarURL   types.ContentURI
-	Displayname string
-	NameQuality int8
+	JID types.GroupMeID `gorm:"primaryKey"`
+	//Avatar      string
+	//AvatarURL   types.ContentURI
+	//Displayname string
+	//NameQuality int8
 
 	CustomMXID     id.UserID `gorm:"column:custom_mxid;"`
 	AccessToken    string
