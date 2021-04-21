@@ -13,7 +13,6 @@ type ContentURI struct {
 func (m *ContentURI) Scan(value interface{}) error {
 	bytes, ok := value.([]byte)
 	if !ok {
-		println(len(bytes))
 		//return errors.New(fmt.Sprint("Failed to unmarshal value:", value))
 	}
 	if len(bytes) == 0 {

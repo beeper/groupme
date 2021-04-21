@@ -188,7 +188,6 @@ func (puppet *Puppet) DefaultIntent() *appservice.IntentAPI {
 
 func (puppet *Puppet) UpdateAvatar(source *User, portalMXID id.RoomID, avatar string) bool {
 	memberRaw, _ := puppet.bridge.StateStore.TryGetMemberRaw(portalMXID, puppet.MXID) //TODO Handle
-	fmt.Println(len(avatar), avatar, memberRaw.Avatar)
 
 	if len(avatar) == 0 {
 		var err error
