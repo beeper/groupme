@@ -254,7 +254,7 @@ func (user *User) Connect() bool {
 	// user.Conn = whatsappExt.ExtendConn(conn)
 	// _ = user.Conn.SetClientName(user.bridge.Config.WhatsApp.OSName, user.bridge.Config.WhatsApp.BrowserName, WAVersion)
 	// user.log.Debugln("WhatsApp connection successful")
-	user.Conn.AddHandler(user)
+	user.Conn.AddFullHandler(user)
 
 	//TODO: typing notification?
 	return user.RestoreSession()
@@ -887,6 +887,54 @@ func (user *User) HandleLike(msg groupme.Message) {
 func (user *User) HandleJoin(id groupme.ID) {
 	user.HandleChatList()
 	//TODO: efficient
+}
+
+func (user *User) HandleGroupName(group groupme.ID, newName string) {
+	//p := user.GetPortalByJID(group.String())
+	//if p != nil {
+	//	p.UpdateName(newName, "", false)
+	// 		       get more info abt actual user TODO
+	//}
+	//bugs atm with above?
+	user.HandleChatList()
+
+}
+
+func (user *User) HandleGroupTopic(_ groupme.ID, _ string) {
+	user.HandleChatList()
+}
+func (user *User) HandleGroupMembership(_ groupme.ID, _ string) {
+	user.HandleChatList()
+	//TODO
+}
+
+func (user *User) HandleGroupAvatar(_ groupme.ID, _ string) {
+	user.HandleChatList()
+}
+
+func (user *User) HandleLikeIcon(_ groupme.ID, _, _ int, _ string) {
+	//TODO
+}
+
+func (user *User) HandleNewNickname(groupID, userID groupme.ID, name string) {
+	puppet := user.bridge.GetPuppetByJID(userID.String())
+	if puppet != nil {
+		puppet.UpdateName(user, user.GetPortalByJID(groupID.String()).MXID, groupme.Member{
+			Nickname: name,
+			UserID:   userID,
+		})
+	}
+}
+
+func (user *User) HandleNewAvatarInGroup(groupID, userID groupme.ID, url string) {
+	puppet := user.bridge.GetPuppetByJID(userID.String())
+	if puppet != nil {
+		puppet.UpdateAvatar(user, user.GetPortalByJID(groupID.String()).MXID, url)
+	}
+}
+
+func (user *User) HandleMembers(_ groupme.ID, _ []groupme.Member, _ bool) {
+	user.HandleChatList()
 }
 
 //func (user *User) HandleImageMessage(message whatsapp.ImageMessage) {
