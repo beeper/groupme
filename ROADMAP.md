@@ -32,7 +32,7 @@
       * [x] Random Files
     * [x] Location messages<sup>1</sup>
     * [ ] Polls<sup>3</sup>
-    * [ ] Replies
+    * [x] Replies
   * [ ] Chat types
     * [ ] Private chat
     * [x] Group chat

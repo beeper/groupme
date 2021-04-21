@@ -1090,11 +1090,11 @@ func (portal *Portal) MainIntent() *appservice.IntentAPI {
 	return portal.bridge.Bot
 }
 
-func (portal *Portal) SetReply(content *event.MessageEventContent, info whatsapp.ContextInfo) {
-	if len(info.QuotedMessageID) == 0 {
+func (portal *Portal) SetReply(content *event.MessageEventContent, msgID types.GroupMeID) {
+	if len(msgID) == 0 {
 		return
 	}
-	message := portal.bridge.DB.Message.GetByJID(portal.Key, info.QuotedMessageID)
+	message := portal.bridge.DB.Message.GetByJID(portal.Key, msgID)
 	if message != nil {
 		evt, err := portal.MainIntent().GetEvent(portal.MXID, message.MXID)
 		if err != nil {
@@ -1394,6 +1394,15 @@ func (portal *Portal) handleAttachment(intent *appservice.IntentAPI, attachment 
 		}
 
 		return content, false, nil
+	case "reply":
+		fmt.Printf("%+v\n", attachment)
+		content := &event.MessageEventContent{
+			Body:    message.Text,
+			MsgType: event.MsgText,
+		}
+		portal.SetReply(content, attachment.ReplyID.String())
+		return content, false, nil
+
 	default:
 		portal.log.Warnln("Unable to handle groupme attachment type", attachment.Type)
 		return nil, true, fmt.Errorf("Unable to handle groupme attachment type %s", attachment.Type)
