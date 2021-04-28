@@ -186,7 +186,6 @@ type Portal struct {
 
 	messages chan PortalMessage
 
-	isPrivate   *bool
 	hasRelaybot *bool
 }
 
@@ -549,7 +548,12 @@ func (portal *Portal) Sync(user *User, group groupme.Group) {
 		portal.hasRelaybot = &yes
 	}
 
-	err := user.Conn.SubscribeToGroup(context.TODO(), group.ID, user.Token)
+	var err error
+	if portal.IsPrivateChat() {
+		err = user.Conn.SubscribeToUser(context.TODO(), groupme.ID(portal.Key.JID), user.Token)
+	} else {
+		err = user.Conn.SubscribeToGroup(context.TODO(), groupme.ID(portal.Key.JID), user.Token)
+	}
 	if err != nil {
 		portal.log.Errorln("Subscribing failed, live metadata updates won't work", err)
 	}
@@ -698,7 +702,7 @@ func (portal *Portal) BackfillHistory(user *User, lastMessageTime uint64) error 
 	portal.log.Infoln("Backfilling history since", lastMessageID, "for", user.MXID)
 	for len(lastMessageID) > 0 {
 		portal.log.Debugln("Fetching 50 messages of history after", lastMessageID)
-		messages, err := user.Client.LoadMessagesAfter(portal.Key.JID, lastMessageID, lastMessageFromMe, 50)
+		messages, err := user.Client.LoadMessagesAfter(portal.Key.JID, lastMessageID, lastMessageFromMe, portal.IsPrivateChat())
 		if err != nil {
 			return err
 		}
@@ -799,12 +803,12 @@ func (portal *Portal) FillInitialHistory(user *User) error {
 	before := ""
 	chunkNum := 1
 	for n > 0 {
-		count := 50
+		count := 20
 		if n < count {
 			count = n
 		}
 		portal.log.Debugfln("Fetching chunk %d (%d messages / %d cap) before message %s", chunkNum, count, n, before)
-		chunk, err := user.Client.LoadMessagesBefore(portal.Key.JID, before, count)
+		chunk, err := user.Client.LoadMessagesBefore(portal.Key.JID, before, portal.IsPrivateChat())
 		if err != nil {
 			return err
 		}
@@ -1062,11 +1066,7 @@ func (portal *Portal) CreateMatrixRoom(user *User) error {
 }
 
 func (portal *Portal) IsPrivateChat() bool {
-	if portal.isPrivate == nil {
-		val := strings.HasSuffix(portal.Key.JID, whatsappExt.NewUserSuffix)
-		portal.isPrivate = &val
-	}
-	return *portal.isPrivate
+	return portal.Key.IsPrivate()
 }
 
 func (portal *Portal) HasRelaybot() bool {

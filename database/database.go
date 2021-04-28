@@ -57,7 +57,7 @@ func New(dbType string, uri string, baseLog log.Logger) (*Database, error) {
 	}
 
 	gdb, err := gorm.Open(conn, &gorm.Config{
-		//Logger: logger.Default.LogMode(logger.Info),
+		//		Logger: logger.Default.LogMode(logger.Info),
 		// Logger: baseLog,
 
 		DisableForeignKeyConstraintWhenMigrating: true,

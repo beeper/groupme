@@ -178,8 +178,8 @@ type UserPortal struct {
 
 func (user *User) SetPortalKeys(newKeys []PortalKeyWithMeta) error {
 	tx := user.db.Begin()
-	ans := tx.Where("user_jid = ?", *user.jidPtr()).Delete(&UserPortal{})
-	print("make sure all are deletede")
+	ans := tx.Where("user_jid = ?", *user.jidPtr()).Delete(UserPortal{})
+
 	if ans.Error != nil {
 		_ = tx.Rollback()
 		return ans.Error

@@ -654,7 +654,7 @@ func (handler *CommandHandler) CommandHelp(ce *CommandEvent) {
 		cmdPrefix + cmdSyncHelp,
 		cmdPrefix + cmdListHelp,
 		cmdPrefix + cmdOpenHelp,
-		//	cmdPrefix + cmdPMHelp,
+		cmdPrefix + cmdPMHelp,
 		//	cmdPrefix + cmdInviteLinkHelp,
 		//	cmdPrefix + cmdJoinHelp,
 		//	cmdPrefix + cmdCreateHelp,
@@ -762,21 +762,11 @@ func (handler *CommandHandler) CommandDeleteAllPortals(ce *CommandEvent) {
 	}()
 }
 
-const cmdListHelp = `list groups [page] [items per page] - Get a list of all contacts and groups.`
-
-//<contacts|groups> //TODO
+const cmdListHelp = `list <contacts|groups> [page] [items per page] - Get a list of all contacts and groups.`
 
 func formatContacts(contacts bool, input map[string]string) (result []string) {
 	for jid, contact := range input {
-		if strings.HasSuffix(jid, whatsappExt.NewUserSuffix) != contacts {
-			continue
-		}
-
-		if contacts {
-			result = append(result, fmt.Sprintf("* %s / %s - `%s`", contact, jid))
-		} else {
-			result = append(result, fmt.Sprintf("* %s - `%s`", contact, jid))
-		}
+		result = append(result, fmt.Sprintf("* %s - `%s`", contact, jid))
 	}
 	sort.Sort(sort.StringSlice(result))
 	return
@@ -886,44 +876,36 @@ func (handler *CommandHandler) CommandOpen(ce *CommandEvent) {
 	_, _ = portal.MainIntent().InviteUser(portal.MXID, &mautrix.ReqInviteUser{UserID: user.MXID})
 }
 
-const cmdPMHelp = `pm [--force] <_international phone number_> - Open a private chat with the given phone number.`
+const cmdPMHelp = `pm - To direct message someone already in a shared group start a direct chat with them in Matrix`
 
 func (handler *CommandHandler) CommandPM(ce *CommandEvent) {
-	// if len(ce.Args) == 0 {
-	// 	ce.Reply("**Usage:** `pm [--force] <international phone number>`")
-	// 	return
-	// }
+	ce.Reply(fmt.Sprintf("**DEPRECATED COMMAND:** `%s`", cmdPMHelp))
+	return
+	if len(ce.Args) == 0 {
+		ce.Reply(fmt.Sprintf("**DEPRECATED COMMAND:** `%s`", cmdPMHelp))
+		return
+	}
 
-	// force := ce.Args[0] == "--force"
-	// if force {
-	// 	ce.Args = ce.Args[1:]
-	// }
-
-	// user := ce.User
-
-	// number := strings.Join(ce.Args, "")
-	// if number[0] == '+' {
-	// 	number = number[1:]
-	// }
-	// for _, char := range number {
-	// 	if char < '0' || char > '9' {
-	// 		ce.Reply("Invalid phone number.")
-	// 		return
-	// 	}
-	// }
-	// jid := number + whatsappExt.NewUserSuffix
-
-	// handler.log.Debugln("Importing", jid, "for", user)
-
-	// contact, ok := user.Conn.Store.Contacts[jid]
-	// if !ok {
-	// 	if !force {
-	// 		ce.Reply("Phone number not found in contacts. Try syncing contacts with `sync` first. " +
-	// 			"To create a portal anyway, use `pm --force <number>`.")
-	// 		return
-	// 	}
-	// 	contact = whatsapp.Contact{Jid: jid}
-	// }
+	//	force := ce.Args[0] == "--force"
+	//	if force {
+	//		ce.Args = ce.Args[1:]
+	//	}
+	//
+	//	user := ce.User
+	//
+	//	jid := ce.Args[0]
+	//
+	//	handler.log.Debugln("Importing", jid, "for", user.MXID)
+	//
+	//	 contact, ok := user.Conn.Store.Contacts[jid]
+	//	 if !ok {
+	//	 	if !force {
+	//	 		ce.Reply("Phone number not found in contacts. Try syncing contacts with `sync` first. " +
+	//	 			"To create a portal anyway, use `pm --force <number>`.")
+	//	 		return
+	//	 	}
+	//	 	contact = whatsapp.Contact{Jid: jid}
+	//	 }
 	// puppet := user.bridge.GetPuppetByJID(contact.Jid)
 	// puppet.Sync(user, contact)
 	// portal := user.bridge.GetPortalByJID(database.NewPortalKey(contact.Jid, user.JID))

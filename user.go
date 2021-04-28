@@ -378,8 +378,14 @@ func (user *User) Login(ce *CommandEvent) {
 type Chat struct {
 	Portal          *Portal
 	LastMessageTime uint64
-	Group           groupme.Group
+	Group           *groupme.Group
+	DM              *groupme.Chat
 }
+
+////returns private chat assuming one of group or dm have been initialized properly
+//func (c Chat) IsPrivate() bool {
+//	return c.Group == nil
+//}
 
 type ChatList []Chat
 
@@ -536,44 +542,67 @@ func (user *User) HandleChatList() {
 	chatMap := make(map[string]groupme.Group)
 	chats, err := user.Client.IndexAllGroups()
 	if err != nil {
-		log.Fatal(err) //TODO: handle
+		user.log.Errorln("chat sync error", err) //TODO: handle
+		return
 	}
 	for _, chat := range chats {
 		chatMap[chat.ID.String()] = *chat
 	}
-	user.chatListReceived <- struct{}{}
-	user.log.Infoln("Chat list received")
 	user.GroupList = chatMap
-	go user.syncPortals(chatMap, false)
+
+	dmMap := make(map[string]groupme.Chat)
+	dms, err := user.Client.IndexAllChats()
+	if err != nil {
+		user.log.Errorln("chat sync error", err) //TODO: handle
+		return
+	}
+	for _, dm := range dms {
+		dmMap[dm.OtherUser.ID.String()] = *dm
+	}
+	user.ChatList = dmMap
+
+	user.log.Infoln("Chat list received")
+	user.chatListReceived <- struct{}{}
+	go user.syncPortals(false)
 }
 
-func (user *User) syncPortals(chatMap map[string]groupme.Group, createAll bool) {
-	if chatMap == nil {
-		//	chatMap = user.Conn.Store.Chats
-		log.Fatal("chatmap nil major oops")
-	}
+func (user *User) syncPortals(createAll bool) {
+
 	user.log.Infoln("Reading chat list")
 
-	chats := make(ChatList, 0, len(chatMap))
+	chats := make(ChatList, 0, len(user.GroupList)+len(user.ChatList))
 	existingKeys := user.GetInCommunityMap()
-	portalKeys := make([]database.PortalKeyWithMeta, 0, len(chatMap))
-	for _, chat := range chatMap {
-		portal := user.bridge.GetPortalByJID(database.GroupPortalKey(chat.ID.String()))
+	portalKeys := make([]database.PortalKeyWithMeta, 0, cap(chats))
+
+	for _, group := range user.GroupList {
+
+		portal := user.bridge.GetPortalByJID(database.GroupPortalKey(group.ID.String()))
 
 		chats = append(chats, Chat{
 			Portal:          portal,
-			LastMessageTime: uint64(chat.UpdatedAt.ToTime().Unix()),
-			Group:           chat,
+			LastMessageTime: uint64(group.UpdatedAt.ToTime().Unix()),
+			Group:           &group,
 		})
+	}
+	for _, dm := range user.ChatList {
+		portal := user.bridge.GetPortalByJID(database.NewPortalKey(dm.OtherUser.ID.String(), user.JID))
+		chats = append(chats, Chat{
+			Portal:          portal,
+			LastMessageTime: uint64(dm.UpdatedAt.ToTime().Unix()),
+			DM:              &dm,
+		})
+	}
+
+	for _, chat := range chats {
 		var inCommunity, ok bool
-		if inCommunity, ok = existingKeys[portal.Key]; !ok || !inCommunity {
-			inCommunity = user.addPortalToCommunity(portal)
-			if portal.IsPrivateChat() {
-				puppet := user.bridge.GetPuppetByJID(portal.Key.JID)
+		if inCommunity, ok = existingKeys[chat.Portal.Key]; !ok || !inCommunity {
+			inCommunity = user.addPortalToCommunity(chat.Portal)
+			if chat.Portal.IsPrivateChat() {
+				puppet := user.bridge.GetPuppetByJID(chat.Portal.Key.JID)
 				user.addPuppetToCommunity(puppet)
 			}
 		}
-		portalKeys = append(portalKeys, database.PortalKeyWithMeta{PortalKey: portal.Key, InCommunity: inCommunity})
+		portalKeys = append(portalKeys, database.PortalKeyWithMeta{PortalKey: chat.Portal.Key, InCommunity: inCommunity})
 	}
 	user.log.Infoln("Read chat list, updating user-portal mapping")
 
@@ -594,11 +623,11 @@ func (user *User) syncPortals(chatMap map[string]groupme.Group, createAll bool) 
 		if chat.LastMessageTime+user.bridge.Config.Bridge.SyncChatMaxAge < now {
 			break
 		}
+		wg.Add(1)
 		go func(chat Chat) {
-			wg.Add(1)
 			create := (chat.LastMessageTime >= user.LastConnection && user.LastConnection > 0) || i < limit
 			if len(chat.Portal.MXID) > 0 || create || createAll {
-				chat.Portal.Sync(user, chat.Group)
+				chat.Portal.Sync(user, *chat.Group)
 				err := chat.Portal.BackfillHistory(user, chat.LastMessageTime)
 				if err != nil {
 					chat.Portal.log.Errorln("Error backfilling history:", err)

@@ -25,30 +25,61 @@ func (c Client) IndexAllGroups() ([]*groupme.Group, error) {
 	})
 }
 
-func (c Client) LoadMessagesAfter(groupID, lastMessageID string, lastMessageFromMe bool, num int) ([]*groupme.Message, error) {
-	//TODO: limit max 100
-	i, e := c.IndexMessages(context.TODO(), groupme.ID(groupID), &groupme.IndexMessagesQuery{
-		AfterID: groupme.ID(lastMessageID),
-		Limit:   num,
+func (c Client) IndexAllChats() ([]*groupme.Chat, error) {
+	return c.IndexChats(context.TODO(), &groupme.IndexChatsQuery{
+		PerPage: 100, //TODO?
 	})
-
-	if e != nil {
-		return nil, e
-	}
-	return i.Messages, nil
 }
 
-func (c Client) LoadMessagesBefore(groupID, lastMessageID string, num int) ([]*groupme.Message, error) {
-	//TODO: limit max 100
-	i, e := c.IndexMessages(context.TODO(), groupme.ID(groupID), &groupme.IndexMessagesQuery{
-		BeforeID: groupme.ID(lastMessageID),
-		Limit:    num,
-	})
-	//fmt.Println(groupID, lastMessageID, num, i.Count, e)
-	if e != nil {
-		return nil, e
+func (c Client) LoadMessagesAfter(groupID, lastMessageID string, lastMessageFromMe bool, private bool) ([]*groupme.Message, error) {
+	if private {
+		i, e := c.IndexDirectMessages(context.TODO(), groupID, &groupme.IndexDirectMessagesQuery{
+			SinceID: groupme.ID(lastMessageID),
+			//Limit:    num,
+		})
+		//fmt.Println(groupID, lastMessageID, num, i.Count, e)
+		if e != nil {
+			return nil, e
+		}
+		return i.Messages, nil
+	} else {
+		i, e := c.IndexMessages(context.TODO(), groupme.ID(groupID), &groupme.IndexMessagesQuery{
+			AfterID: groupme.ID(lastMessageID),
+			//20 for consistency with dms
+			Limit: 20,
+		})
+		//fmt.Println(groupID, lastMessageID, num, i.Count, e)
+		if e != nil {
+			return nil, e
+		}
+		return i.Messages, nil
 	}
-	return i.Messages, nil
+}
+
+func (c Client) LoadMessagesBefore(groupID, lastMessageID string, private bool) ([]*groupme.Message, error) {
+	if private {
+		i, e := c.IndexDirectMessages(context.TODO(), groupID, &groupme.IndexDirectMessagesQuery{
+			BeforeID: groupme.ID(lastMessageID),
+			//Limit:    num,
+		})
+		//fmt.Println(groupID, lastMessageID, num, i.Count, e)
+		if e != nil {
+			return nil, e
+		}
+		return i.Messages, nil
+	} else {
+		//TODO: limit max 100
+		i, e := c.IndexMessages(context.TODO(), groupme.ID(groupID), &groupme.IndexMessagesQuery{
+			BeforeID: groupme.ID(lastMessageID),
+			//20 for consistency with dms
+			Limit: 20,
+		})
+		//fmt.Println(groupID, lastMessageID, num, i.Count, e)
+		if e != nil {
+			return nil, e
+		}
+		return i.Messages, nil
+	}
 }
 
 func (c *Client) RemoveFromGroup(uid, groupID types.GroupMeID) error {

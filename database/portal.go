@@ -24,6 +24,8 @@ import (
 	"github.com/karmanyaahm/matrix-groupme-go/types"
 )
 
+// JID is the puppet or the group
+// Receiver is the "Other Person" in a DM or the group itself in a group
 type PortalKey struct {
 	JID      types.GroupMeID `gorm:"primaryKey"`
 	Receiver types.GroupMeID `gorm:"primaryKey"`
@@ -48,6 +50,11 @@ func (key PortalKey) String() string {
 		return key.JID
 	}
 	return key.JID + "-" + key.Receiver
+}
+
+func (key PortalKey) IsPrivate() bool {
+	//also see FindPrivateChats
+	return key.JID != key.Receiver
 }
 
 type PortalQuery struct {
@@ -82,8 +89,8 @@ func (pq *PortalQuery) GetAllByJID(jid types.GroupMeID) []*Portal {
 }
 
 func (pq *PortalQuery) FindPrivateChats(receiver types.GroupMeID) []*Portal {
-	print("aaaaaaaaaaaaaaaaaa wrong portal stuff")
-	return pq.getAll(pq.db.DB.Where("receiver = ? AND jid LIKE '%@s.whatsapp.net'", receiver))
+	//also see IsPrivate
+	return pq.getAll(pq.db.DB.Where("receiver = ? AND receiver <> jid", receiver))
 
 }
 
