@@ -867,10 +867,10 @@ func (handler *CommandHandler) CommandOpen(ce *CommandEvent) {
 	handler.log.Debugln("Importing", jid, "for", user.MXID)
 	portal := user.bridge.GetPortalByJID(database.GroupPortalKey(jid))
 	if len(portal.MXID) > 0 {
-		portal.Sync(user, contact)
+		portal.Sync(user, &contact)
 		ce.Reply("Portal room synced.")
 	} else {
-		portal.Sync(user, contact)
+		portal.Sync(user, &contact)
 		ce.Reply("Portal room created.")
 	}
 	_, _ = portal.MainIntent().InviteUser(portal.MXID, &mautrix.ReqInviteUser{UserID: user.MXID})

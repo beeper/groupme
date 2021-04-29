@@ -540,7 +540,7 @@ func (portal *Portal) ensureUserInvited(user *User) {
 	}
 }
 
-func (portal *Portal) Sync(user *User, group groupme.Group) {
+func (portal *Portal) Sync(user *User, group *groupme.Group) {
 	portal.log.Infoln("Syncing portal for", user.MXID)
 
 	if user.IsRelaybot {
@@ -548,12 +548,11 @@ func (portal *Portal) Sync(user *User, group groupme.Group) {
 		portal.hasRelaybot = &yes
 	}
 
-	var err error
+	sub := user.Conn.SubscribeToGroup
 	if portal.IsPrivateChat() {
-		err = user.Conn.SubscribeToUser(context.TODO(), groupme.ID(portal.Key.JID), user.Token)
-	} else {
-		err = user.Conn.SubscribeToGroup(context.TODO(), groupme.ID(portal.Key.JID), user.Token)
+		sub = user.Conn.SubscribeToDM
 	}
+	err := sub(context.TODO(), groupme.ID(portal.Key.Receiver), user.Token)
 	if err != nil {
 		portal.log.Errorln("Subscribing failed, live metadata updates won't work", err)
 	}
@@ -944,15 +943,21 @@ func (portal *Portal) CreateMatrixRoom(user *User) error {
 	var metadata *groupme.Group
 	if portal.IsPrivateChat() {
 		puppet := portal.bridge.GetPuppetByJID(portal.Key.JID)
-		m, _ := portal.bridge.StateStore.TryGetMemberRaw(portal.MXID, puppet.MXID)
+		meta, err := portal.bridge.StateStore.TryGetMemberRaw("", puppet.MXID)
+		if err {
+			println("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+			return errors.New("Cannot find user information")
+		}
+
+		//m, _ := portal.bridge.StateStore.TryGetMemberRaw(portal.MXID, puppet.MXID)
 		if portal.bridge.Config.Bridge.PrivateChatPortalMeta {
-			portal.Name = m.DisplayName
-			portal.AvatarURL = types.ContentURI{id.MustParseContentURI(m.AvatarURL)}
-			portal.Avatar = m.Avatar
+			portal.Name = meta.DisplayName
+			portal.AvatarURL = types.ContentURI{id.MustParseContentURI(meta.AvatarURL)}
+			portal.Avatar = meta.Avatar
 		} else {
 			portal.Name = ""
 		}
-		portal.Topic = "WhatsApp private chat"
+		portal.Topic = "GroupMe private chat"
 		//	 } else if portal.IsStatusBroadcastRoom() {
 		//	 	portal.Name = "WhatsApp Status Broadcast"
 		//	 	portal.Topic = "WhatsApp status updates from your contacts"

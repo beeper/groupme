@@ -25,6 +25,10 @@ func (c Client) IndexAllGroups() ([]*groupme.Group, error) {
 	})
 }
 
+func (c Client) IndexAllRelations() ([]*groupme.User, error) {
+	return c.IndexRelations(context.TODO(), &groupme.IndexChatsQuery{})
+}
+
 func (c Client) IndexAllChats() ([]*groupme.Chat, error) {
 	return c.IndexChats(context.TODO(), &groupme.IndexChatsQuery{
 		PerPage: 100, //TODO?

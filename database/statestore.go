@@ -135,7 +135,7 @@ func (store *SQLStateStore) GetMember(roomID id.RoomID, userID id.UserID) *event
 
 func (store *SQLStateStore) TryGetMember(roomID id.RoomID, userID id.UserID) (*event.MemberEventContent, bool) {
 	var user MxUserProfile
-	ans := store.db.Where("room_id = ? AND user_id = ?", roomID, userID).Take(&user)
+	ans := store.db.Where("room_id = ? AND user_id = ?", roomID, userID).Limit(1).Find(&user)
 
 	if ans.Error != nil && ans.Error != gorm.ErrRecordNotFound {
 		store.log.Warnfln("Failed to scan member info of %s in %s: %v", userID, roomID, ans.Error)
@@ -150,13 +150,12 @@ func (store *SQLStateStore) TryGetMember(roomID id.RoomID, userID id.UserID) (*e
 }
 
 func (store *SQLStateStore) TryGetMemberRaw(roomID id.RoomID, userID id.UserID) (user MxUserProfile, err bool) {
-	ans := store.db.Where("room_id = ? AND user_id = ?", roomID, userID).Take(&user)
+	ans := store.db.Where("room_id = ? AND user_id = ?", roomID, userID).Limit(1).Find(&user)
 
 	if ans.Error == gorm.ErrRecordNotFound {
 		err = true
 		return
-	}
-	if ans.Error != nil && ans.Error != gorm.ErrRecordNotFound {
+	} else if ans.Error != nil {
 		store.log.Warnfln("Failed to scan member info of %s in %s: %v", userID, roomID, ans.Error)
 		err = true
 		return

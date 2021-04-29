@@ -248,8 +248,8 @@ func (puppet *Puppet) UpdateName(source *User, portalMXID id.RoomID, contact gro
 		if err == nil {
 			memberRaw.DisplayName = newName
 			//	puppet.NameQuality[portalMXID] = quality
+			puppet.bridge.StateStore.SetMemberRaw(&memberRaw) //TODO handle; maybe .Update() ?
 			go puppet.updatePortalName()
-			puppet.Update()
 		} else {
 			puppet.log.Warnln("Failed to set display name:", err)
 		}

@@ -58,8 +58,9 @@ type User struct {
 	ConnectionErrors int
 	CommunityID      string
 
-	ChatList  map[types.GroupMeID]groupme.Chat
-	GroupList map[types.GroupMeID]groupme.Group
+	ChatList     map[types.GroupMeID]groupme.Chat
+	GroupList    map[types.GroupMeID]groupme.Group
+	RelationList map[types.GroupMeID]groupme.User
 
 	cleanDisconnection  bool
 	batteryWarningsSent int
@@ -561,6 +562,23 @@ func (user *User) HandleChatList() {
 	}
 	user.ChatList = dmMap
 
+	userMap := make(map[string]groupme.User)
+	users, err := user.Client.IndexAllRelations()
+	if err != nil {
+		user.log.Errorln("Error syncing user list, continuing sync", err)
+	}
+	for _, u := range users {
+		puppet := user.bridge.GetPuppetByJID(u.ID.String())
+		//               "" for overall user not related to one group
+		puppet.Sync(nil, "", groupme.Member{
+			UserID:   u.ID,
+			Nickname: u.Name,
+			ImageURL: u.AvatarURL,
+		})
+		userMap[u.ID.String()] = *u
+	}
+	user.RelationList = userMap
+
 	user.log.Infoln("Chat list received")
 	user.chatListReceived <- struct{}{}
 	go user.syncPortals(false)
@@ -627,7 +645,7 @@ func (user *User) syncPortals(createAll bool) {
 		go func(chat Chat) {
 			create := (chat.LastMessageTime >= user.LastConnection && user.LastConnection > 0) || i < limit
 			if len(chat.Portal.MXID) > 0 || create || createAll {
-				chat.Portal.Sync(user, *chat.Group)
+				chat.Portal.Sync(user, chat.Group)
 				err := chat.Portal.BackfillHistory(user, chat.LastMessageTime)
 				if err != nil {
 					chat.Portal.log.Errorln("Error backfilling history:", err)
