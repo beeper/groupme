@@ -150,7 +150,10 @@ func (store *SQLStateStore) TryGetMember(roomID id.RoomID, userID id.UserID) (*e
 }
 
 func (store *SQLStateStore) TryGetMemberRaw(roomID id.RoomID, userID id.UserID) (user MxUserProfile, err bool) {
-	ans := store.db.Where("room_id = ? AND user_id = ?", roomID, userID).Limit(1).Find(&user)
+	user.RoomID = roomID.String()
+	user.UserID = userID.String()
+
+	ans := store.db.Limit(1).Find(&user)
 
 	if ans.Error == gorm.ErrRecordNotFound {
 		err = true

@@ -941,6 +941,8 @@ func (portal *Portal) CreateMatrixRoom(user *User) error {
 	portal.log.Infoln("Creating Matrix room. Info source:", user.MXID)
 
 	var metadata *groupme.Group
+	fmt.Println(portal.IsPrivateChat(), portal.Key, portal.Key.Receiver, portal.Key.JID)
+	return nil
 	if portal.IsPrivateChat() {
 		puppet := portal.bridge.GetPuppetByJID(portal.Key.JID)
 		meta, err := portal.bridge.StateStore.TryGetMemberRaw("", puppet.MXID)
@@ -967,8 +969,10 @@ func (portal *Portal) CreateMatrixRoom(user *User) error {
 		if err == nil {
 			portal.Name = metadata.Name
 			portal.Topic = metadata.Description
+			portal.UpdateAvatar(user, metadata.ImageURL, false)
+		} else {
+			portal.log.Warnln("Cannot fetch group metadata for new portal")
 		}
-		portal.UpdateAvatar(user, metadata.ImageURL, false)
 	}
 
 	bridgeInfoStateKey, bridgeInfo := portal.getBridgeInfo()

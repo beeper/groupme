@@ -17,6 +17,9 @@
 package database
 
 import (
+	"strconv"
+	"strings"
+
 	"gorm.io/gorm"
 	log "maunium.net/go/maulogger/v2"
 	"maunium.net/go/mautrix/id"
@@ -29,6 +32,25 @@ import (
 type PortalKey struct {
 	JID      types.GroupMeID `gorm:"primaryKey"`
 	Receiver types.GroupMeID `gorm:"primaryKey"`
+}
+
+func ParsePortalKey(inp types.GroupMeID) *PortalKey {
+	parts := strings.Split(inp, "+")
+
+	if len(parts) != 2 {
+		return nil
+	}
+	if i, err := strconv.Atoi(parts[0]); i == 0 || err != nil {
+		return nil
+	}
+	if i, err := strconv.Atoi(parts[1]); i == 0 || err != nil {
+		return nil
+	}
+
+	return &PortalKey{
+		JID:      parts[0],
+		Receiver: parts[1],
+	}
 }
 
 func GroupPortalKey(jid types.GroupMeID) PortalKey {
@@ -49,7 +71,7 @@ func (key PortalKey) String() string {
 	if key.Receiver == key.JID {
 		return key.JID
 	}
-	return key.JID + "-" + key.Receiver
+	return key.JID + "+" + key.Receiver
 }
 
 func (key PortalKey) IsPrivate() bool {

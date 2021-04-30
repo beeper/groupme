@@ -189,6 +189,10 @@ func (puppet *Puppet) DefaultIntent() *appservice.IntentAPI {
 func (puppet *Puppet) UpdateAvatar(source *User, portalMXID id.RoomID, avatar string) bool {
 	memberRaw, _ := puppet.bridge.StateStore.TryGetMemberRaw(portalMXID, puppet.MXID) //TODO Handle
 
+	if memberRaw.Avatar == avatar {
+		return false // up to date
+	}
+
 	if len(avatar) == 0 {
 		var err error
 		err = puppet.DefaultIntent().SetRoomAvatarURL(portalMXID, id.ContentURI{})
@@ -204,10 +208,6 @@ func (puppet *Puppet) UpdateAvatar(source *User, portalMXID id.RoomID, avatar st
 
 		puppet.bridge.StateStore.SetMemberRaw(&memberRaw) //TODO handle
 		return true
-	}
-
-	if memberRaw.Avatar == avatar {
-		return false // up to date
 	}
 
 	//TODO check its actually groupme?
@@ -241,13 +241,15 @@ func (puppet *Puppet) UpdateName(source *User, portalMXID id.RoomID, contact gro
 
 	memberRaw, _ := puppet.bridge.StateStore.TryGetMemberRaw(portalMXID, puppet.MXID) //TODO Handle
 	quality = quality                                                                 //quality not used
-	if memberRaw.DisplayName != newName {                                             //&& quality >= puppet.NameQuality[portalMXID] {
+
+	if memberRaw.DisplayName != newName { //&& quality >= puppet.NameQuality[portalMXID] {
 		var err error
 		err = puppet.DefaultIntent().SetRoomDisplayName(portalMXID, newName)
 
 		if err == nil {
 			memberRaw.DisplayName = newName
 			//	puppet.NameQuality[portalMXID] = quality
+
 			puppet.bridge.StateStore.SetMemberRaw(&memberRaw) //TODO handle; maybe .Update() ?
 			go puppet.updatePortalName()
 		} else {

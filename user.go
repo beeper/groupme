@@ -914,12 +914,18 @@ func (user *User) handleMessageLoop() {
 func (user *User) HandleTextMessage(message groupme.Message) {
 	var group bool
 	var id string
+
 	if message.GroupID.String() != "" {
 		group = true
 		id = message.GroupID.String()
 	} else if message.ConversationID.String() != "" {
 		group = false
-		id = message.ConversationID.String()
+		pk := database.ParsePortalKey(message.ConversationID.String())
+		if pk == nil {
+			user.log.Errorln("Error parsing conversationid/portalkey", message.ConversationID.String(), "ignoring message")
+			return
+		}
+		id = pk.JID
 	} else {
 		user.log.Errorln("Message received without conversation or groupid")
 		return
