@@ -864,7 +864,7 @@ func (user *User) handleMessageLoop() {
 		case msg := <-user.messageOutput:
 			user.bridge.Metrics.TrackBufferLength(user.MXID, len(user.messageOutput))
 			puppet := user.bridge.GetPuppetByJID(msg.data.UserID.String())
-			portal := user.bridge.GetPortalByJID(database.GroupPortalKey(msg.chat))
+			portal := user.bridge.GetPortalByJID(msg.chat)
 			if puppet != nil {
 				puppet.Sync(user, portal.MXID, groupme.Member{
 					UserID:   msg.data.UserID,
@@ -912,25 +912,17 @@ func (user *User) handleMessageLoop() {
 //}
 
 func (user *User) HandleTextMessage(message groupme.Message) {
-	var group bool
-	var id string
+	id := database.ParsePortalKey(message.GroupID.String())
 
-	if message.GroupID.String() != "" {
-		group = true
-		id = message.GroupID.String()
-	} else if message.ConversationID.String() != "" {
-		group = false
-		pk := database.ParsePortalKey(message.ConversationID.String())
-		if pk == nil {
-			user.log.Errorln("Error parsing conversationid/portalkey", message.ConversationID.String(), "ignoring message")
-			return
-		}
-		id = pk.JID
-	} else {
-		user.log.Errorln("Message received without conversation or groupid")
+	if id == nil {
+		id = database.ParsePortalKey(message.ConversationID.String())
+	}
+	if id == nil {
+		user.log.Errorln("Error parsing conversationid/portalkey", message.ConversationID.String(), "ignoring message")
 		return
 	}
-	user.messageInput <- PortalMessage{id, group, user, &message, uint64(message.CreatedAt.ToTime().Unix())}
+
+	user.messageInput <- PortalMessage{*id, user, &message, uint64(message.CreatedAt.ToTime().Unix())}
 }
 
 func (user *User) HandleLike(msg groupme.Message) {

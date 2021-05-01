@@ -37,7 +37,7 @@ func (c Client) IndexAllChats() ([]*groupme.Chat, error) {
 
 func (c Client) LoadMessagesAfter(groupID, lastMessageID string, lastMessageFromMe bool, private bool) ([]*groupme.Message, error) {
 	if private {
-		i, e := c.IndexDirectMessages(context.TODO(), groupID, &groupme.IndexDirectMessagesQuery{
+		ans, e := c.IndexDirectMessages(context.TODO(), groupID, &groupme.IndexDirectMessagesQuery{
 			SinceID: groupme.ID(lastMessageID),
 			//Limit:    num,
 		})
@@ -45,7 +45,11 @@ func (c Client) LoadMessagesAfter(groupID, lastMessageID string, lastMessageFrom
 		if e != nil {
 			return nil, e
 		}
-		return i.Messages, nil
+
+		for i, j := 0, len(ans.Messages)-1; i < j; i, j = i+1, j-1 {
+			ans.Messages[i], ans.Messages[j] = ans.Messages[j], ans.Messages[i]
+		}
+		return ans.Messages, nil
 	} else {
 		i, e := c.IndexMessages(context.TODO(), groupme.ID(groupID), &groupme.IndexMessagesQuery{
 			AfterID: groupme.ID(lastMessageID),

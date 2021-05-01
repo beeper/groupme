@@ -37,19 +37,25 @@ type PortalKey struct {
 func ParsePortalKey(inp types.GroupMeID) *PortalKey {
 	parts := strings.Split(inp, "+")
 
-	if len(parts) != 2 {
-		return nil
-	}
-	if i, err := strconv.Atoi(parts[0]); i == 0 || err != nil {
-		return nil
-	}
-	if i, err := strconv.Atoi(parts[1]); i == 0 || err != nil {
-		return nil
-	}
+	if len(parts) == 1 {
+		if i, err := strconv.Atoi(inp); i == 0 || err != nil {
+			return nil
+		}
+		return &PortalKey{inp, inp}
+	} else if len(parts) == 2 {
+		if i, err := strconv.Atoi(parts[0]); i == 0 || err != nil {
+			return nil
+		}
+		if i, err := strconv.Atoi(parts[1]); i == 0 || err != nil {
+			return nil
+		}
 
-	return &PortalKey{
-		JID:      parts[0],
-		Receiver: parts[1],
+		return &PortalKey{
+			JID:      parts[1],
+			Receiver: parts[0],
+		}
+	} else {
+		return nil
 	}
 }
 

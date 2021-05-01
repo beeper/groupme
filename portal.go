@@ -159,8 +159,7 @@ func (bridge *Bridge) NewPortal(dbPortal *database.Portal) *Portal {
 const recentlyHandledLength = 100
 
 type PortalMessage struct {
-	chat      string
-	group     bool
+	chat      database.PortalKey
 	source    *User
 	data      *groupme.Message
 	timestamp uint64
@@ -270,17 +269,15 @@ func (portal *Portal) markHandled(source *User, message *groupme.Message, mxid i
 }
 
 func (portal *Portal) getMessageIntent(user *User, info *groupme.Message) *appservice.IntentAPI {
-	if info.UserID.String() == user.GetJID() { //from me
-		return portal.bridge.GetPuppetByJID(user.JID).IntentFor(portal) //TODO why is this
-	} else if portal.IsPrivateChat() {
+	if portal.IsPrivateChat() {
+		if info.UserID.String() == user.GetJID() { //from me
+			return portal.bridge.GetPuppetByJID(user.JID).DefaultIntent()
+		}
 		return portal.MainIntent()
 	} else if len(info.UserID.String()) == 0 {
-		//	if len(info.Source.GetParticipant()) != 0 {
-		//		info.SenderJid = info.Source.GetParticipant()
-		//	} else {
-		//		return nil
-		//	}
 		println("TODO weird uid stuff")
+	} else if info.UserID.String() == user.GetJID() { //from me
+		return portal.bridge.GetPuppetByJID(user.JID).IntentFor(portal)
 	}
 	return portal.bridge.GetPuppetByJID(info.UserID.String()).IntentFor(portal)
 }
@@ -305,7 +302,7 @@ func (portal *Portal) startHandling(source *User, info *groupme.Message) *appser
 		if intent != nil {
 			portal.log.Debugfln("Starting handling of %s (ts: %d)", info.ID, info.CreatedAt)
 		} else {
-			portal.log.Debugfln("Not handling %s: sender is not known")
+			portal.log.Debugfln("Not handling %s: sender is not known", info.ID.String())
 		}
 		return intent
 	}
@@ -742,7 +739,8 @@ func (portal *Portal) beginBackfill() func() {
 		portal.privateChatBackfillInvitePuppet = nil
 		portal.backfillLock.Unlock()
 		if privateChatPuppet != nil && privateChatPuppetInvited {
-			_, _ = privateChatPuppet.DefaultIntent().LeaveRoom(portal.MXID)
+			//_, _ = privateChatPuppet.DefaultIntent().LeaveRoom(portal.MXID)
+			//why this shouldn't really happen NOTE
 		}
 	}
 }
@@ -865,7 +863,7 @@ func (portal *Portal) handleHistory(user *User, messages []*groupme.Message) {
 		if portal.privateChatBackfillInvitePuppet != nil && message.UserID.String() == user.JID && portal.IsPrivateChat() {
 			portal.privateChatBackfillInvitePuppet()
 		}
-		portal.handleMessage(PortalMessage{portal.Key.JID, portal.Key.JID == portal.Key.Receiver, user, message, uint64(message.CreatedAt.ToTime().Unix())})
+		portal.handleMessage(PortalMessage{portal.Key, user, message, uint64(message.CreatedAt.ToTime().Unix())})
 	}
 }
 
@@ -941,7 +939,6 @@ func (portal *Portal) CreateMatrixRoom(user *User) error {
 	portal.log.Infoln("Creating Matrix room. Info source:", user.MXID)
 
 	var metadata *groupme.Group
-	fmt.Println(portal.IsPrivateChat(), portal.Key, portal.Key.Receiver, portal.Key.JID)
 	return nil
 	if portal.IsPrivateChat() {
 		puppet := portal.bridge.GetPuppetByJID(portal.Key.JID)
@@ -1030,6 +1027,8 @@ func (portal *Portal) CreateMatrixRoom(user *User) error {
 	})
 	if err != nil {
 		return err
+	} else if len(resp.RoomID) == 0 {
+		return errors.New("Empty room ID")
 	}
 	portal.MXID = resp.RoomID
 	portal.Update()
@@ -2142,8 +2141,10 @@ func (portal *Portal) convertMatrixMessage(sender *User, evt *event.Event) ([]*g
 	//	}
 	//
 	info := groupme.Message{
-		SourceGUID: evt.ID.String(), //TODO Figure out for multiple messages
-		GroupID:    groupme.ID(portal.Key.JID),
+		GroupID:        groupme.ID(portal.Key.String()),
+		ConversationID: groupme.ID(portal.Key.String()),
+		ChatID:         groupme.ID(portal.Key.String()),
+		RecipientID:    groupme.ID(portal.Key.JID),
 	}
 	replyToID := content.GetReplyTo()
 	if len(replyToID) > 0 {
@@ -2318,10 +2319,10 @@ func (portal *Portal) HandleMatrixMessage(sender *User, evt *event.Event) {
 		return
 	}
 	for _, i := range info {
-		portal.log.Debugln("Sending event", evt.ID, "to WhatsApp", info[0].ID)
+		portal.log.Debugln("Sending event", evt.ID, "to GroupMe", info[0].ID)
 
 		var err error
-		i, err = portal.sendRaw(sender, evt, info[0], false) //TODO deal with multiple messages for longer messages
+		i, err = portal.sendRaw(sender, evt, info[0], -1) //TODO deal with multiple messages for longer messages
 		if err != nil {
 			portal.log.Warnln("Unable to handle message from Matrix", evt.ID)
 			//TODO handle deleted room and such
@@ -2333,21 +2334,30 @@ func (portal *Portal) HandleMatrixMessage(sender *User, evt *event.Event) {
 
 }
 
-func (portal *Portal) sendRaw(sender *User, evt *event.Event, info *groupme.Message, isRetry bool) (*groupme.Message, error) {
+func (portal *Portal) sendRaw(sender *User, evt *event.Event, info *groupme.Message, retries int) (*groupme.Message, error) {
+	if retries == -1 {
+		retries = 2
+	}
 
-	m, err := sender.Client.CreateMessage(context.TODO(), info.GroupID, info)
+	var m *groupme.Message
+	var err error
+
+	if portal.IsPrivateChat() {
+		m, err = sender.Client.CreateDirectMessage(context.TODO(), info)
+	} else {
+		m, err = sender.Client.CreateMessage(context.TODO(), info.GroupID, info)
+	}
+
 	id := ""
 	if m != nil {
 		id = m.ID.String()
 	}
 	if err != nil {
 		portal.log.Warnln(err, id, info.GroupID.String())
-	}
-	if isRetry && err != nil {
-		m, err = sender.Client.CreateMessage(context.TODO(), info.GroupID, info)
-	}
-	if err != nil {
-		return nil, err
+
+		if retries > 0 {
+			return portal.sendRaw(sender, evt, info, retries-1)
+		}
 	}
 	return m, nil
 	// errChan := make(chan error, 1)
