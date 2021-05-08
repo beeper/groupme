@@ -18,7 +18,7 @@ package main
 
 import (
 	// "errors"
-	"context"
+
 	"fmt"
 	"math"
 	"sort"
@@ -419,7 +419,7 @@ func (handler *CommandHandler) CommandLogout(ce *CommandEvent) {
 	// 	ce.User.log.Warnln("Error while disconnecting after logout:", err)
 	// }
 	// ce.User.Conn.RemoveHandlers()
-	ce.User.Conn.Stop(context.TODO())
+	//ce.User.Conn.Stop(context.TODO())
 	ce.User.Conn = nil
 	ce.User.removeFromJIDMap()
 	ce.User.Token = ""
@@ -506,7 +506,7 @@ func (handler *CommandHandler) CommandReconnect(ce *CommandEvent) {
 	}
 
 	wasConnected := true
-	ce.User.Conn.Stop(context.TODO())
+	//ce.User.Conn.Stop(context.TODO())
 	ce.User.Conn = nil
 	//TODO: better connection handling
 
@@ -595,7 +595,7 @@ func (handler *CommandHandler) CommandDisconnect(ce *CommandEvent) {
 		ce.Reply("You don't have a WhatsApp connection.")
 		return
 	}
-	ce.User.Conn.Stop(context.TODO())
+	//ce.User.Conn.Stop(context.TODO())
 	// if err == whatsapp.ErrNotConnected {
 	// 	ce.Reply("You were not connected.")
 	// 	return

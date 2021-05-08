@@ -7,7 +7,8 @@ require (
 	github.com/gabriel-vasile/mimetype v1.1.2
 	github.com/gorilla/websocket v1.4.2
 	github.com/jackc/pgproto3/v2 v2.0.7 // indirect
-	github.com/karmanyaahm/groupme v0.2.0
+	github.com/karmanyaahm/groupme v0.0.0
+	github.com/karmanyaahm/wray v0.0.0-20210303233435-756d58657c14 // indirect
 	github.com/lib/pq v1.9.0
 	github.com/mattn/go-sqlite3 v1.14.6
 	github.com/prometheus/client_golang v1.9.0
@@ -28,8 +29,6 @@ require (
 	maunium.net/go/mautrix v0.8.2
 )
 
-replace github.com/karmanyaahm/groupme => ../groupme
-
-replace github.com/karmanyaahm/wray => ../wray
-
 replace maunium.net/go/mautrix => ../mautrix
+
+replace github.com/karmanyaahm/groupme => ../groupme

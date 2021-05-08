@@ -25,7 +25,6 @@ import (
 	log "maunium.net/go/maulogger/v2"
 
 	"maunium.net/go/mautrix/id"
-
 )
 
 type ProvisioningAPI struct {
@@ -134,7 +133,7 @@ func (prov *ProvisioningAPI) Disconnect(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	//sess, err :=
-	 user.Conn.Stop(context.TODO())
+	//user.Conn.Stop(context.TODO())
 	// if err == whatsapp.ErrNotConnected {
 	// 	jsonResponse(w, http.StatusNotFound, Error{
 	// 		Error:   "You were not connected",

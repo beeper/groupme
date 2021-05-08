@@ -243,9 +243,9 @@ func (user *User) Connect() bool {
 	if timeout == 0 {
 		timeout = 20
 	}
-	conn := groupme.NewPushSubscription(context.TODO())
+	conn := groupme.NewPushSubscription(context.Background())
 	user.Conn = &conn
-	user.Conn.StartListening(context.TODO())
+	user.Conn.StartListening(context.TODO(), groupmeExt.NewFayeClient(user.log))
 	// if err != nil {
 	// 	user.log.Errorln("Failed to connect to WhatsApp:", err)
 	// 	user.sendMarkdownBridgeAlert("\u26a0 Failed to connect to WhatsApp server. " +

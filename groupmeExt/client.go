@@ -26,7 +26,7 @@ func (c Client) IndexAllGroups() ([]*groupme.Group, error) {
 }
 
 func (c Client) IndexAllRelations() ([]*groupme.User, error) {
-	return c.IndexRelations(context.TODO(), &groupme.IndexChatsQuery{})
+	return c.IndexRelations(context.TODO())
 }
 
 func (c Client) IndexAllChats() ([]*groupme.Chat, error) {

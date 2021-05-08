@@ -17,7 +17,6 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"os/signal"
@@ -389,7 +388,7 @@ func (bridge *Bridge) Stop() {
 		}
 		bridge.Log.Debugln("Disconnecting", user.MXID)
 		//sess, err :=
-		user.Conn.Stop(context.TODO())
+		//user.Conn.Stop(context.TODO())
 		// if err != nil {
 		// 	bridge.Log.Errorfln("Error while disconnecting %s: %v", user.MXID, err)
 		// } else if len(sess.Wid) > 0 {
