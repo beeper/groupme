@@ -195,7 +195,7 @@ func (puppet *Puppet) UpdateAvatar(source *User, portalMXID id.RoomID, avatar st
 
 	if len(avatar) == 0 {
 		var err error
-		err = puppet.DefaultIntent().SetRoomAvatarURL(portalMXID, id.ContentURI{})
+		// err = puppet.DefaultIntent().SetRoomAvatarURL(portalMXID, id.ContentURI{})
 
 		if err != nil {
 			puppet.log.Warnln("Failed to remove avatar:", err, puppet.MXID)
@@ -222,7 +222,7 @@ func (puppet *Puppet) UpdateAvatar(source *User, portalMXID id.RoomID, avatar st
 		puppet.log.Warnln("Failed to upload avatar:", err)
 		return false
 	}
-	err = puppet.DefaultIntent().SetRoomAvatarURL(portalMXID, resp.ContentURI)
+	// err = puppet.DefaultIntent().SetRoomAvatarURL(portalMXID, resp.ContentURI)
 	if err != nil {
 		puppet.log.Warnln("Failed to set avatar:", err)
 	}
