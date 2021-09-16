@@ -55,9 +55,9 @@ func NewFormatter(bridge *Bridge) *Formatter {
 				if mxid[0] == '@' {
 					puppet := bridge.GetPuppetByMXID(id.UserID(mxid))
 					if puppet != nil {
-						jids, ok := ctx[mentionedJIDsContextKey].([]groupme.JID)
+						jids, ok := ctx[mentionedJIDsContextKey].([]types.GroupMeID)
 						if !ok {
-							ctx[mentionedJIDsContextKey] = []groupme.JID{puppet.JID}
+							ctx[mentionedJIDsContextKey] = []types.GroupMeID{puppet.JID}
 						} else {
 							ctx[mentionedJIDsContextKey] = append(jids, puppet.JID)
 						}
