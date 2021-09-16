@@ -15,8 +15,6 @@ require (
 	github.com/prometheus/procfs v0.6.0 // indirect
 	github.com/russross/blackfriday/v2 v2.1.0 // indirect
 	github.com/tidwall/sjson v1.1.5 // indirect
-	golang.org/x/crypto v0.0.0-20201221181555-eec23a3978ad // indirect
-	golang.org/x/net v0.0.0-20210119194325-5f4716e94777 // indirect
 	golang.org/x/text v0.3.5 // indirect
 	golang.org/x/xerrors v0.0.0-20200804184101-5ec99f83aff1 // indirect
 	google.golang.org/protobuf v1.25.0 // indirect
@@ -25,8 +23,8 @@ require (
 	gorm.io/driver/sqlite v1.1.4
 	gorm.io/gorm v1.20.12
 	maunium.net/go/mauflag v1.0.0
-	maunium.net/go/maulogger/v2 v2.1.1
-	maunium.net/go/mautrix v0.8.2
+	maunium.net/go/maulogger/v2 v2.2.4
+	maunium.net/go/mautrix v0.9.24
 )
 
 replace github.com/karmanyaahm/groupme => ./groupme
