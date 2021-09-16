@@ -67,7 +67,7 @@ type Config struct {
 		Listen  string `yaml:"listen"`
 	} `yaml:"metrics"`
 
-	WhatsApp struct {
+	GroupMe struct {
 		OSName string `yaml:"os_name"`
 		BrowserName  string `yaml:"browser_name"`
 	} `yaml:"groupme"`
@@ -80,8 +80,8 @@ type Config struct {
 func (config *Config) setDefaults() {
 	config.AppService.Database.MaxOpenConns = 20
 	config.AppService.Database.MaxIdleConns = 2
-	config.WhatsApp.OSName = "Mautrix-GroupMe bridge"
-	config.WhatsApp.BrowserName = "mx-gm"
+	config.GroupMe.OSName = "Mautrix-GroupMe bridge"
+	config.GroupMe.BrowserName = "mx-gm"
 	config.Bridge.setDefaults()
 }
 
