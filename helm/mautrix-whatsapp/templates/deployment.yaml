@@ -1,14 +1,14 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "mautrix-whatsapp.fullname" . }}
+  name: {{ include "mautrix-groupme.fullname" . }}
   labels:
-    {{- include "mautrix-whatsapp.labels" . | nindent 4 }}
+    {{- include "mautrix-groupme.labels" . | nindent 4 }}
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app.kubernetes.io/name: {{ include "mautrix-whatsapp.name" . }}
+      app.kubernetes.io/name: {{ include "mautrix-groupme.name" . }}
       app.kubernetes.io/instance: {{ .Release.Name }}
   template:
     {{- if .Values.podAnnotations }}
@@ -17,10 +17,10 @@ spec:
     {{- end }}
     metadata:
       labels:
-        app.kubernetes.io/name: {{ include "mautrix-whatsapp.name" . }}
+        app.kubernetes.io/name: {{ include "mautrix-groupme.name" . }}
         app.kubernetes.io/instance: {{ .Release.Name }}
     spec:
-      serviceAccountName: {{ template "mautrix-whatsapp.serviceAccountName" . }}
+      serviceAccountName: {{ template "mautrix-groupme.serviceAccountName" . }}
       containers:
         - name: {{ .Chart.Name }}
           securityContext:
@@ -51,7 +51,7 @@ spec:
       volumes:
         - name: config-volume
           configMap:
-            name: {{ template "mautrix-whatsapp.fullname" . }}
+            name: {{ template "mautrix-groupme.fullname" . }}
 
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}

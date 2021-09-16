@@ -42,7 +42,7 @@ import (
 
 var (
 	// These are static
-	Name = "mautrix-whatsapp"
+	Name = "mautrix-groupme"
 	URL  = "https://github.com/tulir/mautrix-whatsapp"
 	// This is changed when making a release
 	Version = "0.1.5"
@@ -438,8 +438,8 @@ func (bridge *Bridge) Main() {
 
 func main() {
 	flag.SetHelpTitles(
-		"mautrix-whatsapp - A Matrix-WhatsApp puppeting bridge.",
-		"mautrix-whatsapp [-h] [-c <path>] [-r <path>] [-g] [--migrate-db <source type> <source uri>]")
+		"mautrix-groupme - A Matrix-GroupMe puppeting bridge.",
+		"mautrix-groupme [-h] [-c <path>] [-r <path>] [-g] [--migrate-db <source type> <source uri>]")
 	err := flag.Parse()
 	if err != nil {
 		_, _ = fmt.Fprintln(os.Stderr, err)

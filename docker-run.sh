@@ -6,11 +6,11 @@ fi
 
 # Define functions.
 function fixperms {
-	chown -R $UID:$GID /data /opt/mautrix-whatsapp
+	chown -R $UID:$GID /data /opt/mautrix-groupme
 }
 
 if [[ ! -f /data/config.yaml ]]; then
-	cp /opt/mautrix-whatsapp/example-config.yaml /data/config.yaml
+	cp /opt/mautrix-groupme/example-config.yaml /data/config.yaml
 	echo "Didn't find a config file."
 	echo "Copied default config file to /data/config.yaml"
 	echo "Modify that config file to your liking."
@@ -19,7 +19,7 @@ if [[ ! -f /data/config.yaml ]]; then
 fi
 
 if [[ ! -f /data/registration.yaml ]]; then
-	/usr/bin/mautrix-whatsapp -g -c /data/config.yaml -r /data/registration.yaml
+	/usr/bin/mautrix-groupme -g -c /data/config.yaml -r /data/registration.yaml
 	echo "Didn't find a registration file."
 	echo "Generated one for you."
 	echo "Copy that over to synapses app service directory."
@@ -28,4 +28,4 @@ fi
 
 cd /data
 fixperms
-exec su-exec $UID:$GID /usr/bin/mautrix-whatsapp
+exec su-exec $UID:$GID /usr/bin/mautrix-groupme

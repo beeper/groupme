@@ -1,12 +1,12 @@
 apiVersion: v1
-name: mautrix-whatsapp
+name: mautrix-groupme
 version: 0.1.0
 appVersion: "0.1.0"
-description: A Matrix-Whatsapp puppeting bridge.
+description: A Matrix-GroupMe puppeting bridge.
 keywords:
   - matrix
   - bridge
-  - whatsapp
+  - groupme
 maintainers:
   - name: Tulir Asokan
     email: tulir@maunium.net
