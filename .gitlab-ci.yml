@@ -14,7 +14,6 @@ stages:
   - export GOCACHE="$CI_PROJECT_DIR/.cache/build"
   - export GO_LDFLAGS="-linkmode external -extldflags -static -X main.Tag=$CI_COMMIT_TAG -X main.Commit=$CI_COMMIT_SHA -X 'main.BuildTime=`date '+%b %_d %Y, %H:%M:%S'`'"
   - git clone https://github.com/karmanyaahm/groupme.git ./groupme
-  - git clone https://github.com/karmanyaahm/mautrix-go.git ./mautrix
   script:
   - go build -ldflags "$GO_LDFLAGS" -o go-groupme
   artifacts:
