@@ -80,7 +80,7 @@ type Config struct {
 func (config *Config) setDefaults() {
 	config.AppService.Database.MaxOpenConns = 20
 	config.AppService.Database.MaxIdleConns = 2
-	config.GroupMe.OSName = "Mautrix-GroupMe bridge"
+	config.GroupMe.OSName = "Go GroupMe bridge"
 	config.GroupMe.BrowserName = "mx-gm"
 	config.Bridge.setDefaults()
 }
