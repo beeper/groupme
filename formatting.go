@@ -32,7 +32,7 @@ var boldRegex = regexp.MustCompile("([\\s>_~]|^)\\*(.+?)\\*([^a-zA-Z\\d]|$)")
 var strikethroughRegex = regexp.MustCompile("([\\s>_*]|^)~(.+?)~([^a-zA-Z\\d]|$)")
 var codeBlockRegex = regexp.MustCompile("```(?:.|\n)+?```")
 
-const mentionedJIDsContextKey = "net.maunium.whatsapp.mentioned_jids"
+const mentionedJIDsContextKey = "net.maunium.groupme.mentioned_jids"
 
 type Formatter struct {
 	bridge *Bridge
@@ -55,9 +55,9 @@ func NewFormatter(bridge *Bridge) *Formatter {
 				if mxid[0] == '@' {
 					puppet := bridge.GetPuppetByMXID(id.UserID(mxid))
 					if puppet != nil {
-						jids, ok := ctx[mentionedJIDsContextKey].([]whatsapp.JID)
+						jids, ok := ctx[mentionedJIDsContextKey].([]groupme.JID)
 						if !ok {
-							ctx[mentionedJIDsContextKey] = []whatsapp.JID{puppet.JID}
+							ctx[mentionedJIDsContextKey] = []groupme.JID{puppet.JID}
 						} else {
 							ctx[mentionedJIDsContextKey] = append(jids, puppet.JID)
 						}
