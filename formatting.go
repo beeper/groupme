@@ -51,13 +51,13 @@ func NewFormatter(bridge *Bridge) *Formatter {
 			TabsToSpaces: 4,
 			Newline:      "\n",
 
-			PillConverter: func(mxid, eventID string, ctx format.Context) string {
+			PillConverter: func(displayname, mxid, eventID string, ctx format.Context) string {
 				if mxid[0] == '@' {
 					puppet := bridge.GetPuppetByMXID(id.UserID(mxid))
 					if puppet != nil {
-						jids, ok := ctx[mentionedJIDsContextKey].([]types.GroupMeID)
+						jids, ok := ctx[mentionedJIDsContextKey].([]whatsapp.JID)
 						if !ok {
-							ctx[mentionedJIDsContextKey] = []types.GroupMeID{puppet.JID}
+							ctx[mentionedJIDsContextKey] = []whatsapp.JID{puppet.JID}
 						} else {
 							ctx[mentionedJIDsContextKey] = append(jids, puppet.JID)
 						}
@@ -97,7 +97,8 @@ func NewFormatter(bridge *Bridge) *Formatter {
 			return fmt.Sprintf("<code>%s</code>", str)
 		},
 	}
-	formatter.waReplFuncText = map[*regexp.Regexp]func(string) string{}
+	formatter.waReplFuncText = map[*regexp.Regexp]func(string) string{
+	}
 	return formatter
 }
 

@@ -1984,7 +1984,7 @@ func (portal *Portal) convertGifToVideo(gif []byte) ([]byte, error) {
 		"-pix_fmt", "yuv420p", "-c:v", "libx264", "-movflags", "+faststart",
 		"-filter:v", "crop='floor(in_w/2)*2:floor(in_h/2)*2'",
 		outputFileName)
-	vcLog := portal.log.Sub("VideoConverter").WithDefaultLevel(log.LevelWarn)
+	vcLog := portal.log.Sub("VideoConverter").Writer(log.LevelWarn)
 	cmd.Stdout = vcLog
 	cmd.Stderr = vcLog
 
