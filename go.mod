@@ -29,6 +29,6 @@ require (
 	maunium.net/go/mautrix v0.8.2
 )
 
-replace maunium.net/go/mautrix => ../mautrix
+replace maunium.net/go/mautrix => ./mautrix
 
-replace github.com/karmanyaahm/groupme => ../groupme
+replace github.com/karmanyaahm/groupme => ./groupme
