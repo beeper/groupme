@@ -244,7 +244,7 @@ func (puppet *Puppet) UpdateName(source *User, portalMXID id.RoomID, contact gro
 
 	if memberRaw.DisplayName != newName { //&& quality >= puppet.NameQuality[portalMXID] {
 		var err error
-		err = puppet.DefaultIntent().SetRoomDisplayName(portalMXID, newName)
+		// err = puppet.DefaultIntent().SetRoomDisplayName(portalMXID, newName)
 
 		if err == nil {
 			memberRaw.DisplayName = newName
