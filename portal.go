@@ -190,16 +190,32 @@ type Portal struct {
 
 const MaxMessageAgeToCreatePortal = 5 * 60 // 5 minutes
 
+func (portal *Portal) syncDoublePuppetDetailsAfterCreate(source *User) {
+	doublePuppet := portal.bridge.GetPuppetByCustomMXID(source.MXID)
+	if doublePuppet == nil {
+		return
+	}
+	source.Conn.Store.ChatsLock.RLock()
+	chat, ok := source.Conn.Store.Chats[portal.Key.JID]
+	source.Conn.Store.ChatsLock.RUnlock()
+	if !ok {
+		portal.log.Debugln("Not syncing chat mute/tags with %s: chat info not found", source.MXID)
+		return
+	}
+	source.syncChatDoublePuppetDetails(doublePuppet, Chat{
+		Chat:   chat,
+		Portal: portal,
+	}, true)
+}
+
+
 func (portal *Portal) handleMessageLoop() {
 	for msg := range portal.messages {
 		if len(portal.MXID) == 0 {
 			if msg.timestamp+MaxMessageAgeToCreatePortal < uint64(time.Now().Unix()) {
 				portal.log.Debugln("Not creating portal room for incoming message: message is too old")
 				continue
-			} else if !portal.shouldCreateRoom(msg) {
-				portal.log.Debugln("Not creating portal room for incoming message: message is not a chat message")
-				continue
-			}
+			} 
 			portal.log.Debugln("Creating Matrix room from incoming message")
 			err := portal.CreateMatrixRoom(msg.source)
 			if err != nil {
@@ -214,13 +230,13 @@ func (portal *Portal) handleMessageLoop() {
 	}
 }
 
-func (portal *Portal) handleMessage(msg PortalMessage) {
+func (portal *Portal) handleMessage(msg PortalMessage, isBackfill bool) {
 	if len(portal.MXID) == 0 {
 		portal.log.Warnln("handleMessage called even though portal.MXID is empty")
 		return
 	}
 	portal.HandleTextMessage(msg.source, msg.data)
-	portal.handleReaction(msg.data.ID.String(), msg.data.FavoritedBy)
+	// portal.handleReaction(msg.data.ID.String(), msg.data.FavoritedBy)
 }
 
 func (portal *Portal) isRecentlyHandled(id groupme.ID) bool {
@@ -968,7 +984,7 @@ func (portal *Portal) CreateMatrixRoom(user *User) error {
 	} else {
 		portal.log.Debugln("else: it's not a private chat")
 		var err error
-		metadata, err = user.Conn.GetGroupMetaData(portal.Key.JID)
+		metadata, err = user.Client.ShowGroup(context.TODO(), groupme.ID(portal.Key.JID))
 		if err == nil && metadata.Status == 0 {
 			portal.Name = metadata.Name
 			portal.Topic = metadata.Topic

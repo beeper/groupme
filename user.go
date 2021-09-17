@@ -677,6 +677,29 @@ func (user *User) getDirectChats() map[id.UserID][]id.RoomID {
 	return res
 }
 
+func (user *User) syncChatDoublePuppetDetails(doublePuppet *Puppet, chat Chat, justCreated bool) {
+	if doublePuppet == nil || doublePuppet.CustomIntent() == nil || len(chat.Portal.MXID) == 0 {
+		return
+	}
+	intent := doublePuppet.CustomIntent()
+	if chat.UnreadCount == 0 && (justCreated || !user.bridge.Config.Bridge.MarkReadOnlyOnCreate) {
+		lastMessage := user.bridge.DB.Message.GetLastInChatBefore(chat.Portal.Key, chat.ReceivedAt.Unix())
+		if lastMessage != nil {
+			err := intent.MarkReadWithContent(chat.Portal.MXID, lastMessage.MXID, &CustomReadReceipt{DoublePuppet: true})
+			if err != nil {
+				user.log.Warnfln("Failed to mark %s in %s as read after backfill: %v", lastMessage.MXID, chat.Portal.MXID, err)
+			}
+		}
+	} else if chat.UnreadCount == -1 {
+		user.log.Debugfln("Invalid unread count (missing field?) in chat info %+v", chat.Source)
+	}
+	if justCreated || !user.bridge.Config.Bridge.TagOnlyOnCreate {
+		user.updateChatMute(intent, chat.Portal, chat.MutedUntil)
+		user.updateChatTag(intent, chat.Portal, user.bridge.Config.Bridge.ArchiveTag, chat.IsArchived)
+		user.updateChatTag(intent, chat.Portal, user.bridge.Config.Bridge.PinnedTag, chat.IsPinned)
+	}
+}
+
 func (user *User) UpdateDirectChats(chats map[id.UserID][]id.RoomID) {
 	if !user.bridge.Config.Bridge.SyncDirectChatList {
 		return
