@@ -190,25 +190,6 @@ type Portal struct {
 
 const MaxMessageAgeToCreatePortal = 5 * 60 // 5 minutes
 
-func (portal *Portal) syncDoublePuppetDetailsAfterCreate(source *User) {
-	doublePuppet := portal.bridge.GetPuppetByCustomMXID(source.MXID)
-	if doublePuppet == nil {
-		return
-	}
-	source.Conn.Store.ChatsLock.RLock()
-	chat, ok := source.Conn.Store.Chats[portal.Key.JID]
-	source.Conn.Store.ChatsLock.RUnlock()
-	if !ok {
-		portal.log.Debugln("Not syncing chat mute/tags with %s: chat info not found", source.MXID)
-		return
-	}
-	source.syncChatDoublePuppetDetails(doublePuppet, Chat{
-		Chat:   chat,
-		Portal: portal,
-	}, true)
-}
-
-
 func (portal *Portal) handleMessageLoop() {
 	for msg := range portal.messages {
 		if len(portal.MXID) == 0 {
@@ -222,15 +203,14 @@ func (portal *Portal) handleMessageLoop() {
 				portal.log.Errorln("Failed to create portal room:", err)
 				continue
 			}
-			portal.syncDoublePuppetDetailsAfterCreate(msg.source)
 		}
 		portal.backfillLock.Lock()
-		portal.handleMessage(msg, false)
+		portal.handleMessage(msg)
 		portal.backfillLock.Unlock()
 	}
 }
 
-func (portal *Portal) handleMessage(msg PortalMessage, isBackfill bool) {
+func (portal *Portal) handleMessage(msg PortalMessage) {
 	if len(portal.MXID) == 0 {
 		portal.log.Warnln("handleMessage called even though portal.MXID is empty")
 		return
@@ -985,11 +965,11 @@ func (portal *Portal) CreateMatrixRoom(user *User) error {
 		portal.log.Debugln("else: it's not a private chat")
 		var err error
 		metadata, err = user.Client.ShowGroup(context.TODO(), groupme.ID(portal.Key.JID))
-		if err == nil && metadata.Status == 0 {
+		if err == nil {
 			portal.Name = metadata.Name
-			portal.Topic = metadata.Topic
+			// portal.Topic = metadata.Topic
 		}
-		portal.UpdateAvatar(user, nil, false)
+		portal.UpdateAvatar(user, metadata.ImageURL, false)
 	}
 
 	bridgeInfoStateKey, bridgeInfo := portal.getBridgeInfo()
