@@ -390,7 +390,7 @@ func (handler *CommandHandler) CommandLogin(ce *CommandEvent) {
 	ce.User.Login(ce)
 }
 
-const cmdLogoutHelp = `logout - Logout from WhatsApp`
+const cmdLogoutHelp = `logout - Logout from GroupMe`
 
 // CommandLogout handles !logout command
 func (handler *CommandHandler) CommandLogout(ce *CommandEvent) {
