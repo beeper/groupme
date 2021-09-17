@@ -936,10 +936,9 @@ func (portal *Portal) CreateMatrixRoom(user *User) error {
 		return err
 	}
 
-	portal.log.Infoln("Creating Matrix room. Info source:", user.MXID, " portal MXID: ", portal.MXID)
+	portal.log.Infoln("Creating Matrix room. Info source:", user.MXID)
 
 	var metadata *groupme.Group
-	return nil
 	if portal.IsPrivateChat() {
 		portal.log.Debugln("isPrivateChat")
 		puppet := portal.bridge.GetPuppetByJID(portal.Key.JID)
