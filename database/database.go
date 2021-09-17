@@ -126,7 +126,7 @@ func (db *Database) Init() error {
 	if err != nil {
 		return err
 	}
-	return nil //upgrades.Run(db.log.Sub("Upgrade"), db.dialect, db.DB)
+	return upgrades.Run(db.log.Sub("Upgrade"), db.dialect, db.DB)
 }
 
 type Scannable interface {
