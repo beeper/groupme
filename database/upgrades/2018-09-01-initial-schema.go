@@ -91,20 +91,26 @@ func init() {
 		)`)
 
 		tx.Exec(`CREATE TABLE IF NOT EXISTS crypto_olm_session (
-			session_id   CHAR(43)  PRIMARY KEY,
+			session_id   CHAR(43)  NOT NULL,
 			sender_key   CHAR(43)  NOT NULL,
 			session      bytea     NOT NULL,
 			created_at   timestamp NOT NULL,
-			last_used    timestamp NOT NULL
+			last_used    timestamp NOT NULL,
+			account_id   TEXT      NOT NULL,
+			PRIMARY KEY (account_id, session_id)
 		)`)
 
 		tx.Exec(`CREATE TABLE IF NOT EXISTS crypto_megolm_inbound_session (
-			session_id   CHAR(43)     PRIMARY KEY,
+			session_id   CHAR(43)     NOT NULL,
 			sender_key   CHAR(43)     NOT NULL,
 			signing_key  CHAR(43)     NOT NULL,
 			room_id      VARCHAR(255) NOT NULL,
 			session      bytea        NOT NULL,
-			forwarding_chains bytea   NOT NULL
+			forwarding_chains bytea   NOT NULL,
+			account_id   TEXT         NOT NULL,
+			withheld_code TEXT,
+			withheld_reason TEXT,
+			PRIMARY KEY (account_id, session_id)
 		)`)
 
 		tx.Exec(`CREATE TABLE IF NOT EXISTS crypto_device (
@@ -137,7 +143,8 @@ func init() {
 			device_id  VARCHAR(255) PRIMARY KEY,
 			shared     BOOLEAN      NOT NULL,
 			sync_token TEXT         NOT NULL,
-			account    bytea        NOT NULL
+			account    bytea        NOT NULL,
+			account_id TEXT         NOT NULL
 		)`)
 
 		tx.Exec(`CREATE TABLE IF NOT EXISTS crypto_megolm_outbound_session (
@@ -150,6 +157,22 @@ func init() {
 			max_age       BIGINT       NOT NULL,
 			created_at    timestamp    NOT NULL,
 			last_used     timestamp    NOT NULL
+		)`)
+
+		tx.Exec(`CREATE TABLE IF NOT EXISTS crypto_cross_signing_keys (
+			user_id TEXT         NOT NULL,
+			usage   TEXT         NOT NULL,
+			key     CHAR(43)     NOT NULL,
+			PRIMARY KEY (user_id, usage)
+		)`)
+
+		tx.Exec(`CREATE TABLE IF NOT EXISTS crypto_cross_signing_signatures (
+			signed_user_id TEXT         NOT NULL,
+			signed_key     TEXT         NOT NULL,
+			signer_user_id TEXT         NOT NULL,
+			signer_key     TEXT         NOT NULL,
+			signature      TEXT         NOT NULL,
+			PRIMARY KEY (signed_user_id, signed_key, signer_user_id, signer_key)
 		)`)
 
 		return nil
