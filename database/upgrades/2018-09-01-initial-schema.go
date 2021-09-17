@@ -15,7 +15,7 @@ func init() {
 			topic  VARCHAR(512) NOT NULL,
 			avatar VARCHAR(255) NOT NULL,
 			avatar_url VARCHAR(255),
-			encrypted BOOLEAN NOT NULL DEFAULT false
+			encrypted BOOLEAN NOT NULL DEFAULT false,
 
 			PRIMARY KEY (jid, receiver)
 		)`)
@@ -91,23 +91,29 @@ func init() {
 		)`)
 
 		tx.Exec(`CREATE TABLE IF NOT EXISTS crypto_olm_session (
-			session_id   CHAR(43)  PRIMARY KEY,
+			session_id   CHAR(43)  NOT NULL,
 			sender_key   CHAR(43)  NOT NULL,
 			session      bytea     NOT NULL,
 			created_at   timestamp NOT NULL,
-			last_used    timestamp NOT NULL
+			last_used    timestamp NOT NULL,
+			account_id   TEXT      NOT NULL,
+			PRIMARY KEY (account_id, session_id)
 		)`)
 
-		tx.Exec(`CREATE TABLE crypto_megolm_inbound_session (
-			session_id   CHAR(43)     PRIMARY KEY,
+		tx.Exec(`CREATE TABLE IF NOT EXISTS crypto_megolm_inbound_session (
+			session_id   CHAR(43)     NOT NULL,
 			sender_key   CHAR(43)     NOT NULL,
 			signing_key  CHAR(43)     NOT NULL,
 			room_id      VARCHAR(255) NOT NULL,
 			session      bytea        NOT NULL,
-			forwarding_chains bytea   NOT NULL
+			forwarding_chains bytea   NOT NULL,
+			account_id   TEXT         NOT NULL,
+			withheld_code TEXT,
+			withheld_reason TEXT,
+			PRIMARY KEY (account_id, session_id)
 		)`)
 
-		tx.Exec(`CREATE TABLE crypto_device (
+		tx.Exec(`CREATE TABLE IF NOT EXISTS crypto_device (
 			user_id      VARCHAR(255),
 			device_id    VARCHAR(255),
 			identity_key CHAR(43)      NOT NULL,
@@ -119,11 +125,11 @@ func init() {
 			PRIMARY KEY (user_id, device_id)
 		)`)
 
-		tx.Exec(`CREATE TABLE crypto_tracked_user (
+		tx.Exec(`CREATE TABLE IF NOT EXISTS crypto_tracked_user (
 			user_id VARCHAR(255) PRIMARY KEY
 		)`)
 
-		tx.Exec(`CREATE TABLE crypto_message_index (
+		tx.Exec(`CREATE TABLE IF NOT EXISTS crypto_message_index (
 			sender_key CHAR(43),
 			session_id CHAR(43),
 			"index"    INTEGER,
@@ -133,14 +139,15 @@ func init() {
 			PRIMARY KEY (sender_key, session_id, "index")
 		)`)
 
-		tx.Exec(`CREATE TABLE crypto_account (
+		tx.Exec(`CREATE TABLE IF NOT EXISTS crypto_account (
 			device_id  VARCHAR(255) PRIMARY KEY,
 			shared     BOOLEAN      NOT NULL,
 			sync_token TEXT         NOT NULL,
-			account    bytea        NOT NULL
+			account    bytea        NOT NULL,
+			account_id TEXT         NOT NULL
 		)`)
 
-		tx.Exec(`CREATE TABLE crypto_megolm_outbound_session (
+		tx.Exec(`CREATE TABLE IF NOT EXISTS crypto_megolm_outbound_session (
 			room_id       VARCHAR(255) PRIMARY KEY,
 			session_id    CHAR(43)     NOT NULL UNIQUE,
 			session       bytea        NOT NULL,
@@ -150,6 +157,22 @@ func init() {
 			max_age       BIGINT       NOT NULL,
 			created_at    timestamp    NOT NULL,
 			last_used     timestamp    NOT NULL
+		)`)
+
+		tx.Exec(`CREATE TABLE IF NOT EXISTS crypto_cross_signing_keys (
+			user_id TEXT         NOT NULL,
+			usage   TEXT         NOT NULL,
+			key     CHAR(43)     NOT NULL,
+			PRIMARY KEY (user_id, usage)
+		)`)
+
+		tx.Exec(`CREATE TABLE IF NOT EXISTS crypto_cross_signing_signatures (
+			signed_user_id TEXT         NOT NULL,
+			signed_key     TEXT         NOT NULL,
+			signer_user_id TEXT         NOT NULL,
+			signer_key     TEXT         NOT NULL,
+			signature      TEXT         NOT NULL,
+			PRIMARY KEY (signed_user_id, signed_key, signer_user_id, signer_key)
 		)`)
 
 		return nil
