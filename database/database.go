@@ -29,6 +29,8 @@ import (
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/schema"
+
+	"github.com/karmanyaahm/matrix-groupme-go/database/upgrades"
 )
 
 type Database struct {
