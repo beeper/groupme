@@ -6,7 +6,7 @@ import (
 
 func init() {
 	upgrades[0] = upgrade{"Initial schema", func(tx *gorm.DB, ctx context) error {
-		err := tx.Exec(`CREATE TABLE IF NOT EXISTS portal (
+		tx.Exec(`CREATE TABLE IF NOT EXISTS portal (
 			jid      VARCHAR(255),
 			receiver VARCHAR(255),
 			mxid     VARCHAR(255) UNIQUE,
@@ -19,11 +19,8 @@ func init() {
 
 			PRIMARY KEY (jid, receiver)
 		)`)
-		if err != nil {
-			return err
-		}
 
-		err = tx.Exec(`CREATE TABLE IF NOT EXISTS puppet (
+		tx.Exec(`CREATE TABLE IF NOT EXISTS puppet (
 			jid          VARCHAR(255) PRIMARY KEY,
 			avatar       VARCHAR(255),
 			displayname  VARCHAR(255),
@@ -35,11 +32,8 @@ func init() {
 			enable_presence BOOLEAN NOT NULL DEFAULT true,
 			enable_receipts BOOLEAN NOT NULL DEFAULT true
 		)`)
-		if err != nil {
-			return err
-		}
 
-		err = tx.Exec(`CREATE TABLE IF NOT EXISTS "user" (
+		tx.Exec(`CREATE TABLE IF NOT EXISTS "user" (
 			mxid VARCHAR(255) PRIMARY KEY,
 			jid  VARCHAR(255) UNIQUE,
 
@@ -52,11 +46,8 @@ func init() {
 			mac_key      bytea,
 			last_connection BIGINT NOT NULL DEFAULT 0
 		)`)
-		if err != nil {
-			return err
-		}
 
-		err = tx.Exec(`CREATE TABLE IF NOT EXISTS "user_portal" (
+		tx.Exec(`CREATE TABLE IF NOT EXISTS "user_portal" (
 			user_jid        VARCHAR(255),
 			portal_jid      VARCHAR(255),
 			portal_receiver VARCHAR(255),
@@ -67,11 +58,8 @@ func init() {
 			FOREIGN KEY (user_jid) REFERENCES "user"(jid) ON DELETE CASCADE,
 			FOREIGN KEY (portal_jid, portal_receiver) REFERENCES portal(jid, receiver) ON DELETE CASCADE
 		)`)
-		if err != nil {
-			return err
-		}
 
-		err = tx.Exec(`CREATE TABLE IF NOT EXISTS message (
+		tx.Exec(`CREATE TABLE IF NOT EXISTS message (
 			chat_jid      VARCHAR(255),
 			chat_receiver VARCHAR(255),
 			jid           VARCHAR(255),
@@ -83,26 +71,17 @@ func init() {
 			PRIMARY KEY (chat_jid, chat_receiver, jid),
 			FOREIGN KEY (chat_jid, chat_receiver) REFERENCES portal(jid, receiver) ON DELETE CASCADE
 		)`)
-		if err != nil {
-			return err
-		}
 
-		err = tx.Exec(`CREATE TABLE IF NOT EXISTS mx_registrations (
+		tx.Exec(`CREATE TABLE IF NOT EXISTS mx_registrations (
 			user_id VARCHAR(255) PRIMARY KEY
 		)`)
-		if err != nil {
-			return err
-		}
 
-		err = tx.Exec(`CREATE TABLE IF NOT EXISTS mx_room_state (
+		tx.Exec(`CREATE TABLE IF NOT EXISTS mx_room_state (
 			room_id      VARCHAR(255) PRIMARY KEY,
 			power_levels TEXT
 		)`)
-		if err != nil {
-			return err
-		}
 
-		err = tx.Exec(`CREATE TABLE IF NOT EXISTS mx_user_profile (
+		tx.Exec(`CREATE TABLE IF NOT EXISTS mx_user_profile (
 			room_id     VARCHAR(255),
 			user_id     VARCHAR(255),
 			membership  VARCHAR(15) NOT NULL,
@@ -110,22 +89,16 @@ func init() {
 			displayname TEXT,
 			avatar_url VARCHAR(255)
 		)`)
-		if err != nil {
-			return err
-		}
 
-		err = tx.Exec(`CREATE TABLE IF NOT EXISTS crypto_olm_session (
+		tx.Exec(`CREATE TABLE IF NOT EXISTS crypto_olm_session (
 			session_id   CHAR(43)  PRIMARY KEY,
 			sender_key   CHAR(43)  NOT NULL,
 			session      bytea     NOT NULL,
 			created_at   timestamp NOT NULL,
 			last_used    timestamp NOT NULL
 		)`)
-		if err != nil {
-			return err
-		}
 
-		err = tx.Exec(`CREATE TABLE crypto_megolm_inbound_session (
+		tx.Exec(`CREATE TABLE crypto_megolm_inbound_session (
 			session_id   CHAR(43)     PRIMARY KEY,
 			sender_key   CHAR(43)     NOT NULL,
 			signing_key  CHAR(43)     NOT NULL,
@@ -133,11 +106,8 @@ func init() {
 			session      bytea        NOT NULL,
 			forwarding_chains bytea   NOT NULL
 		)`)
-		if err != nil {
-			return err
-		}
 
-		err = tx.Exec(`CREATE TABLE crypto_device (
+		tx.Exec(`CREATE TABLE crypto_device (
 			user_id      VARCHAR(255),
 			device_id    VARCHAR(255),
 			identity_key CHAR(43)      NOT NULL,
@@ -149,14 +119,11 @@ func init() {
 			PRIMARY KEY (user_id, device_id)
 		)`)
 
-		err = tx.Exec(`CREATE TABLE crypto_tracked_user (
+		tx.Exec(`CREATE TABLE crypto_tracked_user (
 			user_id VARCHAR(255) PRIMARY KEY
 		)`)
-		if err != nil {
-			return err
-		}
 
-		err = tx.Exec(`CREATE TABLE crypto_message_index (
+		tx.Exec(`CREATE TABLE crypto_message_index (
 			sender_key CHAR(43),
 			session_id CHAR(43),
 			"index"    INTEGER,
@@ -165,21 +132,15 @@ func init() {
 
 			PRIMARY KEY (sender_key, session_id, "index")
 		)`)
-		if err != nil {
-			return err
-		}
 
-		err = tx.Exec(`CREATE TABLE crypto_account (
+		tx.Exec(`CREATE TABLE crypto_account (
 			device_id  VARCHAR(255) PRIMARY KEY,
 			shared     BOOLEAN      NOT NULL,
 			sync_token TEXT         NOT NULL,
 			account    bytea        NOT NULL
 		)`)
-		if err != nil {
-			return err
-		}
 
-		err = tx.Exec(`CREATE TABLE crypto_megolm_outbound_session (
+		tx.Exec(`CREATE TABLE crypto_megolm_outbound_session (
 			room_id       VARCHAR(255) PRIMARY KEY,
 			session_id    CHAR(43)     NOT NULL UNIQUE,
 			session       bytea        NOT NULL,
@@ -190,9 +151,6 @@ func init() {
 			created_at    timestamp    NOT NULL,
 			last_used     timestamp    NOT NULL
 		)`)
-		if err != nil {
-			return err
-		}
 
 		return nil
 	}}
