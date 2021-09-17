@@ -194,18 +194,22 @@ func (portal *Portal) handleMessageLoop() {
 	for msg := range portal.messages {
 		if len(portal.MXID) == 0 {
 			if msg.timestamp+MaxMessageAgeToCreatePortal < uint64(time.Now().Unix()) {
-				portal.log.Debugln("Not creating portal room for incoming message as the message is too old.")
+				portal.log.Debugln("Not creating portal room for incoming message: message is too old")
+				continue
+			} else if !portal.shouldCreateRoom(msg) {
+				portal.log.Debugln("Not creating portal room for incoming message: message is not a chat message")
 				continue
 			}
 			portal.log.Debugln("Creating Matrix room from incoming message")
 			err := portal.CreateMatrixRoom(msg.source)
 			if err != nil {
 				portal.log.Errorln("Failed to create portal room:", err)
-				return
+				continue
 			}
+			portal.syncDoublePuppetDetailsAfterCreate(msg.source)
 		}
 		portal.backfillLock.Lock()
-		portal.handleMessage(msg)
+		portal.handleMessage(msg, false)
 		portal.backfillLock.Unlock()
 	}
 }
@@ -936,11 +940,12 @@ func (portal *Portal) CreateMatrixRoom(user *User) error {
 		return err
 	}
 
-	portal.log.Infoln("Creating Matrix room. Info source:", user.MXID)
+	portal.log.Infoln("Creating Matrix room. Info source:", user.MXID, " portal MXID: ", portal.MXID)
 
 	var metadata *groupme.Group
 	return nil
 	if portal.IsPrivateChat() {
+		portal.log.Debugln("isPrivateChat")
 		puppet := portal.bridge.GetPuppetByJID(portal.Key.JID)
 		meta, err := portal.bridge.StateStore.TryGetMemberRaw("", puppet.MXID)
 		if err {
@@ -961,15 +966,14 @@ func (portal *Portal) CreateMatrixRoom(user *User) error {
 		//	 	portal.Name = "WhatsApp Status Broadcast"
 		//	 	portal.Topic = "WhatsApp status updates from your contacts"
 	} else {
+		portal.log.Debugln("else: it's not a private chat")
 		var err error
-		metadata, err = user.Client.ShowGroup(context.TODO(), groupme.ID(portal.Key.JID))
-		if err == nil {
+		metadata, err = user.Conn.GetGroupMetaData(portal.Key.JID)
+		if err == nil && metadata.Status == 0 {
 			portal.Name = metadata.Name
-			portal.Topic = metadata.Description
-			portal.UpdateAvatar(user, metadata.ImageURL, false)
-		} else {
-			portal.log.Warnln("Cannot fetch group metadata for new portal")
+			portal.Topic = metadata.Topic
 		}
+		portal.UpdateAvatar(user, nil, false)
 	}
 
 	bridgeInfoStateKey, bridgeInfo := portal.getBridgeInfo()
