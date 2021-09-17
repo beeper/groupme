@@ -15,7 +15,7 @@ func init() {
 			topic  VARCHAR(512) NOT NULL,
 			avatar VARCHAR(255) NOT NULL,
 			avatar_url VARCHAR(255),
-			encrypted BOOLEAN NOT NULL DEFAULT false
+			encrypted BOOLEAN NOT NULL DEFAULT false,
 
 			PRIMARY KEY (jid, receiver)
 		)`)
