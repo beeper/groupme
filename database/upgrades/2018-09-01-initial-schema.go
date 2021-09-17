@@ -104,13 +104,13 @@ func init() {
 			session_id   CHAR(43)     NOT NULL,
 			sender_key   CHAR(43)     NOT NULL,
 			signing_key  CHAR(43)     NOT NULL,
-			room_id      VARCHAR(255) NOT NULL,
+			room_id      TEXT         NOT NULL,
 			session      bytea        NOT NULL,
 			forwarding_chains bytea   NOT NULL,
 			account_id   TEXT         NOT NULL,
 			withheld_code TEXT,
 			withheld_reason TEXT,
-			PRIMARY KEY (account_id, session_id)
+			PRIMARY KEY (session_id, account_id)
 		)`)
 
 		tx.Exec(`CREATE TABLE IF NOT EXISTS crypto_device (
@@ -140,15 +140,15 @@ func init() {
 		)`)
 
 		tx.Exec(`CREATE TABLE IF NOT EXISTS crypto_account (
-			device_id  VARCHAR(255) PRIMARY KEY,
+			device_id  TEXT         NOT NULL,
 			shared     BOOLEAN      NOT NULL,
 			sync_token TEXT         NOT NULL,
 			account    bytea        NOT NULL,
-			account_id TEXT         NOT NULL
+			account_id TEXT         PRIMARY KEY
 		)`)
 
 		tx.Exec(`CREATE TABLE IF NOT EXISTS crypto_megolm_outbound_session (
-			room_id       VARCHAR(255) PRIMARY KEY,
+			room_id       VARCHAR(255) NOT NULL,
 			session_id    CHAR(43)     NOT NULL UNIQUE,
 			session       bytea        NOT NULL,
 			shared        BOOLEAN      NOT NULL,
@@ -156,7 +156,9 @@ func init() {
 			message_count INTEGER      NOT NULL,
 			max_age       BIGINT       NOT NULL,
 			created_at    timestamp    NOT NULL,
-			last_used     timestamp    NOT NULL
+			last_used     timestamp    NOT NULL,
+			account_id    TEXT,
+			PRIMARY KEY (room_id, account_id)
 		)`)
 
 		tx.Exec(`CREATE TABLE IF NOT EXISTS crypto_cross_signing_keys (
