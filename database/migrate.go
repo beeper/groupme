@@ -92,8 +92,9 @@ package database
 // }
 
 func Migrate(old *Database, new *Database) {
-print("skipping migration because test")
+	print("skipping migration because test")
 }
+
 // 	err := migrateTable(old, new, "portal", "jid", "receiver", "mxid", "name", "topic", "avatar", "avatar_url", "encrypted")
 // 	if err != nil {
 // 		panic(err)

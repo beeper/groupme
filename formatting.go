@@ -97,8 +97,7 @@ func NewFormatter(bridge *Bridge) *Formatter {
 			return fmt.Sprintf("<code>%s</code>", str)
 		},
 	}
-	formatter.waReplFuncText = map[*regexp.Regexp]func(string) string{
-	}
+	formatter.waReplFuncText = map[*regexp.Regexp]func(string) string{}
 	return formatter
 }
 

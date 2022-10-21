@@ -17,13 +17,9 @@
 package main
 
 import (
-	// "errors"
-
 	"fmt"
 	"math"
 	"sort"
-
-	// "math"
 
 	"strconv"
 	"strings"
@@ -879,12 +875,11 @@ func (handler *CommandHandler) CommandOpen(ce *CommandEvent) {
 const cmdPMHelp = `pm - To direct message someone already in a shared group start a direct chat with them in Matrix`
 
 func (handler *CommandHandler) CommandPM(ce *CommandEvent) {
-	ce.Reply(fmt.Sprintf("**DEPRECATED COMMAND:** `%s`", cmdPMHelp))
-	return
-	if len(ce.Args) == 0 {
-		ce.Reply(fmt.Sprintf("**DEPRECATED COMMAND:** `%s`", cmdPMHelp))
-		return
-	}
+	// ce.Reply(fmt.Sprintf("**DEPRECATED COMMAND:** `%s`", cmdPMHelp))
+	// if len(ce.Args) == 0 {
+	// 	ce.Reply(fmt.Sprintf("**DEPRECATED COMMAND:** `%s`", cmdPMHelp))
+	// 	return
+	// }
 
 	//	force := ce.Args[0] == "--force"
 	//	if force {
