@@ -1,8 +1,5 @@
 .idea
 
-*.yaml
-!example-config.yaml
-
 *.session
 *.json
 *.db
