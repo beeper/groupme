@@ -3,8 +3,9 @@ package groupmeExt
 import (
 	"context"
 
-	"github.com/beeper/groupme/types"
 	"github.com/karmanyaahm/groupme"
+
+	"github.com/beeper/groupme/types"
 )
 
 type Client struct {

@@ -24,10 +24,11 @@ import (
 	"strconv"
 	"strings"
 
+	"maunium.net/go/maulogger/v2"
+
 	"github.com/beeper/groupme/database"
 	"github.com/beeper/groupme/types"
 	whatsappExt "github.com/beeper/groupme/whatsapp-ext"
-	"maunium.net/go/maulogger/v2"
 
 	"maunium.net/go/mautrix"
 	"maunium.net/go/mautrix/appservice"
