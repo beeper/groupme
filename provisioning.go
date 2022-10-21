@@ -34,8 +34,8 @@ type ProvisioningAPI struct {
 
 func (prov *ProvisioningAPI) Init() {
 	prov.log = prov.bridge.Log.Sub("Provisioning")
-	prov.log.Debugln("Enabling provisioning API at", prov.bridge.Config.AppService.Provisioning.Prefix)
-	r := prov.bridge.AS.Router.PathPrefix(prov.bridge.Config.AppService.Provisioning.Prefix).Subrouter()
+	prov.log.Debugln("Enabling provisioning API at", prov.bridge.Config.Bridge.Provisioning.Prefix)
+	r := prov.bridge.AS.Router.PathPrefix(prov.bridge.Config.Bridge.Provisioning.Prefix).Subrouter()
 	r.Use(prov.AuthMiddleware)
 	r.HandleFunc("/ping", prov.Ping).Methods(http.MethodGet)
 	r.HandleFunc("/login", prov.Login)
@@ -61,7 +61,7 @@ func (prov *ProvisioningAPI) AuthMiddleware(h http.Handler) http.Handler {
 		} else if strings.HasPrefix(auth, "Bearer ") {
 			auth = auth[len("Bearer "):]
 		}
-		if auth != prov.bridge.Config.AppService.Provisioning.SharedSecret {
+		if auth != prov.bridge.Config.Bridge.Provisioning.SharedSecret {
 			jsonResponse(w, http.StatusForbidden, map[string]interface{}{
 				"error":   "Invalid auth token",
 				"errcode": "M_FORBIDDEN",
@@ -150,7 +150,7 @@ func (prov *ProvisioningAPI) Disconnect(w http.ResponseWriter, r *http.Request) 
 	// } else if len(sess.Wid) > 0 {
 	// 	user.SetSession(&sess)
 	// }
-	user.bridge.Metrics.TrackConnectionState(user.JID, false)
+	user.bridge.Metrics.TrackConnectionState(user.GMID, false)
 	jsonResponse(w, http.StatusOK, Response{true, "Disconnected from WhatsApp"})
 }
 

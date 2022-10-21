@@ -366,7 +366,7 @@ func (portal *Portal) SyncParticipants(metadata *groupme.Group) {
 		if user != nil {
 			changed = levels.EnsureUserLevel(user.MXID, expectedLevel) || changed
 		}
-		puppet.Sync(nil, portal.MXID, *participant) //why nil whynot
+		puppet.Sync(nil, participant, false, false)
 	}
 	if changed {
 		_, err = portal.MainIntent().SetPowerLevels(portal.MXID, levels)
@@ -394,6 +394,10 @@ func (portal *Portal) SyncParticipants(metadata *groupme.Group) {
 			}
 		}
 	}
+}
+
+func (user *User) updateAvatar(gmdi groupme.ID, avatarID *string, avatarURL *id.ContentURI, avatarSet *bool, log log.Logger, intent *appservice.IntentAPI) bool {
+	return false
 }
 
 func (portal *Portal) UpdateAvatar(user *User, avatar string, updateInfo bool) bool {
@@ -670,29 +674,27 @@ type BridgeInfoContent struct {
 	Channel   BridgeInfoSection  `json:"channel"`
 }
 
-var (
-	StateBridgeInfo         = event.Type{Type: "m.bridge", Class: event.StateEventType}
-	StateHalfShotBridgeInfo = event.Type{Type: "uk.half-shot.bridge", Class: event.StateEventType}
-)
+func (portal *Portal) getBridgeInfoStateKey() string {
+	return fmt.Sprintf("com.beeper.groupme://groupme/%s", portal.Key.GMID)
+}
 
-func (portal *Portal) getBridgeInfo() (string, BridgeInfoContent) {
-	bridgeInfo := BridgeInfoContent{
+func (portal *Portal) getBridgeInfo() (string, event.BridgeEventContent) {
+	bridgeInfo := event.BridgeEventContent{
 		BridgeBot: portal.bridge.Bot.UserID,
 		Creator:   portal.MainIntent().UserID,
-		Protocol: BridgeInfoSection{
-			ID:          "whatsapp",
-			DisplayName: "WhatsApp",
-			AvatarURL:   id.ContentURIString(portal.bridge.Config.AppService.Bot.Avatar),
-			ExternalURL: "https://www.whatsapp.com/",
+		Protocol: event.BridgeInfoSection{
+			ID:          "groupme",
+			DisplayName: "GroupMe",
+			AvatarURL:   portal.bridge.Config.AppService.Bot.ParsedAvatar.CUString(),
+			ExternalURL: "https://www.groupme.com/",
 		},
-		Channel: BridgeInfoSection{
+		Channel: event.BridgeInfoSection{
 			ID:          portal.Key.GMID.String(),
 			DisplayName: portal.Name,
 			AvatarURL:   portal.AvatarURL.CUString(),
 		},
 	}
-	bridgeInfoStateKey := fmt.Sprintf("net.maunium.whatsapp://whatsapp/%s", portal.Key.GMID)
-	return bridgeInfoStateKey, bridgeInfo
+	return portal.getBridgeInfoStateKey(), bridgeInfo
 }
 
 func (portal *Portal) UpdateBridgeInfo() {
@@ -702,11 +704,12 @@ func (portal *Portal) UpdateBridgeInfo() {
 	}
 	portal.log.Debugln("Updating bridge info...")
 	stateKey, content := portal.getBridgeInfo()
-	_, err := portal.MainIntent().SendStateEvent(portal.MXID, StateBridgeInfo, stateKey, content)
+	_, err := portal.MainIntent().SendStateEvent(portal.MXID, event.StateBridge, stateKey, content)
 	if err != nil {
 		portal.log.Warnln("Failed to update m.bridge:", err)
 	}
-	_, err = portal.MainIntent().SendStateEvent(portal.MXID, StateHalfShotBridgeInfo, stateKey, content)
+	// TODO remove this once https://github.com/matrix-org/matrix-doc/pull/2346 is in spec
+	_, err = portal.MainIntent().SendStateEvent(portal.MXID, event.StateHalfShotBridge, stateKey, content)
 	if err != nil {
 		portal.log.Warnln("Failed to update uk.half-shot.bridge:", err)
 	}
@@ -764,12 +767,12 @@ func (portal *Portal) CreateMatrixRoom(user *User) error {
 			Parsed: portal.GetBasePowerLevels(),
 		},
 	}, {
-		Type:     StateBridgeInfo,
+		Type:     event.StateBridge,
 		Content:  event.Content{Parsed: bridgeInfo},
 		StateKey: &bridgeInfoStateKey,
 	}, {
 		// TODO remove this once https://github.com/matrix-org/matrix-doc/pull/2346 is in spec
-		Type:     StateHalfShotBridgeInfo,
+		Type:     event.StateHalfShotBridge,
 		Content:  event.Content{Parsed: bridgeInfo},
 		StateKey: &bridgeInfoStateKey,
 	}}
@@ -911,6 +914,10 @@ func isGatewayError(err error) bool {
 	return errors.As(err, &httpErr) && (httpErr.IsStatus(http.StatusBadGateway) || httpErr.IsStatus(http.StatusGatewayTimeout))
 }
 
+func (portal *Portal) sendMainIntentMessage(content *event.MessageEventContent) (*mautrix.RespSendEvent, error) {
+	return portal.sendMessage(portal.MainIntent(), event.EventMessage, content, nil, 0)
+}
+
 func (portal *Portal) encrypt(intent *appservice.IntentAPI, content *event.Content, eventType event.Type) (event.Type, error) {
 	if !portal.Encrypted || portal.bridge.Crypto == nil {
 		return eventType, nil
@@ -958,7 +965,7 @@ func (portal *Portal) handleAttachment(intent *appservice.IntentAPI, attachment 
 		}
 		data, uploadMimeType, file := portal.encryptFile(*imgData, mime)
 
-		uploaded, err := portal.uploadWithRetry(intent, data, uploadMimeType, MediaUploadRetries)
+		uploaded, err := intent.UploadBytes(data, uploadMimeType)
 		if err != nil {
 			if errors.Is(err, mautrix.MTooLarge) {
 				err = errors.New("homeserver rejected too large file")
@@ -1006,7 +1013,7 @@ func (portal *Portal) handleAttachment(intent *appservice.IntentAPI, attachment 
 		}
 
 		data, uploadMimeType, file := portal.encryptFile(vidContents, mime)
-		uploaded, err := portal.uploadWithRetry(intent, data, uploadMimeType, MediaUploadRetries)
+		uploaded, err := intent.UploadBytes(data, uploadMimeType)
 		if err != nil {
 			if errors.Is(err, mautrix.MTooLarge) {
 				err = errors.New("homeserver rejected too large file")
@@ -1046,7 +1053,7 @@ func (portal *Portal) handleAttachment(intent *appservice.IntentAPI, attachment 
 		}
 		data, uploadMimeType, file := portal.encryptFile(fileData, fmime)
 
-		uploaded, err := portal.uploadWithRetry(intent, data, uploadMimeType, MediaUploadRetries)
+		uploaded, err := intent.UploadBytes(data, uploadMimeType)
 		if err != nil {
 			if errors.Is(err, mautrix.MTooLarge) {
 				err = errors.New("homeserver rejected too large file")
@@ -1119,149 +1126,6 @@ func (portal *Portal) handleAttachment(intent *appservice.IntentAPI, attachment 
 		return nil, true, fmt.Errorf("Unable to handle groupme attachment type %s", attachment.Type)
 	}
 	// return nil, true, errors.New("Unknown type")
-}
-func (portal *Portal) HandleMediaMessage(source *User, msg mediaMessage) {
-	//	intent := portal.startHandling(source, msg.info)
-	//	if intent == nil {
-	//		return
-	//	}
-	//
-	//	data, err := msg.download()
-	//	if err == whatsapp.ErrMediaDownloadFailedWith404 || err == whatsapp.ErrMediaDownloadFailedWith410 {
-	//		portal.log.Warnfln("Failed to download media for %s: %v. Calling LoadMediaInfo and retrying download...", msg.info.Id, err)
-	//		_, err = source.Conn.LoadMediaInfo(msg.info.RemoteJid, msg.info.Id, msg.info.FromMe)
-	//		if err != nil {
-	//			portal.sendMediaBridgeFailure(source, intent, msg.info, fmt.Errorf("failed to load media info: %w", err))
-	//			return
-	//		}
-	//		data, err = msg.download()
-	//	}
-	//	if err == whatsapp.ErrNoURLPresent {
-	//		portal.log.Debugfln("No URL present error for media message %s, ignoring...", msg.info.Id)
-	//		return
-	//	} else if err != nil {
-	//		portal.sendMediaBridgeFailure(source, intent, msg.info, err)
-	//		return
-	//	}
-	//
-	//	var width, height int
-	//	if strings.HasPrefix(msg.mimeType, "image/") {
-	//		cfg, _, _ := image.DecodeConfig(bytes.NewReader(data))
-	//		width, height = cfg.Width, cfg.Height
-	//	}
-	//
-	//	data, uploadMimeType, file := portal.encryptFile(data, msg.mimeType)
-	//
-	//	uploaded, err := portal.uploadWithRetry(intent, data, uploadMimeType, MediaUploadRetries)
-	//	if err != nil {
-	//		if errors.Is(err, mautrix.MTooLarge) {
-	//			portal.sendMediaBridgeFailure(source, intent, msg.info, errors.New("homeserver rejected too large file"))
-	//		} else if httpErr := err.(mautrix.HTTPError); httpErr.IsStatus(413) {
-	//			portal.sendMediaBridgeFailure(source, intent, msg.info, errors.New("proxy rejected too large file"))
-	//		} else {
-	//			portal.sendMediaBridgeFailure(source, intent, msg.info, fmt.Errorf("failed to upload media: %w", err))
-	//		}
-	//		return
-	//	}
-	//
-	//	if msg.fileName == "" {
-	//		mimeClass := strings.Split(msg.mimeType, "/")[0]
-	//		switch mimeClass {
-	//		case "application":
-	//			msg.fileName = "file"
-	//		default:
-	//			msg.fileName = mimeClass
-	//		}
-	//
-	//		exts, _ := mime.ExtensionsByType(msg.mimeType)
-	//		if exts != nil && len(exts) > 0 {
-	//			msg.fileName += exts[0]
-	//		}
-	//	}
-	//
-	//	content := &event.MessageEventContent{
-	//		Body: msg.fileName,
-	//		File: file,
-	//		Info: &event.FileInfo{
-	//			Size:     len(data),
-	//			MimeType: msg.mimeType,
-	//			Width:    width,
-	//			Height:   height,
-	//			Duration: int(msg.length),
-	//		},
-	//	}
-	//	if content.File != nil {
-	//		content.File.URL = uploaded.ContentURI.CUString()
-	//	} else {
-	//		content.URL = uploaded.ContentURI.CUString()
-	//	}
-	//	portal.SetReply(content, msg.context)
-	//
-	//	if msg.thumbnail != nil && portal.bridge.Config.Bridge.WhatsappThumbnail {
-	//		thumbnailMime := http.DetectContentType(msg.thumbnail)
-	//		thumbnailCfg, _, _ := image.DecodeConfig(bytes.NewReader(msg.thumbnail))
-	//		thumbnailSize := len(msg.thumbnail)
-	//		thumbnail, thumbnailUploadMime, thumbnailFile := portal.encryptFile(msg.thumbnail, thumbnailMime)
-	//		uploadedThumbnail, err := intent.UploadBytes(thumbnail, thumbnailUploadMime)
-	//		if err != nil {
-	//			portal.log.Warnfln("Failed to upload thumbnail for %s: %v", msg.info.Id, err)
-	//		} else if uploadedThumbnail != nil {
-	//			if thumbnailFile != nil {
-	//				thumbnailFile.URL = uploadedThumbnail.ContentURI.CUString()
-	//				content.Info.ThumbnailFile = thumbnailFile
-	//			} else {
-	//				content.Info.ThumbnailURL = uploadedThumbnail.ContentURI.CUString()
-	//			}
-	//			content.Info.ThumbnailInfo = &event.FileInfo{
-	//				Size:     thumbnailSize,
-	//				Width:    thumbnailCfg.Width,
-	//				Height:   thumbnailCfg.Height,
-	//				MimeType: thumbnailMime,
-	//			}
-	//		}
-	//	}
-	//
-	//	switch strings.ToLower(strings.Split(msg.mimeType, "/")[0]) {
-	//	case "image":
-	//		if !msg.sendAsSticker {
-	//			content.MsgType = event.MsgImage
-	//		}
-	//	case "video":
-	//		content.MsgType = event.MsgVideo
-	//	case "audio":
-	//		content.MsgType = event.MsgAudio
-	//	default:
-	//		content.MsgType = event.MsgFile
-	//	}
-	//
-	//	_, _ = intent.UserTyping(portal.MXID, false, 0)
-	//	ts := int64(msg.info.Timestamp * 1000)
-	//	eventType := event.EventMessage
-	//	if msg.sendAsSticker {
-	//		eventType = event.EventSticker
-	//	}
-	//	resp, err := portal.sendMessage(intent, eventType, content, ts)
-	//	if err != nil {
-	//		portal.log.Errorfln("Failed to handle message %s: %v", msg.info.Id, err)
-	//		return
-	//	}
-	//
-	//	if len(msg.caption) > 0 {
-	//		captionContent := &event.MessageEventContent{
-	//			Body:    msg.caption,
-	//			MsgType: event.MsgNotice,
-	//		}
-	//
-	//		portal.bridge.Formatter.ParseWhatsApp(captionContent, msg.context.MentionedJID)
-	//
-	//		_, err := portal.sendMessage(intent, event.EventMessage, captionContent, ts)
-	//		if err != nil {
-	//			portal.log.Warnfln("Failed to handle caption of message %s: %v", msg.info.Id, err)
-	//		}
-	//		// TODO store caption mxid?
-	//	}
-	//
-	//	portal.finishHandling(source, msg.info.Source, resp.EventID)
 }
 
 func (portal *Portal) HandleTextMessage(source *User, message *groupme.Message) {
@@ -1592,19 +1456,7 @@ func (portal *Portal) convertMatrixMessage(sender *User, evt *event.Event) ([]*g
 		//		}
 	}
 	relaybotFormatted := false
-	if sender.NeedsRelaybot(portal) {
-		if !portal.HasRelaybot() {
-			if sender.HasSession() {
-				portal.log.Debugln("Database says", sender.MXID, "not in chat and no relaybot, but trying to send anyway")
-			} else {
-				portal.log.Debugln("Ignoring message from", sender.MXID, "in chat with no relaybot")
-				return nil, sender
-			}
-		} else {
-			relaybotFormatted = portal.addRelaybotFormat(sender, content)
-			sender = portal.bridge.Relaybot
-		}
-	}
+
 	if evt.Type == event.EventSticker {
 		content.MsgType = event.MsgImage
 	} else if content.MsgType == event.MsgImage && content.GetInfo().MimeType == "image/gif" {
@@ -1720,34 +1572,9 @@ func (portal *Portal) wasMessageSent(sender *User, id string) bool {
 	return true
 }
 
-func (portal *Portal) sendErrorMessage(message string) id.EventID {
-	resp, err := portal.sendMainIntentMessage(event.MessageEventContent{
-		MsgType: event.MsgNotice,
-		Body:    fmt.Sprintf("\u26a0 Your message may not have been bridged: %v", message),
-	})
-	if err != nil {
-		portal.log.Warnfln("Failed to send bridging error message:", err)
-		return ""
-	}
-	return resp.EventID
-}
-
-func (portal *Portal) sendDeliveryReceipt(eventID id.EventID) {
-	if portal.bridge.Config.Bridge.DeliveryReceipts {
-		err := portal.bridge.Bot.MarkRead(portal.MXID, eventID)
-		if err != nil {
-			portal.log.Debugfln("Failed to send delivery receipt for %s: %v", eventID, err)
-		}
-	}
-}
-
 var timeout = errors.New("message sending timed out")
 
 func (portal *Portal) HandleMatrixMessage(sender *User, evt *event.Event) {
-	if !portal.HasRelaybot() && ((portal.IsPrivateChat() && sender.JID != portal.Key.Receiver) ||
-		portal.sendMatrixConnectionError(sender, evt.ID)) {
-		return
-	}
 	portal.log.Debugfln("Received event %s", evt.ID)
 	info, sender := portal.convertMatrixMessage(sender, evt)
 	if info == nil {
@@ -1762,11 +1589,9 @@ func (portal *Portal) HandleMatrixMessage(sender *User, evt *event.Event) {
 			portal.log.Warnln("Unable to handle message from Matrix", evt.ID)
 			//TODO handle deleted room and such
 		} else {
-
 			portal.markHandled(sender, i, evt.ID)
 		}
 	}
-
 }
 
 func (portal *Portal) sendRaw(sender *User, evt *event.Event, info *groupme.Message, retries int) (*groupme.Message, error) {
@@ -1892,7 +1717,7 @@ func (portal *Portal) HandleMatrixRedaction(sender *User, evt *event.Event) {
 func (portal *Portal) Delete() {
 	portal.Portal.Delete()
 	portal.bridge.portalsLock.Lock()
-	delete(portal.bridge.portalsByJID, portal.Key)
+	delete(portal.bridge.portalsByGMID, portal.Key)
 	if len(portal.MXID) > 0 {
 		delete(portal.bridge.portalsByMXID, portal.MXID)
 	}
@@ -1976,7 +1801,7 @@ func (portal *Portal) HandleMatrixLeave(sender *User) {
 		return
 	} else {
 		// TODO should we somehow deduplicate this call if this leave was sent by the bridge?
-		err := sender.Client.RemoveFromGroup(sender.JID, portal.Key.GMID)
+		err := sender.Client.RemoveFromGroup(sender.GMID, portal.Key.GMID)
 		if err != nil {
 			portal.log.Errorfln("Failed to leave group as %s: %v", sender.MXID, err)
 			return

@@ -18,9 +18,8 @@ package main
 
 import (
 	"fmt"
-	"os"
 	"regexp"
-	"strings"
+	"sync"
 
 	log "maunium.net/go/maulogger/v2"
 
@@ -31,7 +30,6 @@ import (
 	"maunium.net/go/mautrix/id"
 
 	"github.com/beeper/groupme/database"
-	"github.com/beeper/groupme/groupmeext"
 )
 
 var userIDRegex *regexp.Regexp
@@ -162,8 +160,7 @@ func (bridge *GMBridge) dbPuppetsToPuppets(dbPuppets []*database.Puppet) []*Pupp
 
 func (bridge *GMBridge) FormatPuppetMXID(gmid groupme.ID) id.UserID {
 	return id.NewUserID(
-		bridge.Config.Bridge.FormatUsername(
-			gmid),
+		bridge.Config.Bridge.FormatUsername(gmid.String()),
 		bridge.Config.Homeserver.Domain)
 }
 
@@ -191,17 +188,16 @@ type Puppet struct {
 	customIntent   *appservice.IntentAPI
 	customTypingIn map[id.RoomID]bool
 	customUser     *User
+
+	syncLock sync.Mutex
 }
 
 func (puppet *Puppet) PhoneNumber() string {
-	println("phone num")
-	return strings.Replace(puppet.GMID, whatsappExt.NewUserSuffix, "", 1)
+	return puppet.GMID.String()
 }
 
 func (puppet *Puppet) IntentFor(portal *Portal) *appservice.IntentAPI {
-	if (!portal.IsPrivateChat() && puppet.customIntent == nil) ||
-		(portal.backfilling && portal.bridge.Config.Bridge.InviteOwnPuppetForBackfilling) ||
-		portal.Key.GMID == puppet.GMID {
+	if puppet.customIntent == nil || portal.Key.GMID == puppet.GMID {
 		return puppet.DefaultIntent()
 	}
 	return puppet.customIntent
@@ -219,132 +215,95 @@ func (puppet *Puppet) DefaultIntent() *appservice.IntentAPI {
 //
 //}
 
-func (puppet *Puppet) UpdateAvatar(source *User, portalMXID id.RoomID, avatar string) bool {
-	memberRaw, _ := puppet.bridge.StateStore.TryGetMemberRaw(portalMXID, puppet.MXID) //TODO Handle
-
-	if memberRaw.Avatar == avatar {
-		return false // up to date
-	}
-
-	if len(avatar) == 0 {
-		var err error
-		// err = puppet.DefaultIntent().SetRoomAvatarURL(portalMXID, id.ContentURI{})
-
-		if err != nil {
-			puppet.log.Warnln("Failed to remove avatar:", err, puppet.MXID)
-			os.Exit(1)
+func (puppet *Puppet) UpdateAvatar(source *User, forcePortalSync bool) bool {
+	changed := source.updateAvatar(puppet.GMID, &puppet.Avatar, &puppet.AvatarURL, &puppet.AvatarSet, puppet.log, puppet.DefaultIntent())
+	if !changed || puppet.Avatar == "unauthorized" {
+		if forcePortalSync {
+			go puppet.updatePortalAvatar()
 		}
-		memberRaw.Avatar = avatar
-		memberRaw.AvatarURL = ""
-
-		go puppet.updatePortalAvatar()
-
-		puppet.bridge.StateStore.SetMemberRaw(&memberRaw) //TODO handle
-		return true
+		return changed
 	}
-
-	//TODO check its actually groupme?
-	image, mime, err := groupmeext.DownloadImage(avatar + ".large")
-	if err != nil {
-		puppet.log.Warnln(err)
-		return false
-	}
-
-	resp, err := puppet.DefaultIntent().UploadBytes(*image, mime)
-	if err != nil {
-		puppet.log.Warnln("Failed to upload avatar:", err)
-		return false
-	}
-	// err = puppet.DefaultIntent().SetRoomAvatarURL(portalMXID, resp.ContentURI)
+	err := puppet.DefaultIntent().SetAvatarURL(puppet.AvatarURL)
 	if err != nil {
 		puppet.log.Warnln("Failed to set avatar:", err)
+	} else {
+		puppet.AvatarSet = true
 	}
-
-	memberRaw.AvatarURL = resp.ContentURI.String()
-	memberRaw.Avatar = avatar
-
-	puppet.bridge.StateStore.SetMemberRaw(&memberRaw) //TODO handle
-
 	go puppet.updatePortalAvatar()
 	return true
 }
 
-func (puppet *Puppet) UpdateName(source *User, portalMXID id.RoomID, contact groupme.Member) bool {
-	newName, _ := puppet.bridge.Config.Bridge.FormatDisplayname(contact)
-
-	memberRaw, _ := puppet.bridge.StateStore.TryGetMemberRaw(portalMXID, puppet.MXID) //TODO Handle
-
-	if memberRaw.DisplayName != newName { //&& quality >= puppet.NameQuality[portalMXID] {
-		var err error
-		// err = puppet.DefaultIntent().SetRoomDisplayName(portalMXID, newName)
-
+func (puppet *Puppet) UpdateName(member groupme.Member, forcePortalSync bool) bool {
+	newName := puppet.bridge.Config.Bridge.FormatDisplayname(puppet.GMID, member)
+	if puppet.Displayname != newName || !puppet.NameSet {
+		oldName := puppet.Displayname
+		puppet.Displayname = newName
+		puppet.NameSet = false
+		err := puppet.DefaultIntent().SetDisplayName(newName)
 		if err == nil {
-			memberRaw.DisplayName = newName
-			//	puppet.NameQuality[portalMXID] = quality
-
-			puppet.bridge.StateStore.SetMemberRaw(&memberRaw) //TODO handle; maybe .Update() ?
+			puppet.log.Debugln("Updated name", oldName, "->", newName)
+			puppet.NameSet = true
 			go puppet.updatePortalName()
 		} else {
 			puppet.log.Warnln("Failed to set display name:", err)
 		}
 		return true
+	} else if forcePortalSync {
+		go puppet.updatePortalName()
 	}
 	return false
 }
 
 func (puppet *Puppet) updatePortalMeta(meta func(portal *Portal)) {
-	if puppet.bridge.Config.Bridge.PrivateChatPortalMeta {
-		for _, portal := range puppet.bridge.GetAllPortalsByJID(puppet.JID) {
+	if puppet.bridge.Config.Bridge.PrivateChatPortalMeta || puppet.bridge.Config.Bridge.Encryption.Allow {
+		for _, portal := range puppet.bridge.GetAllPortalsByGMID(puppet.GMID) {
+			if !puppet.bridge.Config.Bridge.PrivateChatPortalMeta && !portal.Encrypted {
+				continue
+			}
+			// Get room create lock to prevent races between receiving contact info and room creation.
+			portal.roomCreateLock.Lock()
 			meta(portal)
+			portal.roomCreateLock.Unlock()
 		}
 	}
 }
 
 func (puppet *Puppet) updatePortalAvatar() {
 	puppet.updatePortalMeta(func(portal *Portal) {
-
-		m, _ := puppet.bridge.StateStore.TryGetMemberRaw(portal.MXID, puppet.MXID)
+		if portal.Avatar == puppet.Avatar && portal.AvatarURL == puppet.AvatarURL && portal.AvatarSet {
+			return
+		}
+		portal.AvatarURL = puppet.AvatarURL
+		portal.Avatar = puppet.Avatar
+		portal.AvatarSet = false
+		defer portal.Update(nil)
 		if len(portal.MXID) > 0 {
-			_, err := portal.MainIntent().SetRoomAvatar(portal.MXID, id.MustParseContentURI(m.AvatarURL))
+			_, err := portal.MainIntent().SetRoomAvatar(portal.MXID, puppet.AvatarURL)
 			if err != nil {
 				portal.log.Warnln("Failed to set avatar:", err)
+			} else {
+				portal.AvatarSet = true
+				portal.UpdateBridgeInfo()
 			}
 		}
-		portal.AvatarURL = id.MustParseContentURI(m.AvatarURL)
-		portal.Avatar = m.Avatar
-		portal.Update()
 	})
 }
 
 func (puppet *Puppet) updatePortalName() {
 	puppet.updatePortalMeta(func(portal *Portal) {
-		m, _ := puppet.bridge.StateStore.TryGetMemberRaw(portal.MXID, puppet.MXID)
-		if len(portal.MXID) > 0 {
-			_, err := portal.MainIntent().SetRoomName(portal.MXID, m.DisplayName)
-			if err != nil {
-				portal.log.Warnln("Failed to set name:", err)
-			}
-		}
-		portal.Name = m.DisplayName
-		portal.Update()
+		portal.UpdateName(puppet.Displayname, groupme.ID(""), true)
 	})
 }
 
-func (puppet *Puppet) Sync(source *User, portalMXID id.RoomID, contact groupme.Member) {
-	if contact.UserID.String() == "system" {
-		puppet.log.Warnln("Trying to sync system puppet")
-		return
-	}
-
+func (puppet *Puppet) Sync(source *User, member *groupme.Member, forceAvatarSync, forcePortalSync bool) {
+	puppet.syncLock.Lock()
+	defer puppet.syncLock.Unlock()
 	err := puppet.DefaultIntent().EnsureRegistered()
 	if err != nil {
 		puppet.log.Errorln("Failed to ensure registered:", err)
 	}
 
-	update := false
-	update = puppet.UpdateName(source, portalMXID, contact) || update
-	update = puppet.UpdateAvatar(source, portalMXID, contact.ImageURL) || update
-	if update {
-		puppet.Update()
-	}
+	puppet.log.Debugfln("Syncing info through %s", source.GMID)
+
+	// TODO
 }

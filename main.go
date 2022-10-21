@@ -17,6 +17,7 @@
 package main
 
 import (
+	_ "embed"
 	"sync"
 
 	"maunium.net/go/mautrix/bridge"

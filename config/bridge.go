@@ -26,6 +26,8 @@ import (
 	"maunium.net/go/mautrix/bridge/bridgeconfig"
 	"maunium.net/go/mautrix/event"
 	"maunium.net/go/mautrix/id"
+
+	"github.com/beeper/groupme-lib"
 )
 
 type DeferredConfig struct {
@@ -182,6 +184,15 @@ func (bc *BridgeConfig) UnmarshalYAML(unmarshal func(interface{}) error) error {
 
 type UsernameTemplateArgs struct {
 	UserID id.UserID
+}
+
+func (bc BridgeConfig) FormatDisplayname(gmid groupme.ID, member groupme.Member) string {
+	var buf strings.Builder
+	_ = bc.displaynameTemplate.Execute(&buf, map[string]string{
+		"Name": member.Nickname,
+		"GMID": gmid.String(),
+	})
+	return buf.String()
 }
 
 func (bc BridgeConfig) FormatUsername(username string) string {
