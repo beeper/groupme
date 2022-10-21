@@ -21,9 +21,10 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/karmanyaahm/groupme"
 	"maunium.net/go/mautrix/format"
 	"maunium.net/go/mautrix/id"
+
+	"github.com/beeper/groupme-lib"
 )
 
 var italicRegex = regexp.MustCompile("([\\s>~*]|^)_(.+?)_([^a-zA-Z\\d]|$)")

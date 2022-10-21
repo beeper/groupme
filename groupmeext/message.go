@@ -9,7 +9,7 @@ import (
 	"io/ioutil"
 	"net/http"
 
-	"github.com/karmanyaahm/groupme"
+	"github.com/beeper/groupme-lib"
 )
 
 type Message struct{ groupme.Message }

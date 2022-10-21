@@ -38,7 +38,7 @@ import (
 	"maunium.net/go/mautrix/format"
 	"maunium.net/go/mautrix/id"
 
-	"github.com/karmanyaahm/groupme"
+	"github.com/beeper/groupme-lib"
 
 	"github.com/beeper/groupme/database"
 	"github.com/beeper/groupme/groupmeext"

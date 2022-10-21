@@ -25,7 +25,7 @@ import (
 	"maunium.net/go/mautrix/id"
 	"maunium.net/go/mautrix/util/configupgrade"
 
-	"github.com/karmanyaahm/groupme"
+	"github.com/beeper/groupme-lib"
 
 	"github.com/beeper/groupme/config"
 	"github.com/beeper/groupme/database"

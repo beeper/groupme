@@ -39,7 +39,8 @@ import (
 
 	"github.com/Rhymen/go-whatsapp"
 	"github.com/gabriel-vasile/mimetype"
-	"github.com/karmanyaahm/groupme"
+
+	"github.com/beeper/groupme-lib"
 
 	"maunium.net/go/mautrix"
 	"maunium.net/go/mautrix/appservice"

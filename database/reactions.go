@@ -8,7 +8,7 @@ import (
 	"maunium.net/go/mautrix/id"
 	"maunium.net/go/mautrix/util/dbutil"
 
-	"github.com/karmanyaahm/groupme"
+	"github.com/beeper/groupme-lib"
 )
 
 type ReactionQuery struct {

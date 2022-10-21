@@ -22,11 +22,12 @@ import (
 	"runtime/debug"
 	"time"
 
-	"github.com/karmanyaahm/groupme"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	log "maunium.net/go/maulogger/v2"
+
+	"github.com/beeper/groupme-lib"
 
 	"maunium.net/go/mautrix/event"
 	"maunium.net/go/mautrix/id"

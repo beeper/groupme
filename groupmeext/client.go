@@ -3,7 +3,7 @@ package groupmeext
 import (
 	"context"
 
-	"github.com/karmanyaahm/groupme"
+	"github.com/beeper/groupme-lib"
 )
 
 type Client struct {

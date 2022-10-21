@@ -26,7 +26,7 @@ import (
 	"maunium.net/go/mautrix/id"
 	"maunium.net/go/mautrix/util/dbutil"
 
-	"github.com/karmanyaahm/groupme"
+	"github.com/beeper/groupme-lib"
 )
 
 // GMID is the puppet or the group

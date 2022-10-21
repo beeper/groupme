@@ -3,8 +3,9 @@ package groupmeext
 import (
 	log "maunium.net/go/maulogger/v2"
 
-	"github.com/karmanyaahm/groupme"
 	"github.com/karmanyaahm/wray"
+
+	"github.com/beeper/groupme-lib"
 )
 
 type fayeLogger struct {

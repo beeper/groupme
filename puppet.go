@@ -22,8 +22,9 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/karmanyaahm/groupme"
 	log "maunium.net/go/maulogger/v2"
+
+	"github.com/beeper/groupme-lib"
 
 	"maunium.net/go/mautrix/appservice"
 	"maunium.net/go/mautrix/bridge"
