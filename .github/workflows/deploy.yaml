@@ -77,7 +77,6 @@ jobs:
     needs:
       - lint
       - test
-      - complement
       - build-docker
     if: github.ref == 'refs/heads/master'
     steps:
