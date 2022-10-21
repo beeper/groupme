@@ -22,8 +22,9 @@ import (
 
 	log "maunium.net/go/maulogger/v2"
 
-	"github.com/beeper/groupme/types"
 	"maunium.net/go/mautrix/id"
+
+	"github.com/beeper/groupme/types"
 )
 
 type UserQuery struct {
