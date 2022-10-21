@@ -24,7 +24,7 @@ import (
 	log "maunium.net/go/maulogger/v2"
 	"maunium.net/go/mautrix/id"
 
-	"github.com/karmanyaahm/matrix-groupme-go/types"
+	"github.com/beeper/groupme/types"
 )
 
 // JID is the puppet or the group

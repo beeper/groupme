@@ -30,8 +30,8 @@ import (
 	"maunium.net/go/mautrix/event"
 	"maunium.net/go/mautrix/id"
 
-	"github.com/karmanyaahm/matrix-groupme-go/database"
-	"github.com/karmanyaahm/matrix-groupme-go/types"
+	"github.com/beeper/groupme/database"
+	"github.com/beeper/groupme/types"
 )
 
 type MetricsHandler struct {

@@ -24,9 +24,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/karmanyaahm/matrix-groupme-go/database"
-	"github.com/karmanyaahm/matrix-groupme-go/types"
-	whatsappExt "github.com/karmanyaahm/matrix-groupme-go/whatsapp-ext"
+	"github.com/beeper/groupme/database"
+	"github.com/beeper/groupme/types"
+	whatsappExt "github.com/beeper/groupme/whatsapp-ext"
 	"maunium.net/go/maulogger/v2"
 
 	"maunium.net/go/mautrix"

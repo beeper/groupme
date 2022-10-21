@@ -1,9 +1,10 @@
 package database
 
 import (
-	"github.com/karmanyaahm/matrix-groupme-go/types"
 	log "maunium.net/go/maulogger/v2"
 	"maunium.net/go/mautrix/id"
+
+	"github.com/beeper/groupme/types"
 )
 
 type ReactionQuery struct {

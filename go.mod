@@ -1,4 +1,4 @@
-module github.com/karmanyaahm/matrix-groupme-go
+module github.com/beeper/groupme
 
 go 1.15
 

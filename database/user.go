@@ -22,7 +22,7 @@ import (
 
 	log "maunium.net/go/maulogger/v2"
 
-	"github.com/karmanyaahm/matrix-groupme-go/types"
+	"github.com/beeper/groupme/types"
 	"maunium.net/go/mautrix/id"
 )
 

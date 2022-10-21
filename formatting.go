@@ -24,7 +24,7 @@ import (
 	"maunium.net/go/mautrix/format"
 	"maunium.net/go/mautrix/id"
 
-	"github.com/karmanyaahm/matrix-groupme-go/types"
+	"github.com/beeper/groupme/types"
 )
 
 var italicRegex = regexp.MustCompile("([\\s>~*]|^)_(.+?)_([^a-zA-Z\\d]|$)")

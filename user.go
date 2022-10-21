@@ -34,11 +34,11 @@ import (
 	"maunium.net/go/mautrix/format"
 	"maunium.net/go/mautrix/id"
 
+	"github.com/beeper/groupme/database"
+	"github.com/beeper/groupme/groupmeExt"
+	"github.com/beeper/groupme/types"
+	whatsappExt "github.com/beeper/groupme/whatsapp-ext"
 	"github.com/karmanyaahm/groupme"
-	"github.com/karmanyaahm/matrix-groupme-go/database"
-	"github.com/karmanyaahm/matrix-groupme-go/groupmeExt"
-	"github.com/karmanyaahm/matrix-groupme-go/types"
-	whatsappExt "github.com/karmanyaahm/matrix-groupme-go/whatsapp-ext"
 )
 
 type User struct {
