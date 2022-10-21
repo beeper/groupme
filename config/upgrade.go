@@ -57,8 +57,6 @@ func DoUpgrade(helper *up.Helper) {
 	helper.Copy(up.Bool, "bridge", "enable_status_broadcast")
 	helper.Copy(up.Bool, "bridge", "disable_status_broadcast_send")
 	helper.Copy(up.Bool, "bridge", "mute_status_broadcast")
-	helper.Copy(up.Str|up.Null, "bridge", "status_broadcast_tag")
-	helper.Copy(up.Bool, "bridge", "whatsapp_thumbnail")
 	helper.Copy(up.Bool, "bridge", "allow_user_invite")
 	helper.Copy(up.Str, "bridge", "command_prefix")
 	helper.Copy(up.Bool, "bridge", "federate_rooms")
@@ -67,7 +65,6 @@ func DoUpgrade(helper *up.Helper) {
 	helper.Copy(up.Bool, "bridge", "crash_on_stream_replaced")
 	helper.Copy(up.Bool, "bridge", "url_previews")
 	helper.Copy(up.Bool, "bridge", "caption_in_message")
-	helper.Copy(up.Bool, "bridge", "send_whatsapp_edits")
 	helper.Copy(up.Str|up.Null, "bridge", "message_handling_timeout", "error_after")
 	helper.Copy(up.Str|up.Null, "bridge", "message_handling_timeout", "deadline")
 
@@ -112,9 +109,6 @@ func DoUpgrade(helper *up.Helper) {
 		helper.Copy(up.Str, "bridge", "provisioning", "shared_secret")
 	}
 	helper.Copy(up.Map, "bridge", "permissions")
-	helper.Copy(up.Bool, "bridge", "relay", "enabled")
-	helper.Copy(up.Bool, "bridge", "relay", "admin_only")
-	helper.Copy(up.Map, "bridge", "relay", "message_formats")
 }
 
 var SpacedBlocks = [][]string{
@@ -133,6 +127,5 @@ var SpacedBlocks = [][]string{
 	{"bridge", "encryption"},
 	{"bridge", "provisioning"},
 	{"bridge", "permissions"},
-	{"bridge", "relay"},
 	{"logging"},
 }

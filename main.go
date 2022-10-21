@@ -52,8 +52,7 @@ type GMBridge struct {
 	Metrics      *MetricsHandler
 
 	usersByMXID         map[id.UserID]*User
-	usersByUsername     map[string]*User
-	usersByGMID         map[groupme.ID]*User // TODO REMOVE?
+	usersByGMID         map[groupme.ID]*User
 	usersLock           sync.Mutex
 	spaceRooms          map[id.RoomID]*User
 	spaceRoomsLock      sync.Mutex
@@ -155,7 +154,7 @@ func (br *GMBridge) StartUsers() {
 func (br *GMBridge) Stop() {
 	br.Metrics.Stop()
 	// TODO anything needed to disconnect the users?
-	for _, user := range br.usersByUsername {
+	for _, user := range br.usersByGMID {
 		if user.Client == nil {
 			continue
 		}
@@ -178,7 +177,7 @@ func (br *GMBridge) GetConfigPtr() interface{} {
 func main() {
 	br := &GMBridge{
 		usersByMXID:         make(map[id.UserID]*User),
-		usersByUsername:     make(map[string]*User),
+		usersByGMID:         make(map[groupme.ID]*User),
 		spaceRooms:          make(map[id.RoomID]*User),
 		managementRooms:     make(map[id.RoomID]*User),
 		portalsByMXID:       make(map[id.RoomID]*Portal),
