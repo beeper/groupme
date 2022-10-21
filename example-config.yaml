@@ -57,6 +57,15 @@ metrics:
     # IP and port where the metrics listener should be. The path is always /metrics
     listen: 127.0.0.1:8001
 
+# GroupMe configuration
+groupme:
+    # GroupMe connection timeout in seconds.
+    connection_timeout: 20
+    # If GroupMe doesn't respond within connection_timeout, should the bridge
+    # try to fetch the message to see if it was actually bridged? Use this if
+    # you have problems with sends timing out but actually succeeding.
+    fetch_message_on_timeout: false
+
 # Bridge config
 bridge:
     # Localpart template of MXIDs for WhatsApp users.
@@ -67,26 +76,15 @@ bridge:
     # {{.Nickname}} - the nickname in that room
     # {{.ImageURL}} - User's avatar URL is available but irrelevant here
     displayname_template: "{{if .Nickname}}{{.Nickname}}{{else}}{{call .UserID.String}}{{end}} (GM)"
-    # Localpart template for per-user room grouping community IDs.
-    # On startup, the bridge will try to create these communities, add all of the specific user's
-    # portals to the community, and invite the Matrix user to it.
-    # (Note that, by default, non-admins might not have your homeserver's permission to create
-    #  communities.)
-    # {{.Localpart}} is the MXID localpart and {{.Server}} is the MXID server part of the user.
-    # whatsapp_{{.Localpart}}={{.Server}} is a good value that should work for any user.
-    # communities are NOT YET TESTED in the GroupMe bridge
-    community_template: null
-
-    # GroupMe connection timeout in seconds.
-    connection_timeout: 20
-    # If groupme doesn't respond within connection_timeout, should the bridge try to fetch the message
-    # to see if it was actually bridged? Use this if you have problems with sends timing out but actually
-    # succeeding.
-    fetch_message_on_timeout: false
-    # Whether or not the bridge should send a read receipt from the bridge bot when a message has been
-    # sent to WhatsApp. If fetch_message_on_timeout is enabled, a successful post-timeout fetch will
-    # trigger a read receipt too.
+    # Should the bridge create a space for each logged-in user and add bridged rooms to it?
+    # Users who logged in before turning this on should run `!wa sync space` to create and fill the space for the first time.
+    personal_filtering_spaces: false
+    # Should the bridge send a read receipt from the bridge bot when a message has been sent to WhatsApp?
     delivery_receipts: false
+    # Whether the bridge should send the message status as a custom com.beeper.message_send_status event.
+    message_status_events: false
+    # Whether the bridge should send error notices via m.notice events when a message fails to bridge.
+    message_error_notices: true
 
     # Maximum number of times to retry connecting on connection error.
     max_connection_attempts: 3

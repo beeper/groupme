@@ -17,112 +17,131 @@
 package config
 
 import (
-	"bytes"
-	"strconv"
+	"errors"
+	"fmt"
 	"strings"
 	"text/template"
+	"time"
 
-	"github.com/karmanyaahm/groupme"
+	"maunium.net/go/mautrix/bridge/bridgeconfig"
 	"maunium.net/go/mautrix/event"
 	"maunium.net/go/mautrix/id"
-
-	"github.com/beeper/groupme/types"
 )
+
+type DeferredConfig struct {
+	StartDaysAgo   int `yaml:"start_days_ago"`
+	MaxBatchEvents int `yaml:"max_batch_events"`
+	BatchDelay     int `yaml:"batch_delay"`
+}
 
 type BridgeConfig struct {
 	UsernameTemplate    string `yaml:"username_template"`
 	DisplaynameTemplate string `yaml:"displayname_template"`
-	CommunityTemplate   string `yaml:"community_template"`
 
-	ConnectionTimeout     int  `yaml:"connection_timeout"`
-	FetchMessageOnTimeout bool `yaml:"fetch_message_on_timeout"`
-	DeliveryReceipts      bool `yaml:"delivery_receipts"`
-	LoginQRRegenCount     int  `yaml:"login_qr_regen_count"`
-	MaxConnectionAttempts int  `yaml:"max_connection_attempts"`
-	ConnectionRetryDelay  int  `yaml:"connection_retry_delay"`
-	ReportConnectionRetry bool `yaml:"report_connection_retry"`
-	ChatListWait          int  `yaml:"chat_list_wait"`
-	PortalSyncWait        int  `yaml:"portal_sync_wait"`
-	UserMessageBuffer     int  `yaml:"user_message_buffer"`
-	PortalMessageBuffer   int  `yaml:"portal_message_buffer"`
+	PersonalFilteringSpaces bool `yaml:"personal_filtering_spaces"`
 
-	CallNotices struct {
-		Start bool `yaml:"start"`
-		End   bool `yaml:"end"`
-	} `yaml:"call_notices"`
+	DeliveryReceipts    bool `yaml:"delivery_receipts"`
+	MessageStatusEvents bool `yaml:"message_status_events"`
+	MessageErrorNotices bool `yaml:"message_error_notices"`
+	PortalMessageBuffer int  `yaml:"portal_message_buffer"`
 
-	InitialChatSync      int    `yaml:"initial_chat_sync_count"`
-	InitialHistoryFill   int    `yaml:"initial_history_fill_count"`
-	HistoryDisableNotifs bool   `yaml:"initial_history_disable_notifications"`
-	RecoverChatSync      int    `yaml:"recovery_chat_sync_count"`
-	RecoverHistory       bool   `yaml:"recovery_history_backfill"`
-	SyncChatMaxAge       uint64 `yaml:"sync_max_chat_age"`
+	SyncWithCustomPuppets  bool `yaml:"sync_with_custom_puppets"`
+	SyncDirectChatList     bool `yaml:"sync_direct_chat_list"`
+	SyncManualMarkedUnread bool `yaml:"sync_manual_marked_unread"`
+	DefaultBridgeReceipts  bool `yaml:"default_bridge_receipts"`
 
-	SyncWithCustomPuppets bool   `yaml:"sync_with_custom_puppets"`
-	SyncDirectChatList    bool   `yaml:"sync_direct_chat_list"`
-	DefaultBridgeReceipts bool   `yaml:"default_bridge_receipts"`
-	DefaultBridgePresence bool   `yaml:"default_bridge_presence"`
-	LoginSharedSecret     string `yaml:"login_shared_secret"`
+	HistorySync struct {
+		CreatePortals bool `yaml:"create_portals"`
+		Backfill      bool `yaml:"backfill"`
 
-	InviteOwnPuppetForBackfilling bool `yaml:"invite_own_puppet_for_backfilling"`
-	PrivateChatPortalMeta         bool `yaml:"private_chat_portal_meta"`
-	ResendBridgeInfo              bool `yaml:"resend_bridge_info"`
+		DoublePuppetBackfill    bool `yaml:"double_puppet_backfill"`
+		RequestFullSync         bool `yaml:"request_full_sync"`
+		MaxInitialConversations int  `yaml:"max_initial_conversations"`
+		UnreadHoursThreshold    int  `yaml:"unread_hours_threshold"`
 
-	WhatsappThumbnail bool `yaml:"whatsapp_thumbnail"`
+		Immediate struct {
+			WorkerCount int `yaml:"worker_count"`
+			MaxEvents   int `yaml:"max_events"`
+		} `yaml:"immediate"`
 
-	AllowUserInvite bool `yaml:"allow_user_invite"`
+		Deferred []DeferredConfig `yaml:"deferred"`
+	} `yaml:"history_sync"`
+
+	DoublePuppetServerMap      map[string]string `yaml:"double_puppet_server_map"`
+	DoublePuppetAllowDiscovery bool              `yaml:"double_puppet_allow_discovery"`
+	LoginSharedSecretMap       map[string]string `yaml:"login_shared_secret_map"`
+
+	ResendBridgeInfo bool `yaml:"resend_bridge_info"`
+
+	PrivateChatPortalMeta bool `yaml:"private_chat_portal_meta"`
+	FederateRooms         bool `yaml:"federate_rooms"`
+	AllowUserInvite       bool `yaml:"allow_user_invite"`
+
+	MessageHandlingTimeout struct {
+		ErrorAfterStr string `yaml:"error_after"`
+		DeadlineStr   string `yaml:"deadline"`
+
+		ErrorAfter time.Duration `yaml:"-"`
+		Deadline   time.Duration `yaml:"-"`
+	} `yaml:"message_handling_timeout"`
 
 	CommandPrefix string `yaml:"command_prefix"`
 
-	Encryption struct {
-		Allow   bool `yaml:"allow"`
-		Default bool `yaml:"default"`
+	ManagementRoomText bridgeconfig.ManagementRoomTexts `yaml:"management_room_text"`
 
-		KeySharing struct {
-			Allow               bool `yaml:"allow"`
-			RequireCrossSigning bool `yaml:"require_cross_signing"`
-			RequireVerification bool `yaml:"require_verification"`
-		} `yaml:"key_sharing"`
-	} `yaml:"encryption"`
+	Encryption bridgeconfig.EncryptionConfig `yaml:"encryption"`
 
-	Permissions PermissionConfig `yaml:"permissions"`
+	Provisioning struct {
+		Prefix       string `yaml:"prefix"`
+		SharedSecret string `yaml:"shared_secret"`
+	} `yaml:"provisioning"`
 
-	Relaybot RelaybotConfig `yaml:"relaybot"`
+	Permissions bridgeconfig.PermissionConfig `yaml:"permissions"`
 
-	usernameTemplate    *template.Template `yaml:"-"`
-	displaynameTemplate *template.Template `yaml:"-"`
-	communityTemplate   *template.Template `yaml:"-"`
+	ParsedUsernameTemplate *template.Template `yaml:"-"`
+	displaynameTemplate    *template.Template `yaml:"-"`
 }
 
-func (bc *BridgeConfig) setDefaults() {
-	bc.ConnectionTimeout = 20
-	bc.FetchMessageOnTimeout = false
-	bc.DeliveryReceipts = false
-	bc.LoginQRRegenCount = 2
-	bc.MaxConnectionAttempts = 3
-	bc.ConnectionRetryDelay = -1
-	bc.ReportConnectionRetry = true
-	bc.ChatListWait = 30
-	bc.PortalSyncWait = 600
-	bc.UserMessageBuffer = 1024
-	bc.PortalMessageBuffer = 128
+func (bc BridgeConfig) GetEncryptionConfig() bridgeconfig.EncryptionConfig {
+	return bc.Encryption
+}
 
-	bc.CallNotices.Start = true
-	bc.CallNotices.End = true
+func (bc BridgeConfig) EnableMessageStatusEvents() bool {
+	return bc.MessageStatusEvents
+}
 
-	bc.InitialChatSync = 10
-	bc.InitialHistoryFill = 20
-	bc.RecoverChatSync = -1
-	bc.RecoverHistory = true
-	bc.SyncChatMaxAge = 259200
+func (bc BridgeConfig) EnableMessageErrorNotices() bool {
+	return bc.MessageErrorNotices
+}
 
-	bc.SyncWithCustomPuppets = true
-	bc.DefaultBridgePresence = true
-	bc.DefaultBridgeReceipts = true
-	bc.LoginSharedSecret = ""
+func (bc BridgeConfig) GetCommandPrefix() string {
+	return bc.CommandPrefix
+}
 
-	bc.InviteOwnPuppetForBackfilling = true
-	bc.PrivateChatPortalMeta = false
+func (bc BridgeConfig) GetManagementRoomTexts() bridgeconfig.ManagementRoomTexts {
+	return bc.ManagementRoomText
+}
+
+func (bc BridgeConfig) GetResendBridgeInfo() bool {
+	return bc.ResendBridgeInfo
+}
+
+func boolToInt(val bool) int {
+	if val {
+		return 1
+	}
+	return 0
+}
+
+func (bc BridgeConfig) Validate() error {
+	_, hasWildcard := bc.Permissions["*"]
+	_, hasExampleDomain := bc.Permissions["example.com"]
+	_, hasExampleUser := bc.Permissions["@admin:example.com"]
+	exampleLen := boolToInt(hasWildcard) + boolToInt(hasExampleUser) + boolToInt(hasExampleDomain)
+	if len(bc.Permissions) <= exampleLen {
+		return errors.New("bridge.permissions not configured")
+	}
+	return nil
 }
 
 type umBridgeConfig BridgeConfig
@@ -133,9 +152,11 @@ func (bc *BridgeConfig) UnmarshalYAML(unmarshal func(interface{}) error) error {
 		return err
 	}
 
-	bc.usernameTemplate, err = template.New("username").Parse(bc.UsernameTemplate)
+	bc.ParsedUsernameTemplate, err = template.New("username").Parse(bc.UsernameTemplate)
 	if err != nil {
 		return err
+	} else if !strings.Contains(bc.FormatUsername("1234567890"), "1234567890") {
+		return fmt.Errorf("username template is missing user ID placeholder")
 	}
 
 	bc.displaynameTemplate, err = template.New("displayname").Parse(bc.DisplaynameTemplate)
@@ -143,8 +164,14 @@ func (bc *BridgeConfig) UnmarshalYAML(unmarshal func(interface{}) error) error {
 		return err
 	}
 
-	if len(bc.CommunityTemplate) > 0 {
-		bc.communityTemplate, err = template.New("community").Parse(bc.CommunityTemplate)
+	if bc.MessageHandlingTimeout.ErrorAfterStr != "" {
+		bc.MessageHandlingTimeout.ErrorAfter, err = time.ParseDuration(bc.MessageHandlingTimeout.ErrorAfterStr)
+		if err != nil {
+			return err
+		}
+	}
+	if bc.MessageHandlingTimeout.DeadlineStr != "" {
+		bc.MessageHandlingTimeout.Deadline, err = time.ParseDuration(bc.MessageHandlingTimeout.DeadlineStr)
 		if err != nil {
 			return err
 		}
@@ -157,144 +184,15 @@ type UsernameTemplateArgs struct {
 	UserID id.UserID
 }
 
-func (bc BridgeConfig) FormatDisplayname(contact groupme.Member) (string, int8) {
-	var buf bytes.Buffer
-	if index := strings.IndexRune(contact.ID.String(), '@'); index > 0 {
-		contact.ID = groupme.ID("+" + contact.UserID.String()[:index])
-	}
-	bc.displaynameTemplate.Execute(&buf, contact)
-	var quality int8
-	switch {
-	case len(contact.Nickname) > 0:
-		quality = 3
-		//TODO what
-	case len(contact.UserID) > 0:
-		quality = 1
-	default:
-		quality = 0
-	}
-	return buf.String(), quality
-}
-
-func (bc BridgeConfig) FormatUsername(userID types.GroupMeID) string {
-	var buf bytes.Buffer
-	bc.usernameTemplate.Execute(&buf, userID)
+func (bc BridgeConfig) FormatUsername(username string) string {
+	var buf strings.Builder
+	_ = bc.ParsedUsernameTemplate.Execute(&buf, username)
 	return buf.String()
-}
-
-type CommunityTemplateArgs struct {
-	Localpart string
-	Server    string
-}
-
-func (bc BridgeConfig) EnableCommunities() bool {
-	return bc.communityTemplate != nil
-}
-
-func (bc BridgeConfig) FormatCommunity(localpart, server string) string {
-	var buf bytes.Buffer
-	bc.communityTemplate.Execute(&buf, CommunityTemplateArgs{localpart, server})
-	return buf.String()
-}
-
-type PermissionConfig map[string]PermissionLevel
-
-type PermissionLevel int
-
-const (
-	PermissionLevelDefault  PermissionLevel = 0
-	PermissionLevelRelaybot PermissionLevel = 5
-	PermissionLevelUser     PermissionLevel = 10
-	PermissionLevelAdmin    PermissionLevel = 100
-)
-
-func (pc *PermissionConfig) UnmarshalYAML(unmarshal func(interface{}) error) error {
-	rawPC := make(map[string]string)
-	err := unmarshal(&rawPC)
-	if err != nil {
-		return err
-	}
-
-	if *pc == nil {
-		*pc = make(map[string]PermissionLevel)
-	}
-	for key, value := range rawPC {
-		switch strings.ToLower(value) {
-		case "relaybot":
-			(*pc)[key] = PermissionLevelRelaybot
-		case "user":
-			(*pc)[key] = PermissionLevelUser
-		case "admin":
-			(*pc)[key] = PermissionLevelAdmin
-		default:
-			val, err := strconv.Atoi(value)
-			if err != nil {
-				(*pc)[key] = PermissionLevelDefault
-			} else {
-				(*pc)[key] = PermissionLevel(val)
-			}
-		}
-	}
-	return nil
-}
-
-func (pc *PermissionConfig) MarshalYAML() (interface{}, error) {
-	if *pc == nil {
-		return nil, nil
-	}
-	rawPC := make(map[string]string)
-	for key, value := range *pc {
-		switch value {
-		case PermissionLevelRelaybot:
-			rawPC[key] = "relaybot"
-		case PermissionLevelUser:
-			rawPC[key] = "user"
-		case PermissionLevelAdmin:
-			rawPC[key] = "admin"
-		default:
-			rawPC[key] = strconv.Itoa(int(value))
-		}
-	}
-	return rawPC, nil
-}
-
-func (pc PermissionConfig) IsRelaybotWhitelisted(userID id.UserID) bool {
-	return pc.GetPermissionLevel(userID) >= PermissionLevelRelaybot
-}
-
-func (pc PermissionConfig) IsWhitelisted(userID id.UserID) bool {
-	return pc.GetPermissionLevel(userID) >= PermissionLevelUser
-}
-
-func (pc PermissionConfig) IsAdmin(userID id.UserID) bool {
-	return pc.GetPermissionLevel(userID) >= PermissionLevelAdmin
-}
-
-func (pc PermissionConfig) GetPermissionLevel(userID id.UserID) PermissionLevel {
-	permissions, ok := pc[string(userID)]
-	if ok {
-		return permissions
-	}
-
-	_, homeserver, _ := userID.Parse()
-	permissions, ok = pc[homeserver]
-	if len(homeserver) > 0 && ok {
-		return permissions
-	}
-
-	permissions, ok = pc["*"]
-	if ok {
-		return permissions
-	}
-
-	return PermissionLevelDefault
 }
 
 type RelaybotConfig struct {
-	Enabled        bool        `yaml:"enabled"`
-	ManagementRoom id.RoomID   `yaml:"management"`
-	InviteUsers    []id.UserID `yaml:"invites"`
-
+	Enabled          bool                         `yaml:"enabled"`
+	AdminOnly        bool                         `yaml:"admin_only"`
 	MessageFormats   map[event.MessageType]string `yaml:"message_formats"`
 	messageTemplates *template.Template           `yaml:"-"`
 }
@@ -319,8 +217,8 @@ func (rc *RelaybotConfig) UnmarshalYAML(unmarshal func(interface{}) error) error
 }
 
 type Sender struct {
-	UserID id.UserID
-	*event.MemberEventContent
+	UserID string
+	event.MemberEventContent
 }
 
 type formatData struct {
@@ -329,11 +227,15 @@ type formatData struct {
 	Content *event.MessageEventContent
 }
 
-func (rc *RelaybotConfig) FormatMessage(content *event.MessageEventContent, sender id.UserID, member *event.MemberEventContent) (string, error) {
+func (rc *RelaybotConfig) FormatMessage(content *event.MessageEventContent, sender id.UserID, member event.MemberEventContent) (string, error) {
+	if len(member.Displayname) == 0 {
+		member.Displayname = sender.String()
+	}
+	member.Displayname = template.HTMLEscapeString(member.Displayname)
 	var output strings.Builder
 	err := rc.messageTemplates.ExecuteTemplate(&output, string(content.MsgType), formatData{
 		Sender: Sender{
-			UserID:             sender,
+			UserID:             template.HTMLEscapeString(sender.String()),
 			MemberEventContent: member,
 		},
 		Content: content,

@@ -17,11 +17,15 @@
 package database
 
 import (
+	"database/sql"
+	"errors"
+	"time"
+
 	log "maunium.net/go/maulogger/v2"
 	"maunium.net/go/mautrix/id"
+	"maunium.net/go/mautrix/util/dbutil"
 
-	"github.com/beeper/groupme/groupmeExt"
-	"github.com/beeper/groupme/types"
+	"github.com/karmanyaahm/groupme"
 )
 
 type MessageQuery struct {
@@ -36,101 +40,106 @@ func (mq *MessageQuery) New() *Message {
 	}
 }
 
+const (
+	getAllMessagesSelect = `
+		SELECT chat_gmid, chat_receiver, gmid, mxid, sender, timestamp, sent
+		FROM messages
+	`
+	getAllMessagesQuery = getAllMessagesSelect + `
+		WHERE chat_gmid=$1 AND chat_receiver=$2
+	`
+	getByGMIDQuery            = getAllMessagesQuery + "AND jid=$3"
+	getByMXIDQuery            = getAllMessagesSelect + "WHERE mxid=$1"
+	getLastMessageInChatQuery = getAllMessagesQuery + `
+		AND timestamp<=$3 AND sent=true
+		ORDER BY timestamp DESC
+		LIMIT 1
+	`
+	getFirstMessageInChatQuery = getAllMessagesQuery + `
+		AND sent=true
+		ORDER BY timestamp ASC
+		LIMIT 1
+	`
+	getMessagesBetweenQuery = getAllMessagesQuery + `
+		AND timestamp>$3 AND timestamp<=$4 AND sent=true
+		ORDER BY timestamp ASC
+	`
+)
+
 func (mq *MessageQuery) GetAll(chat PortalKey) (messages []*Message) {
-	ans := mq.db.Where("chat_jid = ? AND chat_receiver = ?", chat.JID, chat.Receiver).Find(&messages)
-	if ans.Error != nil || len(messages) == 0 {
+	rows, err := mq.db.Query(getAllMessagesQuery, chat.GMID, chat.Receiver)
+	if err != nil || rows == nil {
 		return nil
+	}
+	for rows.Next() {
+		messages = append(messages, mq.New().Scan(rows))
 	}
 	return
 }
 
-func (mq *MessageQuery) GetByJID(chat PortalKey, jid types.WhatsAppMessageID) *Message {
-	var message Message
-	ans := mq.db.Where("chat_jid = ? AND chat_receiver = ? AND jid = ?", chat.JID, chat.Receiver, jid).Limit(1).Find(&message)
-	if ans.Error != nil || ans.RowsAffected == 0 {
-		return nil
-	}
-	return &message
+func (mq *MessageQuery) GetByGMID(chat PortalKey, gmid groupme.ID) *Message {
+	return mq.maybeScan(mq.db.QueryRow(getByGMIDQuery, chat.GMID, chat.Receiver, gmid))
 }
 
 func (mq *MessageQuery) GetByMXID(mxid id.EventID) *Message {
-	var message Message
-	ans := mq.db.Where("mxid = ?", mxid).Limit(1).Find(&message)
-	if ans.Error != nil || ans.RowsAffected == 0 {
-		return nil
-	}
-	return &message
+	return mq.maybeScan(mq.db.QueryRow(getByMXIDQuery, mxid))
 }
 
 func (mq *MessageQuery) GetLastInChat(chat PortalKey) *Message {
-	var message Message
-	ans := mq.db.Where("chat_jid = ? AND chat_receiver = ?", chat.JID, chat.Receiver).Order("timestamp desc").Limit(1).Find(&message)
-	if ans.Error != nil || ans.RowsAffected == 0 {
+	return mq.GetLastInChatBefore(chat, time.Now().Add(60*time.Second))
+}
+
+func (mq *MessageQuery) GetLastInChatBefore(chat PortalKey, maxTimestamp time.Time) *Message {
+	return mq.maybeScan(mq.db.QueryRow(getLastMessageInChatQuery, chat.GMID, chat.Receiver, maxTimestamp.Unix()))
+}
+
+func (mq *MessageQuery) GetFirstInChat(chat PortalKey) *Message {
+	return mq.maybeScan(mq.db.QueryRow(getFirstMessageInChatQuery, chat.GMID, chat.Receiver))
+}
+
+func (mq *MessageQuery) GetMessagesBetween(chat PortalKey, minTimestamp, maxTimestamp time.Time) (messages []*Message) {
+	rows, err := mq.db.Query(getMessagesBetweenQuery, chat.GMID, chat.Receiver, minTimestamp.Unix(), maxTimestamp.Unix())
+	if err != nil || rows == nil {
 		return nil
 	}
-	return &message
+	for rows.Next() {
+		messages = append(messages, mq.New().Scan(rows))
+	}
+	return
+}
 
+func (mq *MessageQuery) maybeScan(row *sql.Row) *Message {
+	if row == nil {
+		return nil
+	}
+	return mq.New().Scan(row)
 }
 
 type Message struct {
 	db  *Database
 	log log.Logger
 
-	Chat      PortalKey           `gorm:"embedded;embeddedPrefix:chat_"`
-	JID       types.GroupMeID     `gorm:"primaryKey;unique;notNull"`
-	MXID      id.EventID          `gorm:"primaryKey;unique;notNull"`
-	Sender    types.GroupMeID     `gorm:"notNull"`
-	Timestamp uint64              `gorm:"notNull;default:0"`
-	Content   *groupmeExt.Message `gorm:"type:TEXT;notNull"`
+	Chat      PortalKey
+	GMID      groupme.ID
+	MXID      id.EventID
+	Sender    groupme.ID
+	Timestamp time.Time
+	Sent      bool
 
-	Portal Portal `gorm:"foreignKey:chat_jid,chat_receiver;references:jid,receiver;constraint:onDelete:CASCADE;"`
+	Portal Portal
 }
 
-// func (msg *Message) Scan(row Scannable) *Message {
-// 	var content []byte
-// 	err := row.Scan(&msg.Chat.JID, &msg.Chat.Receiver, &msg.JID, &msg.MXID, &msg.Sender, &msg.Timestamp, &content)
-// 	if err != nil {
-// 		if err != sql.ErrNoRows {
-// 			msg.log.Errorln("Database scan failed:", err)
-// 		}
-// 		return nil
-// 	}
-
-// 	msg.decodeBinaryContent(content)
-
-// 	return msg
-// }
-
-// func (msg *Message) decodeBinaryContent(content []byte) {
-// 	msg.Content = &waProto.Message{}
-// 	reader := bytes.NewReader(content)
-// 	dec := json.NewDecoder(reader)
-// 	err := dec.Decode(msg.Content)
-// 	if err != nil {
-// 		msg.log.Warnln("Failed to decode message content:", err)
-// 	}
-// }
-
-// func (msg *Message) encodeBinaryContent() []byte {
-// 	var buf bytes.Buffer
-// 	enc := json.NewEncoder(&buf)
-// 	err := enc.Encode(msg.Content)
-// 	if err != nil {
-// 		msg.log.Warnln("Failed to encode message content:", err)
-// 	}
-// 	return buf.Bytes()
-// }
-
-func (msg *Message) Insert() {
-	ans := msg.db.Create(&msg)
-	if ans.Error != nil {
-		msg.log.Warnfln("Failed to insert %s@%s: %v", msg.Chat, msg.JID, ans.Error)
+func (msg *Message) Scan(row dbutil.Scannable) *Message {
+	var ts int64
+	err := row.Scan(&msg.Chat.GMID, &msg.Chat.Receiver, &msg.GMID, &msg.MXID, &msg.Sender, &ts, &msg.Sent)
+	if err != nil {
+		if !errors.Is(err, sql.ErrNoRows) {
+			msg.log.Errorln("Database scan failed:", err)
+		}
+		return nil
 	}
-}
-
-func (msg *Message) Delete() {
-	ans := msg.db.Delete(&msg)
-	if ans.Error != nil {
-		msg.log.Warnfln("Failed to delete %s@%s: %v", msg.Chat, msg.JID, ans.Error)
+	if ts != 0 {
+		msg.Timestamp = time.Unix(ts, 0)
 	}
+	return msg
 }

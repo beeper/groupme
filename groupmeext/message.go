@@ -1,4 +1,4 @@
-package groupmeExt
+package groupmeext
 
 import (
 	"bytes"
@@ -10,8 +10,6 @@ import (
 	"net/http"
 
 	"github.com/karmanyaahm/groupme"
-
-	"github.com/beeper/groupme/types"
 )
 
 type Message struct{ groupme.Message }
@@ -60,7 +58,7 @@ func DownloadImage(URL string) (bytes *[]byte, mime string, err error) {
 	return
 }
 
-func DownloadFile(RoomJID types.GroupMeID, FileID string, token string) (contents []byte, fname, mime string) {
+func DownloadFile(RoomJID groupme.ID, FileID string, token string) (contents []byte, fname, mime string) {
 	client := &http.Client{}
 	b, _ := json.Marshal(struct {
 		FileIDS []string `json:"file_ids"`

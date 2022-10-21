@@ -22,6 +22,7 @@ import (
 	"runtime/debug"
 	"time"
 
+	"github.com/karmanyaahm/groupme"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -31,7 +32,6 @@ import (
 	"maunium.net/go/mautrix/id"
 
 	"github.com/beeper/groupme/database"
-	"github.com/beeper/groupme/types"
 )
 
 type MetricsHandler struct {
@@ -43,7 +43,7 @@ type MetricsHandler struct {
 	ctx          context.Context
 	stopRecorder func()
 
-	messageHandling         *prometheus.HistogramVec
+	matrixEventHandling     *prometheus.HistogramVec
 	countCollection         prometheus.Histogram
 	disconnections          *prometheus.CounterVec
 	puppetCount             prometheus.Gauge
@@ -56,17 +56,17 @@ type MetricsHandler struct {
 	unencryptedPrivateCount prometheus.Gauge
 
 	connected       prometheus.Gauge
-	connectedState  map[types.GroupMeID]bool
+	connectedState  map[groupme.ID]bool
 	loggedIn        prometheus.Gauge
-	loggedInState   map[types.GroupMeID]bool
+	loggedInState   map[groupme.ID]bool
 	syncLocked      prometheus.Gauge
-	syncLockedState map[types.GroupMeID]bool
+	syncLockedState map[groupme.ID]bool
 	bufferLength    *prometheus.GaugeVec
 }
 
 func NewMetricsHandler(address string, log log.Logger, db *database.Database) *MetricsHandler {
 	portalCount := promauto.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "whatsapp_portals_total",
+		Name: "groupme_portals_total",
 		Help: "Number of portal rooms on Matrix",
 	}, []string{"type", "encrypted"})
 	return &MetricsHandler{
@@ -75,28 +75,28 @@ func NewMetricsHandler(address string, log log.Logger, db *database.Database) *M
 		log:     log,
 		running: false,
 
-		messageHandling: promauto.NewHistogramVec(prometheus.HistogramOpts{
+		matrixEventHandling: promauto.NewHistogramVec(prometheus.HistogramOpts{
 			Name: "matrix_event",
 			Help: "Time spent processing Matrix events",
 		}, []string{"event_type"}),
 		countCollection: promauto.NewHistogram(prometheus.HistogramOpts{
-			Name: "whatsapp_count_collection",
-			Help: "Time spent collecting the whatsapp_*_total metrics",
+			Name: "groupme_count_collection",
+			Help: "Time spent collecting the groupme_*_total metrics",
 		}),
 		disconnections: promauto.NewCounterVec(prometheus.CounterOpts{
-			Name: "whatsapp_disconnections",
-			Help: "Number of times a Matrix user has been disconnected from WhatsApp",
+			Name: "groupme_disconnections",
+			Help: "Number of times a Matrix user has been disconnected from GroupMe",
 		}, []string{"user_id"}),
 		puppetCount: promauto.NewGauge(prometheus.GaugeOpts{
-			Name: "whatsapp_puppets_total",
-			Help: "Number of WhatsApp users bridged into Matrix",
+			Name: "groupme_puppets_total",
+			Help: "Number of GroupMe users bridged into Matrix",
 		}),
 		userCount: promauto.NewGauge(prometheus.GaugeOpts{
-			Name: "whatsapp_users_total",
+			Name: "groupme_users_total",
 			Help: "Number of Matrix users using the bridge",
 		}),
 		messageCount: promauto.NewGauge(prometheus.GaugeOpts{
-			Name: "whatsapp_messages_total",
+			Name: "groupme_messages_total",
 			Help: "Number of messages bridged",
 		}),
 		portalCount:             portalCount,
@@ -109,17 +109,17 @@ func NewMetricsHandler(address string, log log.Logger, db *database.Database) *M
 			Name: "bridge_logged_in",
 			Help: "Users logged into the bridge",
 		}),
-		loggedInState: make(map[types.GroupMeID]bool),
+		loggedInState: make(map[groupme.ID]bool),
 		connected: promauto.NewGauge(prometheus.GaugeOpts{
 			Name: "bridge_connected",
-			Help: "Bridge users connected to WhatsApp",
+			Help: "Bridge users connected to GroupMe",
 		}),
-		connectedState: make(map[types.GroupMeID]bool),
+		connectedState: make(map[groupme.ID]bool),
 		syncLocked: promauto.NewGauge(prometheus.GaugeOpts{
 			Name: "bridge_sync_locked",
 			Help: "Bridge users locked in post-login sync",
 		}),
-		syncLockedState: make(map[types.GroupMeID]bool),
+		syncLockedState: make(map[groupme.ID]bool),
 		bufferLength: promauto.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "bridge_buffer_size",
 			Help: "Number of messages in buffer",
@@ -129,14 +129,14 @@ func NewMetricsHandler(address string, log log.Logger, db *database.Database) *M
 
 func noop() {}
 
-func (mh *MetricsHandler) TrackEvent(eventType event.Type) func() {
+func (mh *MetricsHandler) TrackMatrixEvent(eventType event.Type) func() {
 	if !mh.running {
 		return noop
 	}
 	start := time.Now()
 	return func() {
 		duration := time.Now().Sub(start)
-		mh.messageHandling.
+		mh.matrixEventHandling.
 			With(prometheus.Labels{"event_type": eventType.Type}).
 			Observe(duration.Seconds())
 	}
@@ -149,13 +149,13 @@ func (mh *MetricsHandler) TrackDisconnection(userID id.UserID) {
 	mh.disconnections.With(prometheus.Labels{"user_id": string(userID)}).Inc()
 }
 
-func (mh *MetricsHandler) TrackLoginState(jid types.GroupMeID, loggedIn bool) {
+func (mh *MetricsHandler) TrackLoginState(gmid groupme.ID, loggedIn bool) {
 	if !mh.running {
 		return
 	}
-	currentVal, ok := mh.loggedInState[jid]
+	currentVal, ok := mh.loggedInState[gmid]
 	if !ok || currentVal != loggedIn {
-		mh.loggedInState[jid] = loggedIn
+		mh.loggedInState[gmid] = loggedIn
 		if loggedIn {
 			mh.loggedIn.Inc()
 		} else {
@@ -164,13 +164,13 @@ func (mh *MetricsHandler) TrackLoginState(jid types.GroupMeID, loggedIn bool) {
 	}
 }
 
-func (mh *MetricsHandler) TrackConnectionState(jid types.GroupMeID, connected bool) {
+func (mh *MetricsHandler) TrackConnectionState(gmid groupme.ID, connected bool) {
 	if !mh.running {
 		return
 	}
-	currentVal, ok := mh.connectedState[jid]
+	currentVal, ok := mh.connectedState[gmid]
 	if !ok || currentVal != connected {
-		mh.connectedState[jid] = connected
+		mh.connectedState[gmid] = connected
 		if connected {
 			mh.connected.Inc()
 		} else {
@@ -179,13 +179,13 @@ func (mh *MetricsHandler) TrackConnectionState(jid types.GroupMeID, connected bo
 	}
 }
 
-func (mh *MetricsHandler) TrackSyncLock(jid types.GroupMeID, locked bool) {
+func (mh *MetricsHandler) TrackSyncLock(gmid groupme.ID, locked bool) {
 	if !mh.running {
 		return
 	}
-	currentVal, ok := mh.syncLockedState[jid]
+	currentVal, ok := mh.syncLockedState[gmid]
 	if !ok || currentVal != locked {
-		mh.syncLockedState[jid] = locked
+		mh.syncLockedState[gmid] = locked
 		if locked {
 			mh.syncLocked.Inc()
 		} else {
@@ -230,10 +230,10 @@ func (mh *MetricsHandler) updateStats() {
 	// var encryptedGroupCount, encryptedPrivateCount, unencryptedGroupCount, unencryptedPrivateCount int
 	// err = mh.db.QueryRowContext(mh.ctx, `
 	// 		SELECT
-	// 			COUNT(CASE WHEN jid LIKE '%@g.us' AND encrypted THEN 1 END) AS encrypted_group_portals,
-	// 			COUNT(CASE WHEN jid LIKE '%@s.whatsapp.net' AND encrypted THEN 1 END) AS encrypted_private_portals,
-	// 			COUNT(CASE WHEN jid LIKE '%@g.us' AND NOT encrypted THEN 1 END) AS unencrypted_group_portals,
-	// 			COUNT(CASE WHEN jid LIKE '%@s.whatsapp.net' AND NOT encrypted THEN 1 END) AS unencrypted_private_portals
+	// 			COUNT(CASE WHEN gmid LIKE '%@g.us' AND encrypted THEN 1 END) AS encrypted_group_portals,
+	// 			COUNT(CASE WHEN gmid LIKE '%@s.groupme.net' AND encrypted THEN 1 END) AS encrypted_private_portals,
+	// 			COUNT(CASE WHEN gmid LIKE '%@g.us' AND NOT encrypted THEN 1 END) AS unencrypted_group_portals,
+	// 			COUNT(CASE WHEN gmid LIKE '%@s.groupme.net' AND NOT encrypted THEN 1 END) AS unencrypted_private_portals
 	// 		FROM portal WHERE mxid<>''
 	// 	`).Scan(&encryptedGroupCount, &encryptedPrivateCount, &unencryptedGroupCount, &unencryptedPrivateCount)
 	// if err != nil {

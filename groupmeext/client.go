@@ -1,11 +1,9 @@
-package groupmeExt
+package groupmeext
 
 import (
 	"context"
 
 	"github.com/karmanyaahm/groupme"
-
-	"github.com/beeper/groupme/types"
 )
 
 type Client struct {
@@ -36,9 +34,9 @@ func (c Client) IndexAllChats() ([]*groupme.Chat, error) {
 	})
 }
 
-func (c Client) LoadMessagesAfter(groupID, lastMessageID string, lastMessageFromMe bool, private bool) ([]*groupme.Message, error) {
+func (c Client) LoadMessagesAfter(groupID groupme.ID, lastMessageID string, lastMessageFromMe bool, private bool) ([]*groupme.Message, error) {
 	if private {
-		ans, e := c.IndexDirectMessages(context.TODO(), groupID, &groupme.IndexDirectMessagesQuery{
+		ans, e := c.IndexDirectMessages(context.TODO(), groupID.String(), &groupme.IndexDirectMessagesQuery{
 			SinceID: groupme.ID(lastMessageID),
 			//Limit:    num,
 		})
@@ -52,7 +50,7 @@ func (c Client) LoadMessagesAfter(groupID, lastMessageID string, lastMessageFrom
 		}
 		return ans.Messages, nil
 	} else {
-		i, e := c.IndexMessages(context.TODO(), groupme.ID(groupID), &groupme.IndexMessagesQuery{
+		i, e := c.IndexMessages(context.TODO(), groupID, &groupme.IndexMessagesQuery{
 			AfterID: groupme.ID(lastMessageID),
 			//20 for consistency with dms
 			Limit: 20,
@@ -91,11 +89,10 @@ func (c Client) LoadMessagesBefore(groupID, lastMessageID string, private bool) 
 	}
 }
 
-func (c *Client) RemoveFromGroup(uid, groupID types.GroupMeID) error {
-
-	group, err := c.ShowGroup(context.TODO(), groupme.ID(groupID))
+func (c *Client) RemoveFromGroup(uid, groupID groupme.ID) error {
+	group, err := c.ShowGroup(context.TODO(), groupID)
 	if err != nil {
 		return err
 	}
-	return c.RemoveMember(context.TODO(), groupme.ID(groupID), group.GetMemberByUserID(groupme.ID(uid)).ID)
+	return c.RemoveMember(context.TODO(), groupID, group.GetMemberByUserID(uid).ID)
 }

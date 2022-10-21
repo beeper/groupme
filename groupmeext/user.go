@@ -1,4 +1,4 @@
-package groupmeExt
+package groupmeext
 
 const (
 	OldUserSuffix = "@c.groupme.com"

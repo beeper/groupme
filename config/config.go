@@ -17,50 +17,14 @@
 package config
 
 import (
-	"io/ioutil"
-
-	"gopkg.in/yaml.v2"
-
-	"maunium.net/go/mautrix/appservice"
+	"maunium.net/go/mautrix/bridge/bridgeconfig"
+	"maunium.net/go/mautrix/id"
 )
 
 type Config struct {
-	Homeserver struct {
-		Address string `yaml:"address"`
-		Domain  string `yaml:"domain"`
-		Asmux   bool   `yaml:"asmux"`
-	} `yaml:"homeserver"`
+	*bridgeconfig.BaseConfig `yaml:",inline"`
 
-	AppService struct {
-		Address  string `yaml:"address"`
-		Hostname string `yaml:"hostname"`
-		Port     uint16 `yaml:"port"`
-
-		Database struct {
-			Type string `yaml:"type"`
-			URI  string `yaml:"uri"`
-
-			MaxOpenConns int `yaml:"max_open_conns"`
-			MaxIdleConns int `yaml:"max_idle_conns"`
-		} `yaml:"database"`
-
-		StateStore string `yaml:"state_store_path,omitempty"`
-
-		Provisioning struct {
-			Prefix       string `yaml:"prefix"`
-			SharedSecret string `yaml:"shared_secret"`
-		} `yaml:"provisioning"`
-
-		ID  string `yaml:"id"`
-		Bot struct {
-			Username    string `yaml:"username"`
-			Displayname string `yaml:"displayname"`
-			Avatar      string `yaml:"avatar"`
-		} `yaml:"bot"`
-
-		ASToken string `yaml:"as_token"`
-		HSToken string `yaml:"hs_token"`
-	} `yaml:"appservice"`
+	SegmentKey string `yaml:"segment_key"`
 
 	Metrics struct {
 		Enabled bool   `yaml:"enabled"`
@@ -68,50 +32,28 @@ type Config struct {
 	} `yaml:"metrics"`
 
 	GroupMe struct {
-		OSName      string `yaml:"os_name"`
-		BrowserName string `yaml:"browser_name"`
+		OSName            string `yaml:"os_name"`
+		BrowserName       string `yaml:"browser_name"`
+		ConnectionTimeout int    `yaml:"connection_timeout"`
 	} `yaml:"groupme"`
 
 	Bridge BridgeConfig `yaml:"bridge"`
-
-	Logging appservice.LogConfig `yaml:"logging"`
 }
 
-func (config *Config) setDefaults() {
-	config.AppService.Database.MaxOpenConns = 20
-	config.AppService.Database.MaxIdleConns = 2
-	config.GroupMe.OSName = "Go GroupMe bridge"
-	config.GroupMe.BrowserName = "mx-gm"
-	config.Bridge.setDefaults()
+func (config *Config) CanAutoDoublePuppet(userID id.UserID) bool {
+	_, homeserver, _ := userID.Parse()
+	_, hasSecret := config.Bridge.LoginSharedSecretMap[homeserver]
+	return hasSecret
 }
 
-func Load(path string) (*Config, error) {
-	data, err := ioutil.ReadFile(path)
-	if err != nil {
-		return nil, err
+func (config *Config) CanDoublePuppetBackfill(userID id.UserID) bool {
+	if !config.Bridge.HistorySync.DoublePuppetBackfill {
+		return false
 	}
-
-	var config = &Config{}
-	config.setDefaults()
-	err = yaml.Unmarshal(data, config)
-	return config, err
-}
-
-func (config *Config) Save(path string) error {
-	data, err := yaml.Marshal(config)
-	if err != nil {
-		return err
+	_, homeserver, _ := userID.Parse()
+	// Batch sending can only use local users, so don't allow double puppets on other servers.
+	if homeserver != config.Homeserver.Domain && config.Homeserver.Software != bridgeconfig.SoftwareHungry {
+		return false
 	}
-	return ioutil.WriteFile(path, data, 0600)
-}
-
-func (config *Config) MakeAppService() (*appservice.AppService, error) {
-	as := appservice.Create()
-	as.HomeserverDomain = config.Homeserver.Domain
-	as.HomeserverURL = config.Homeserver.Address
-	as.Host.Hostname = config.AppService.Hostname
-	as.Host.Port = config.AppService.Port
-	var err error
-	as.Registration, err = config.GetRegistration()
-	return as, err
+	return true
 }

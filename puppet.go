@@ -26,17 +26,16 @@ import (
 	log "maunium.net/go/maulogger/v2"
 
 	"maunium.net/go/mautrix/appservice"
+	"maunium.net/go/mautrix/bridge"
 	"maunium.net/go/mautrix/id"
 
 	"github.com/beeper/groupme/database"
-	"github.com/beeper/groupme/groupmeExt"
-	"github.com/beeper/groupme/types"
-	whatsappExt "github.com/beeper/groupme/whatsapp-ext"
+	"github.com/beeper/groupme/groupmeext"
 )
 
 var userIDRegex *regexp.Regexp
 
-func (bridge *Bridge) ParsePuppetMXID(mxid id.UserID) (types.GroupMeID, bool) {
+func (bridge *GMBridge) ParsePuppetMXID(mxid id.UserID) (groupme.ID, bool) {
 	if userIDRegex == nil {
 		userIDRegex = regexp.MustCompile(fmt.Sprintf("^@%s:%s$",
 			bridge.Config.Bridge.FormatUsername("([0-9]+)"),
@@ -47,32 +46,31 @@ func (bridge *Bridge) ParsePuppetMXID(mxid id.UserID) (types.GroupMeID, bool) {
 		return "", false
 	}
 
-	jid := types.GroupMeID(match[1])
-	return jid, true
+	return groupme.ID(match[1]), true
 }
 
-func (bridge *Bridge) GetPuppetByMXID(mxid id.UserID) *Puppet {
-	jid, ok := bridge.ParsePuppetMXID(mxid)
+func (bridge *GMBridge) GetPuppetByMXID(mxid id.UserID) *Puppet {
+	gmid, ok := bridge.ParsePuppetMXID(mxid)
 	if !ok {
 		return nil
 	}
 
-	return bridge.GetPuppetByJID(jid)
+	return bridge.GetPuppetByGMID(gmid)
 }
 
-func (bridge *Bridge) GetPuppetByJID(jid types.GroupMeID) *Puppet {
+func (bridge *GMBridge) GetPuppetByGMID(gmid groupme.ID) *Puppet {
 	bridge.puppetsLock.Lock()
 	defer bridge.puppetsLock.Unlock()
-	puppet, ok := bridge.puppets[jid]
+	puppet, ok := bridge.puppets[gmid]
 	if !ok {
-		dbPuppet := bridge.DB.Puppet.Get(jid)
+		dbPuppet := bridge.DB.Puppet.Get(gmid)
 		if dbPuppet == nil {
 			dbPuppet = bridge.DB.Puppet.New()
-			dbPuppet.JID = jid
+			dbPuppet.GMID = gmid
 			dbPuppet.Insert()
 		}
 		puppet = bridge.NewPuppet(dbPuppet)
-		bridge.puppets[puppet.JID] = puppet
+		bridge.puppets[puppet.GMID] = puppet
 		if len(puppet.CustomMXID) > 0 {
 			bridge.puppetsByCustomMXID[puppet.CustomMXID] = puppet
 		}
@@ -80,7 +78,7 @@ func (bridge *Bridge) GetPuppetByJID(jid types.GroupMeID) *Puppet {
 	return puppet
 }
 
-func (bridge *Bridge) GetPuppetByCustomMXID(mxid id.UserID) *Puppet {
+func (bridge *GMBridge) GetPuppetByCustomMXID(mxid id.UserID) *Puppet {
 	bridge.puppetsLock.Lock()
 	defer bridge.puppetsLock.Unlock()
 	puppet, ok := bridge.puppetsByCustomMXID[mxid]
@@ -90,21 +88,57 @@ func (bridge *Bridge) GetPuppetByCustomMXID(mxid id.UserID) *Puppet {
 			return nil
 		}
 		puppet = bridge.NewPuppet(dbPuppet)
-		bridge.puppets[puppet.JID] = puppet
+		bridge.puppets[puppet.GMID] = puppet
 		bridge.puppetsByCustomMXID[puppet.CustomMXID] = puppet
 	}
 	return puppet
 }
 
-func (bridge *Bridge) GetAllPuppetsWithCustomMXID() []*Puppet {
+func (user *User) GetIDoublePuppet() bridge.DoublePuppet {
+	p := user.bridge.GetPuppetByCustomMXID(user.MXID)
+	if p == nil || p.CustomIntent() == nil {
+		return nil
+	}
+	return p
+}
+
+func (user *User) GetIGhost() bridge.Ghost {
+	if user.GMID.String() == "" {
+		return nil
+	}
+	p := user.bridge.GetPuppetByGMID(user.GMID)
+	if p == nil {
+		return nil
+	}
+	return p
+}
+
+func (br *GMBridge) IsGhost(id id.UserID) bool {
+	_, ok := br.ParsePuppetMXID(id)
+	return ok
+}
+
+func (br *GMBridge) GetIGhost(id id.UserID) bridge.Ghost {
+	p := br.GetPuppetByMXID(id)
+	if p == nil {
+		return nil
+	}
+	return p
+}
+
+func (puppet *Puppet) GetMXID() id.UserID {
+	return puppet.MXID
+}
+
+func (bridge *GMBridge) GetAllPuppetsWithCustomMXID() []*Puppet {
 	return bridge.dbPuppetsToPuppets(bridge.DB.Puppet.GetAllWithCustomMXID())
 }
 
-func (bridge *Bridge) GetAllPuppets() []*Puppet {
+func (bridge *GMBridge) GetAllPuppets() []*Puppet {
 	return bridge.dbPuppetsToPuppets(bridge.DB.Puppet.GetAll())
 }
 
-func (bridge *Bridge) dbPuppetsToPuppets(dbPuppets []*database.Puppet) []*Puppet {
+func (bridge *GMBridge) dbPuppetsToPuppets(dbPuppets []*database.Puppet) []*Puppet {
 	bridge.puppetsLock.Lock()
 	defer bridge.puppetsLock.Unlock()
 	output := make([]*Puppet, len(dbPuppets))
@@ -112,10 +146,10 @@ func (bridge *Bridge) dbPuppetsToPuppets(dbPuppets []*database.Puppet) []*Puppet
 		if dbPuppet == nil {
 			continue
 		}
-		puppet, ok := bridge.puppets[dbPuppet.JID]
+		puppet, ok := bridge.puppets[dbPuppet.GMID]
 		if !ok {
 			puppet = bridge.NewPuppet(dbPuppet)
-			bridge.puppets[dbPuppet.JID] = puppet
+			bridge.puppets[dbPuppet.GMID] = puppet
 			if len(dbPuppet.CustomMXID) > 0 {
 				bridge.puppetsByCustomMXID[dbPuppet.CustomMXID] = puppet
 			}
@@ -125,29 +159,27 @@ func (bridge *Bridge) dbPuppetsToPuppets(dbPuppets []*database.Puppet) []*Puppet
 	return output
 }
 
-func (bridge *Bridge) FormatPuppetMXID(jid types.GroupMeID) id.UserID {
+func (bridge *GMBridge) FormatPuppetMXID(gmid groupme.ID) id.UserID {
 	return id.NewUserID(
 		bridge.Config.Bridge.FormatUsername(
-			strings.Replace(
-				jid,
-				whatsappExt.NewUserSuffix, "", 1)),
+			gmid),
 		bridge.Config.Homeserver.Domain)
 }
 
-func (bridge *Bridge) NewPuppet(dbPuppet *database.Puppet) *Puppet {
+func (bridge *GMBridge) NewPuppet(dbPuppet *database.Puppet) *Puppet {
 	return &Puppet{
 		Puppet: dbPuppet,
 		bridge: bridge,
-		log:    bridge.Log.Sub(fmt.Sprintf("Puppet/%s", dbPuppet.JID)),
+		log:    bridge.Log.Sub(fmt.Sprintf("Puppet/%s", dbPuppet.GMID)),
 
-		MXID: bridge.FormatPuppetMXID(dbPuppet.JID),
+		MXID: bridge.FormatPuppetMXID(dbPuppet.GMID),
 	}
 }
 
 type Puppet struct {
 	*database.Puppet
 
-	bridge *Bridge
+	bridge *GMBridge
 	log    log.Logger
 
 	typingIn id.RoomID
@@ -162,13 +194,13 @@ type Puppet struct {
 
 func (puppet *Puppet) PhoneNumber() string {
 	println("phone num")
-	return strings.Replace(puppet.JID, whatsappExt.NewUserSuffix, "", 1)
+	return strings.Replace(puppet.GMID, whatsappExt.NewUserSuffix, "", 1)
 }
 
 func (puppet *Puppet) IntentFor(portal *Portal) *appservice.IntentAPI {
 	if (!portal.IsPrivateChat() && puppet.customIntent == nil) ||
 		(portal.backfilling && portal.bridge.Config.Bridge.InviteOwnPuppetForBackfilling) ||
-		portal.Key.JID == puppet.JID {
+		portal.Key.GMID == puppet.GMID {
 		return puppet.DefaultIntent()
 	}
 	return puppet.customIntent
@@ -211,7 +243,7 @@ func (puppet *Puppet) UpdateAvatar(source *User, portalMXID id.RoomID, avatar st
 	}
 
 	//TODO check its actually groupme?
-	image, mime, err := groupmeExt.DownloadImage(avatar + ".large")
+	image, mime, err := groupmeext.DownloadImage(avatar + ".large")
 	if err != nil {
 		puppet.log.Warnln(err)
 		return false

@@ -1,4 +1,4 @@
-package groupmeExt
+package groupmeext
 
 import (
 	log "maunium.net/go/maulogger/v2"

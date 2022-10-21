@@ -21,6 +21,7 @@ import (
 	"crypto/sha512"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"time"
 
 	"maunium.net/go/mautrix"
@@ -42,7 +43,7 @@ func (puppet *Puppet) SwitchCustomMXID(accessToken string, mxid id.UserID) error
 	puppet.CustomMXID = mxid
 	puppet.AccessToken = accessToken
 
-	err := puppet.StartCustomMXID()
+	err := puppet.StartCustomMXID(false)
 	if err != nil {
 		return err
 	}
@@ -53,7 +54,6 @@ func (puppet *Puppet) SwitchCustomMXID(accessToken string, mxid id.UserID) error
 	if len(puppet.CustomMXID) > 0 {
 		puppet.bridge.puppetsByCustomMXID[puppet.CustomMXID] = puppet
 	}
-	puppet.EnablePresence = puppet.bridge.Config.Bridge.DefaultBridgePresence
 	puppet.EnableReceipts = puppet.bridge.Config.Bridge.DefaultBridgeReceipts
 	puppet.bridge.AS.StateStore.MarkRegistered(puppet.CustomMXID)
 	puppet.Update()
@@ -62,31 +62,72 @@ func (puppet *Puppet) SwitchCustomMXID(accessToken string, mxid id.UserID) error
 }
 
 func (puppet *Puppet) loginWithSharedSecret(mxid id.UserID) (string, error) {
+	_, homeserver, _ := mxid.Parse()
 	puppet.log.Debugfln("Logging into %s with shared secret", mxid)
-	mac := hmac.New(sha512.New, []byte(puppet.bridge.Config.Bridge.LoginSharedSecret))
-	mac.Write([]byte(mxid))
-	resp, err := puppet.bridge.AS.BotClient().Login(&mautrix.ReqLogin{
-		Type:                     mautrix.AuthTypePassword,
+	loginSecret := puppet.bridge.Config.Bridge.LoginSharedSecretMap[homeserver]
+	client, err := puppet.bridge.newDoublePuppetClient(mxid, "")
+	if err != nil {
+		return "", fmt.Errorf("failed to create mautrix client to log in: %v", err)
+	}
+	req := mautrix.ReqLogin{
 		Identifier:               mautrix.UserIdentifier{Type: mautrix.IdentifierTypeUser, User: string(mxid)},
-		Password:                 hex.EncodeToString(mac.Sum(nil)),
-		DeviceID:                 "WhatsApp Bridge",
-		InitialDeviceDisplayName: "WhatsApp Bridge",
-	})
+		DeviceID:                 "GroupMe Bridge",
+		InitialDeviceDisplayName: "GroupMe Bridge",
+	}
+	if loginSecret == "appservice" {
+		client.AccessToken = puppet.bridge.AS.Registration.AppToken
+		req.Type = mautrix.AuthTypeAppservice
+	} else {
+		mac := hmac.New(sha512.New, []byte(loginSecret))
+		mac.Write([]byte(mxid))
+		req.Password = hex.EncodeToString(mac.Sum(nil))
+		req.Type = mautrix.AuthTypePassword
+	}
+	resp, err := client.Login(&req)
 	if err != nil {
 		return "", err
 	}
 	return resp.AccessToken, nil
 }
 
+func (br *GMBridge) newDoublePuppetClient(mxid id.UserID, accessToken string) (*mautrix.Client, error) {
+	_, homeserver, err := mxid.Parse()
+	if err != nil {
+		return nil, err
+	}
+	homeserverURL, found := br.Config.Bridge.DoublePuppetServerMap[homeserver]
+	if !found {
+		if homeserver == br.AS.HomeserverDomain {
+			homeserverURL = br.AS.HomeserverURL
+		} else if br.Config.Bridge.DoublePuppetAllowDiscovery {
+			resp, err := mautrix.DiscoverClientAPI(homeserver)
+			if err != nil {
+				return nil, fmt.Errorf("failed to find homeserver URL for %s: %v", homeserver, err)
+			}
+			homeserverURL = resp.Homeserver.BaseURL
+			br.Log.Debugfln("Discovered URL %s for %s to enable double puppeting for %s", homeserverURL, homeserver, mxid)
+		} else {
+			return nil, fmt.Errorf("double puppeting from %s is not allowed", homeserver)
+		}
+	}
+	client, err := mautrix.NewClient(homeserverURL, mxid, accessToken)
+	if err != nil {
+		return nil, err
+	}
+	client.Logger = br.AS.Log.Sub(mxid.String())
+	client.Client = br.AS.HTTPClient
+	client.DefaultHTTPRetries = br.AS.DefaultHTTPRetries
+	return client, nil
+}
+
 func (puppet *Puppet) newCustomIntent() (*appservice.IntentAPI, error) {
 	if len(puppet.CustomMXID) == 0 {
 		return nil, ErrNoCustomMXID
 	}
-	client, err := mautrix.NewClient(puppet.bridge.AS.HomeserverURL, puppet.CustomMXID, puppet.AccessToken)
+	client, err := puppet.bridge.newDoublePuppetClient(puppet.CustomMXID, puppet.AccessToken)
 	if err != nil {
 		return nil, err
 	}
-	client.Logger = puppet.bridge.AS.Log.Sub(string(puppet.CustomMXID))
 	client.Syncer = puppet
 	client.Store = puppet
 
@@ -102,11 +143,10 @@ func (puppet *Puppet) clearCustomMXID() {
 	puppet.CustomMXID = ""
 	puppet.AccessToken = ""
 	puppet.customIntent = nil
-	puppet.customTypingIn = nil
 	puppet.customUser = nil
 }
 
-func (puppet *Puppet) StartCustomMXID() error {
+func (puppet *Puppet) StartCustomMXID(reloginOnFail bool) error {
 	if len(puppet.CustomMXID) == 0 {
 		puppet.clearCustomMXID()
 		return nil
@@ -118,15 +158,16 @@ func (puppet *Puppet) StartCustomMXID() error {
 	}
 	resp, err := intent.Whoami()
 	if err != nil {
-		puppet.clearCustomMXID()
-		return err
-	}
-	if resp.UserID != puppet.CustomMXID {
+		if !reloginOnFail || (errors.Is(err, mautrix.MUnknownToken) && !puppet.tryRelogin(err, "initializing double puppeting")) {
+			puppet.clearCustomMXID()
+			return err
+		}
+		intent.AccessToken = puppet.AccessToken
+	} else if resp.UserID != puppet.CustomMXID {
 		puppet.clearCustomMXID()
 		return ErrMismatchingMXID
 	}
 	puppet.customIntent = intent
-	puppet.customTypingIn = make(map[id.RoomID]bool)
 	puppet.customUser = puppet.bridge.GetUserByMXID(puppet.CustomMXID)
 	puppet.startSyncing()
 	return nil
@@ -154,16 +195,13 @@ func (puppet *Puppet) stopSyncing() {
 }
 
 func (puppet *Puppet) ProcessResponse(resp *mautrix.RespSync, _ string) error {
-	if !puppet.customUser.IsConnected() {
-		puppet.log.Debugln("Skipping sync processing: custom user not connected to whatsapp")
+	if !puppet.customUser.IsLoggedIn() {
+		puppet.log.Debugln("Skipping sync processing: custom user not connected to GroupMe")
 		return nil
 	}
 	for roomID, events := range resp.Rooms.Join {
-		portal := puppet.bridge.GetPortalByMXID(roomID)
-		if portal == nil {
-			continue
-		}
 		for _, evt := range events.Ephemeral.Events {
+			evt.RoomID = roomID
 			err := evt.Content.ParseRaw(evt.Type)
 			if err != nil {
 				continue
@@ -171,85 +209,40 @@ func (puppet *Puppet) ProcessResponse(resp *mautrix.RespSync, _ string) error {
 			switch evt.Type {
 			case event.EphemeralEventReceipt:
 				if puppet.EnableReceipts {
-					go puppet.handleReceiptEvent(portal, evt)
+					go puppet.bridge.MatrixHandler.HandleReceipt(evt)
 				}
 			case event.EphemeralEventTyping:
-				go puppet.handleTypingEvent(portal, evt)
+				go puppet.bridge.MatrixHandler.HandleTyping(evt)
 			}
-		}
-	}
-	if puppet.EnablePresence {
-		for _, evt := range resp.Presence.Events {
-			if evt.Sender != puppet.CustomMXID {
-				continue
-			}
-			err := evt.Content.ParseRaw(evt.Type)
-			if err != nil {
-				continue
-			}
-			go puppet.handlePresenceEvent(evt)
 		}
 	}
 	return nil
 }
 
-func (puppet *Puppet) handlePresenceEvent(event *event.Event) {
-	// presence := whatsapp.PresenceAvailable
-	// if event.Content.Raw["presence"].(string) != "online" {
-	// 	presence = whatsapp.PresenceUnavailable
-	// 	puppet.customUser.log.Debugln("Marking offline")
-	// } else {
-	// 	puppet.customUser.log.Debugln("Marking online")
-	// }
-	// _, err := puppet.customUser.Conn.Presence("", presence)
-	// if err != nil {
-	// 	puppet.customUser.log.Warnln("Failed to set presence:", err)
-	// }
-}
-
-func (puppet *Puppet) handleReceiptEvent(portal *Portal, event *event.Event) {
-	// for eventID, receipts := range *event.Content.AsReceipt() {
-	// 	if _, ok := receipts.Read[puppet.CustomMXID]; !ok {
-	// 		continue
-	// 	}
-	// 	message := puppet.bridge.DB.Message.GetByMXID(eventID)
-	// 	if message == nil {
-	// 		continue
-	// 	}
-	// 	puppet.customUser.log.Debugfln("Marking %s/%s in %s/%s as read", message.JID, message.MXID, portal.Key.JID, portal.MXID)
-	// 	_, err := puppet.customUser.Conn.Read(portal.Key.JID, message.JID)
-	// 	if err != nil {
-	// 		puppet.customUser.log.Warnln("Error marking read:", err)
-	// 	}
-	// }
-}
-
-func (puppet *Puppet) handleTypingEvent(portal *Portal, evt *event.Event) {
-	// isTyping := false
-	// for _, userID := range evt.Content.AsTyping().UserIDs {
-	// 	if userID == puppet.CustomMXID {
-	// 		isTyping = true
-	// 		break
-	// 	}
-	// }
-	// if puppet.customTypingIn[evt.RoomID] != isTyping {
-	// 	puppet.customTypingIn[evt.RoomID] = isTyping
-	// 	presence := whatsapp.PresenceComposing
-	// 	if !isTyping {
-	// 		puppet.customUser.log.Debugfln("Marking not typing in %s/%s", portal.Key.JID, portal.MXID)
-	// 		presence = whatsapp.PresencePaused
-	// 	} else {
-	// 		puppet.customUser.log.Debugfln("Marking typing in %s/%s", portal.Key.JID, portal.MXID)
-	// 	}
-	// 	_, err := puppet.customUser.Conn.Presence(portal.Key.JID, presence)
-	// 	if err != nil {
-	// 		puppet.customUser.log.Warnln("Error setting typing:", err)
-	// 	}
-	// }
+func (puppet *Puppet) tryRelogin(cause error, action string) bool {
+	if !puppet.bridge.Config.CanAutoDoublePuppet(puppet.CustomMXID) {
+		return false
+	}
+	puppet.log.Debugfln("Trying to relogin after '%v' while %s", cause, action)
+	accessToken, err := puppet.loginWithSharedSecret(puppet.CustomMXID)
+	if err != nil {
+		puppet.log.Errorfln("Failed to relogin after '%v' while %s: %v", cause, action, err)
+		return false
+	}
+	puppet.log.Infofln("Successfully relogined after '%v' while %s", cause, action)
+	puppet.AccessToken = accessToken
+	return true
 }
 
 func (puppet *Puppet) OnFailedSync(_ *mautrix.RespSync, err error) (time.Duration, error) {
 	puppet.log.Warnln("Sync error:", err)
+	if errors.Is(err, mautrix.MUnknownToken) {
+		if !puppet.tryRelogin(err, "syncing") {
+			return 0, err
+		}
+		puppet.customIntent.AccessToken = puppet.AccessToken
+		return 0, nil
+	}
 	return 10 * time.Second, nil
 }
 

@@ -17,31 +17,33 @@
 package database
 
 import (
+	"database/sql"
+	"fmt"
 	"strconv"
 	"strings"
 
-	"gorm.io/gorm"
 	log "maunium.net/go/maulogger/v2"
 	"maunium.net/go/mautrix/id"
+	"maunium.net/go/mautrix/util/dbutil"
 
-	"github.com/beeper/groupme/types"
+	"github.com/karmanyaahm/groupme"
 )
 
-// JID is the puppet or the group
+// GMID is the puppet or the group
 // Receiver is the "Other Person" in a DM or the group itself in a group
 type PortalKey struct {
-	JID      types.GroupMeID `gorm:"primaryKey"`
-	Receiver types.GroupMeID `gorm:"primaryKey"`
+	GMID     groupme.ID
+	Receiver groupme.ID
 }
 
-func ParsePortalKey(inp types.GroupMeID) *PortalKey {
+func ParsePortalKey(inp string) *PortalKey {
 	parts := strings.Split(inp, "+")
 
 	if len(parts) == 1 {
 		if i, err := strconv.Atoi(inp); i == 0 || err != nil {
 			return nil
 		}
-		return &PortalKey{inp, inp}
+		return &PortalKey{groupme.ID(inp), groupme.ID(inp)}
 	} else if len(parts) == 2 {
 		if i, err := strconv.Atoi(parts[0]); i == 0 || err != nil {
 			return nil
@@ -51,38 +53,38 @@ func ParsePortalKey(inp types.GroupMeID) *PortalKey {
 		}
 
 		return &PortalKey{
-			JID:      parts[1],
-			Receiver: parts[0],
+			GMID:     groupme.ID(parts[1]),
+			Receiver: groupme.ID(parts[0]),
 		}
 	} else {
 		return nil
 	}
 }
 
-func GroupPortalKey(jid types.GroupMeID) PortalKey {
+func GroupPortalKey(gmid groupme.ID) PortalKey {
 	return PortalKey{
-		JID:      jid,
-		Receiver: jid,
+		GMID:     gmid,
+		Receiver: gmid,
 	}
 }
 
-func NewPortalKey(jid, receiver types.GroupMeID) PortalKey {
+func NewPortalKey(gmid, receiver groupme.ID) PortalKey {
 	return PortalKey{
-		JID:      jid,
+		GMID:     gmid,
 		Receiver: receiver,
 	}
 }
 
 func (key PortalKey) String() string {
-	if key.Receiver == key.JID {
-		return key.JID
+	if key.Receiver == key.GMID {
+		return key.GMID.String()
 	}
-	return key.JID + "+" + key.Receiver
+	return key.GMID.String() + "+" + key.Receiver.String()
 }
 
 func (key PortalKey) IsPrivate() bool {
 	//also see FindPrivateChats
-	return key.JID != key.Receiver
+	return key.GMID != key.Receiver
 }
 
 type PortalQuery struct {
@@ -97,83 +99,86 @@ func (pq *PortalQuery) New() *Portal {
 	}
 }
 
-func (pq *PortalQuery) GetAll() []*Portal {
-	return pq.getAll(pq.db.DB)
+const (
+	portalColumns        = "gmid, receiver, mxid, name, name_set, topic, topic_set, avatar, avatar_url, avatar_set, encrypted"
+	getAllPortalsQuery   = "SELECT " + portalColumns + " FROM portal"
+	getPortalByGMIDQuery = getAllPortalsQuery + " WHERE gmid=$1 AND receiver=$2"
+	getPortalByMXIDQuery = getAllPortalsQuery + " WHERE mxid=$1"
+	getAllPortalsByGMID  = getAllPortalsQuery + " WHERE gmid=$1"
+	getAllPrivateChats   = getAllPortalsQuery + " WHERE receiver=$1 AND receiver <> gmid"
+)
 
+func (pq *PortalQuery) GetAll() []*Portal {
+	return pq.getAll(getAllPortalsQuery)
 }
 
-func (pq *PortalQuery) GetByJID(key PortalKey) *Portal {
-	return pq.get(pq.db.DB.Where("jid = ? AND receiver = ?", key.JID, key.Receiver))
-
+func (pq *PortalQuery) GetByGMID(key PortalKey) *Portal {
+	return pq.get(getPortalByGMIDQuery, key.GMID, key.Receiver)
 }
 
 func (pq *PortalQuery) GetByMXID(mxid id.RoomID) *Portal {
-	return pq.get(pq.db.DB.Where("mxid = ?", mxid))
+	return pq.get(getPortalByMXIDQuery, mxid)
 }
 
-func (pq *PortalQuery) GetAllByJID(jid types.GroupMeID) []*Portal {
-	return pq.getAll(pq.db.DB.Where("jid = ?", jid))
-
+func (pq *PortalQuery) GetAllByGMID(gmid groupme.ID) []*Portal {
+	return pq.getAll(getAllPortalsByGMID, gmid)
 }
 
-func (pq *PortalQuery) FindPrivateChats(receiver types.GroupMeID) []*Portal {
-	//also see IsPrivate
-	return pq.getAll(pq.db.DB.Where("receiver = ? AND receiver <> jid", receiver))
-
+func (pq *PortalQuery) FindPrivateChats(receiver groupme.ID) []*Portal {
+	return pq.getAll(getAllPrivateChats, receiver)
 }
 
-func (pq *PortalQuery) getAll(db *gorm.DB) (portals []*Portal) {
-	ans := db.Find(&portals)
-	if ans.Error != nil || len(portals) == 0 {
+func (pq *PortalQuery) getAll(query string, args ...any) (portals []*Portal) {
+	rows, err := pq.db.Query(query, args...)
+	if err != nil || rows == nil {
 		return nil
 	}
-	for _, i := range portals {
-		i.db = pq.db
-		i.log = pq.log
+	defer rows.Close()
+	for rows.Next() {
+		portals = append(portals, pq.New().Scan(rows))
 	}
 	return
-
 }
 
-func (pq *PortalQuery) get(db *gorm.DB) *Portal {
-	var portal Portal
-	ans := db.Limit(1).Find(&portal)
-	if ans.Error != nil || db.RowsAffected == 0 {
+func (pq *PortalQuery) get(query string, args ...interface{}) *Portal {
+	row := pq.db.QueryRow(query, args...)
+	if row == nil {
 		return nil
 	}
-	portal.db = pq.db
-	portal.log = pq.log
-
-	return &portal
+	return pq.New().Scan(row)
 }
 
 type Portal struct {
 	db  *Database
 	log log.Logger
 
-	Key  PortalKey `gorm:"primaryKey;embedded"`
+	Key  PortalKey
 	MXID id.RoomID
 
 	Name      string
+	NameSet   bool
 	Topic     string
+	TopicSet  bool
 	Avatar    string
 	AvatarURL id.ContentURI
-	Encrypted bool `gorm:"notNull;default:false"`
+	AvatarSet bool
+	Encrypted bool
 }
 
-// func (portal *Portal) Scan(row Scannable) *Portal {
-// 	var mxid, avatarURL sql.NullString
-// 	err := row.Scan(&portal.Key.JID, &portal.Key.Receiver, &mxid, &portal.Name, &portal.Topic, &portal.Avatar, &avatarURL, &portal.Encrypted)
-// 	if err != nil {
-// 		if err != sql.ErrNoRows {
-// 			portal.log.Errorln("Database scan failed:", err)
-// 		}
-// 		return nil
-// 	}
-// 	portal.MXID = id.RoomID(mxid.String)
-// 	portal.AvatarURL, _ = id.ParseContentURI(avatarURL.String)
-// 	return portal
-// }
+func (portal *Portal) Scan(row dbutil.Scannable) *Portal {
+	var mxid, avatarURL sql.NullString
+
+	err := row.Scan(&portal.Key.GMID, &portal.Key.Receiver, &mxid, &portal.Name, &portal.NameSet, &portal.Topic, &portal.TopicSet, &portal.Avatar, &avatarURL, &portal.AvatarSet, &portal.Encrypted)
+	if err != nil {
+		if err != sql.ErrNoRows {
+			portal.log.Errorln("Database scan failed:", err)
+		}
+		return nil
+	}
+	portal.MXID = id.RoomID(mxid.String)
+	portal.AvatarURL, _ = id.ParseContentURI(avatarURL.String)
+	return portal
+}
 
 func (portal *Portal) mxidPtr() *id.RoomID {
 	if len(portal.MXID) > 0 {
@@ -183,50 +188,40 @@ func (portal *Portal) mxidPtr() *id.RoomID {
 }
 
 func (portal *Portal) Insert() {
-
-	ans := portal.db.Create(&portal)
-	print("beware of types")
-	if ans.Error != nil {
-		portal.log.Warnfln("Failed to insert %s: %v", portal.Key, ans.Error)
+	_, err := portal.db.Exec(fmt.Sprintf(`
+		INSERT INTO portal (%s)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+	`, portalColumns),
+		portal.Key.GMID, portal.Key.Receiver, portal.mxidPtr(), portal.Name, portal.NameSet, portal.Topic, portal.TopicSet, portal.Avatar, portal.AvatarURL.String(), portal.AvatarSet, portal.Encrypted)
+	if err != nil {
+		portal.log.Warnfln("Failed to insert %s: %v", portal.Key, err)
 	}
 }
 
-func (portal *Portal) Update() {
-	ans := portal.db.Where("jid = ? AND receiver = ?", portal.Key.JID, portal.Key.Receiver).Save(&portal)
-	print("check .model vs not")
-
-	if ans.Error != nil {
-		portal.log.Warnfln("Failed to update %s: %v", portal.Key, ans.Error)
+func (portal *Portal) Update(txn dbutil.Transaction) {
+	query := `
+		UPDATE portal
+		SET mxid=$1, name=$2, name_set=$3, topic=$4, topic_set=$5, avatar=$6, avatar_url=$7, avatar_set=$8, encrypted=$9
+		WHERE gmid=$10 AND receiver=$11
+	`
+	args := []interface{}{
+		portal.mxidPtr(), portal.Name, portal.NameSet, portal.Topic, portal.TopicSet, portal.Avatar, portal.AvatarURL.String(),
+		portal.AvatarSet, portal.Encrypted, portal.Key.GMID, portal.Key.Receiver,
+	}
+	var err error
+	if txn != nil {
+		_, err = txn.Exec(query, args...)
+	} else {
+		_, err = portal.db.Exec(query, args...)
+	}
+	if err != nil {
+		portal.log.Warnfln("Failed to update %s: %v", portal.Key, err)
 	}
 }
 
 func (portal *Portal) Delete() {
-	ans := portal.db.Where("jid = ? AND receiver = ?", portal.Key.JID, portal.Key.Receiver).Delete(&portal)
-	if ans.Error != nil {
-		portal.log.Warnfln("Failed to delete %s: %v", portal.Key, ans.Error)
-	}
-}
-
-func (portal *Portal) GetUserIDs() []id.UserID {
-	//TODO: gorm this
-	rows, err := portal.db.Raw(`SELECT "users".mxid FROM "users", user_portals
-		WHERE "users".jid=user_portals.user_jid
-			AND user_portals.portal_jid = ?
-			AND user_portals.portal_receiver = ?`,
-		portal.Key.JID, portal.Key.Receiver).Rows()
+	_, err := portal.db.Exec("DELETE FROM portal WHERE gmid=$1 AND receiver=$2", portal.Key.GMID, portal.Key.Receiver)
 	if err != nil {
-		portal.log.Debugln("Failed to get portal user ids:", err)
-		return nil
+		portal.log.Warnfln("Failed to delete %s: %v", portal.Key, err)
 	}
-	var userIDs []id.UserID
-	for rows.Next() {
-		var userID id.UserID
-		err = rows.Scan(&userID)
-		if err != nil {
-			portal.log.Warnln("Failed to scan row:", err)
-			continue
-		}
-		userIDs = append(userIDs, userID)
-	}
-	return userIDs
 }

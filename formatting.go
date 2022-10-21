@@ -21,10 +21,9 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/karmanyaahm/groupme"
 	"maunium.net/go/mautrix/format"
 	"maunium.net/go/mautrix/id"
-
-	"github.com/beeper/groupme/types"
 )
 
 var italicRegex = regexp.MustCompile("([\\s>~*]|^)_(.+?)_([^a-zA-Z\\d]|$)")
@@ -32,10 +31,10 @@ var boldRegex = regexp.MustCompile("([\\s>_~]|^)\\*(.+?)\\*([^a-zA-Z\\d]|$)")
 var strikethroughRegex = regexp.MustCompile("([\\s>_*]|^)~(.+?)~([^a-zA-Z\\d]|$)")
 var codeBlockRegex = regexp.MustCompile("```(?:.|\n)+?```")
 
-const mentionedJIDsContextKey = "net.maunium.groupme.mentioned_jids"
+const mentionedGMIDsContextKey = "net.maunium.groupme.mentioned_gmids"
 
 type Formatter struct {
-	bridge *Bridge
+	bridge *GMBridge
 
 	matrixHTMLParser *format.HTMLParser
 
@@ -44,7 +43,7 @@ type Formatter struct {
 	waReplFuncText map[*regexp.Regexp]func(string) string
 }
 
-func NewFormatter(bridge *Bridge) *Formatter {
+func NewFormatter(bridge *GMBridge) *Formatter {
 	formatter := &Formatter{
 		bridge: bridge,
 		matrixHTMLParser: &format.HTMLParser{
@@ -55,11 +54,11 @@ func NewFormatter(bridge *Bridge) *Formatter {
 				if mxid[0] == '@' {
 					puppet := bridge.GetPuppetByMXID(id.UserID(mxid))
 					if puppet != nil {
-						jids, ok := ctx[mentionedJIDsContextKey].([]types.GroupMeID)
+						gmids, ok := ctx[mentionedGMIDsContextKey].([]groupme.ID)
 						if !ok {
-							ctx[mentionedJIDsContextKey] = []types.GroupMeID{puppet.JID}
+							ctx[mentionedGMIDsContextKey] = []groupme.ID{puppet.GMID}
 						} else {
-							ctx[mentionedJIDsContextKey] = append(jids, puppet.JID)
+							ctx[mentionedGMIDsContextKey] = append(gmids, puppet.GMID)
 						}
 						return "@" + puppet.PhoneNumber()
 					}
@@ -101,7 +100,7 @@ func NewFormatter(bridge *Bridge) *Formatter {
 	return formatter
 }
 
-//func (formatter *Formatter) getMatrixInfoByJID(jid types.GroupMeID) (mxid id.UserID, displayname string) {
+//func (formatter *Formatter) getMatrixInfoByJID(jid groupme.ID) (mxid id.UserID, displayname string) {
 //	if user := formatter.bridge.GetUserByJID(jid); user != nil {
 //		mxid = user.MXID
 //		displayname = string(user.MXID)
@@ -112,7 +111,7 @@ func NewFormatter(bridge *Bridge) *Formatter {
 //	return
 //}
 
-//func (formatter *Formatter) ParseWhatsApp(content *event.MessageEventContent, mentionedJIDs []types.GroupMeID) {
+//func (formatter *Formatter) ParseWhatsApp(content *event.MessageEventContent, mentionedJIDs []groupme.ID) {
 //	output := html.EscapeString(content.Body)
 //	for regex, replacement := range formatter.waReplString {
 //		output = regex.ReplaceAllString(output, replacement)
@@ -136,9 +135,9 @@ func NewFormatter(bridge *Bridge) *Formatter {
 //	}
 //}
 
-func (formatter *Formatter) ParseMatrix(html string) (string, []types.GroupMeID) {
+func (formatter *Formatter) ParseMatrix(html string) (string, []groupme.ID) {
 	ctx := make(format.Context)
 	result := formatter.matrixHTMLParser.Parse(html, ctx)
-	mentionedJIDs, _ := ctx[mentionedJIDsContextKey].([]types.GroupMeID)
+	mentionedJIDs, _ := ctx[mentionedGMIDsContextKey].([]groupme.ID)
 	return result, mentionedJIDs
 }

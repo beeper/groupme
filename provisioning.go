@@ -28,7 +28,7 @@ import (
 )
 
 type ProvisioningAPI struct {
-	bridge *Bridge
+	bridge *GMBridge
 	log    log.Logger
 }
 
