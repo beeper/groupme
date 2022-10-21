@@ -40,7 +40,7 @@ func (fc FayeClient) WaitSubscribe(channel string, msgChannel chan groupme.PushM
 	}()
 }
 
-//for authentication, specific implementation will vary based on faye library
+// for authentication, specific implementation will vary based on faye library
 type AuthExt struct{}
 
 func (a *AuthExt) In(wray.Message) {}
