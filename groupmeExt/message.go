@@ -36,7 +36,7 @@ func (m *Message) Value() (driver.Value, error) {
 	return e, nil
 }
 
-//DownloadImage helper function to download image from groupme;
+// DownloadImage helper function to download image from groupme;
 // append .large/.preview/.avatar to get various sizes
 func DownloadImage(URL string) (bytes *[]byte, mime string, err error) {
 	//TODO check its actually groupme?
@@ -70,7 +70,11 @@ func DownloadFile(RoomJID types.GroupMeID, FileID string, token string) (content
 	req, _ := http.NewRequest("POST", fmt.Sprintf("https://file.groupme.com/v1/%s/fileData", RoomJID), bytes.NewReader(b))
 	req.Header.Add("X-Access-Token", token)
 	req.Header.Add("Content-Type", "application/json")
-	resp, _ := client.Do(req)
+	resp, err := client.Do(req)
+	if err != nil {
+		// TODO: FIX
+		panic(err)
+	}
 
 	defer resp.Body.Close()
 	data := []ImgData{}
@@ -83,7 +87,11 @@ func DownloadFile(RoomJID types.GroupMeID, FileID string, token string) (content
 	req, _ = http.NewRequest("POST", fmt.Sprintf("https://file.groupme.com/v1/%s/files/%s", RoomJID, FileID), nil)
 	req.URL.Query().Add("token", token)
 	req.Header.Add("X-Access-Token", token)
-	resp, _ = client.Do(req)
+	resp, err = client.Do(req)
+	if err != nil {
+		// TODO: FIX
+		panic(err)
+	}
 	defer resp.Body.Close()
 
 	bytes, _ := ioutil.ReadAll(resp.Body)

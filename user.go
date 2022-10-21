@@ -363,7 +363,7 @@ func (user *User) Login(ce *CommandEvent) {
 	// //      Also between the two logout methods (commands.go and provisioning.go)
 	// user.ConnectionErrors = 0
 	// user.JID = strings.Replace(user.Conn.Info.Wid, whatsappExt.OldUserSuffix, whatsappExt.NewUserSuffix, 1)
-	
+
 	if len(ce.Args) < 1 {
 		ce.Reply(`Get your access token from https://dev.groupme.com/ which should be the first argument to login`)
 		return
@@ -643,7 +643,7 @@ func (user *User) syncPortals(createAll bool) {
 			break
 		}
 		wg.Add(1)
-		go func(chat Chat) {
+		go func(chat Chat, i int) {
 			create := (chat.LastMessageTime >= user.LastConnection && user.LastConnection > 0) || i < limit
 			if len(chat.Portal.MXID) > 0 || create || createAll {
 				chat.Portal.Sync(user, chat.Group)
@@ -654,7 +654,7 @@ func (user *User) syncPortals(createAll bool) {
 			}
 
 			wg.Done()
-		}(chat)
+		}(chat, i)
 
 	}
 	wg.Wait()

@@ -336,20 +336,20 @@ var upgrader = websocket.Upgrader{
 }
 
 func (prov *ProvisioningAPI) Login(w http.ResponseWriter, r *http.Request) {
-	userID := r.URL.Query().Get("user_id")
-	user := prov.bridge.GetUserByMXID(id.UserID(userID))
+	// userID := r.URL.Query().Get("user_id")
+	// user := prov.bridge.GetUserByMXID(id.UserID(userID))
 
-	if len(ce.Args) < 1 {
-		// Return error that the token needs to be longer than 0 length 
-		// ce.Reply(`Get your access token from https://dev.groupme.com/ which should be the first argument to login`)
-		return
-	}
-	user.Token = ce.Args[0]
+	// if len(ce.Args) < 1 {
+	// 	// Return error that the token needs to be longer than 0 length
+	// 	// ce.Reply(`Get your access token from https://dev.groupme.com/ which should be the first argument to login`)
+	// 	return
+	// }
+	// user.Token = ce.Args[0]
 
-	user.addToJIDMap()
-	// ce.Reply("Successfully logged in, synchronizing chats...")
-	user.PostLogin()
-	user.Connect()
+	// user.addToJIDMap()
+	// // ce.Reply("Successfully logged in, synchronizing chats...")
+	// user.PostLogin()
+	// user.Connect()
 
 	// c, err := upgrader.Upgrade(w, r, nil)
 	// if err != nil {

@@ -68,8 +68,8 @@ type Config struct {
 	} `yaml:"metrics"`
 
 	GroupMe struct {
-		OSName string `yaml:"os_name"`
-		BrowserName  string `yaml:"browser_name"`
+		OSName      string `yaml:"os_name"`
+		BrowserName string `yaml:"browser_name"`
 	} `yaml:"groupme"`
 
 	Bridge BridgeConfig `yaml:"bridge"`

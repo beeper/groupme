@@ -237,10 +237,9 @@ func (puppet *Puppet) UpdateAvatar(source *User, portalMXID id.RoomID, avatar st
 }
 
 func (puppet *Puppet) UpdateName(source *User, portalMXID id.RoomID, contact groupme.Member) bool {
-	newName, quality := puppet.bridge.Config.Bridge.FormatDisplayname(contact)
+	newName, _ := puppet.bridge.Config.Bridge.FormatDisplayname(contact)
 
 	memberRaw, _ := puppet.bridge.StateStore.TryGetMemberRaw(portalMXID, puppet.MXID) //TODO Handle
-	quality = quality                                                                 //quality not used
 
 	if memberRaw.DisplayName != newName { //&& quality >= puppet.NameQuality[portalMXID] {
 		var err error
@@ -278,7 +277,7 @@ func (puppet *Puppet) updatePortalAvatar() {
 				portal.log.Warnln("Failed to set avatar:", err)
 			}
 		}
-		portal.AvatarURL = types.ContentURI{id.MustParseContentURI(m.AvatarURL)}
+		portal.AvatarURL = id.MustParseContentURI(m.AvatarURL)
 		portal.Avatar = m.Avatar
 		portal.Update()
 	})

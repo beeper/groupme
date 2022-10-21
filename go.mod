@@ -25,4 +25,4 @@ require (
 	maunium.net/go/mautrix v0.9.24
 )
 
-replace github.com/karmanyaahm/groupme => ./groupme
+replace github.com/karmanyaahm/groupme => ../groupme-lib

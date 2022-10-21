@@ -157,7 +157,7 @@ type Portal struct {
 	Name      string
 	Topic     string
 	Avatar    string
-	AvatarURL types.ContentURI
+	AvatarURL id.ContentURI
 	Encrypted bool `gorm:"notNull;default:false"`
 }
 

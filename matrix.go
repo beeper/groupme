@@ -31,7 +31,6 @@ import (
 	"maunium.net/go/mautrix/id"
 
 	"github.com/karmanyaahm/matrix-groupme-go/database"
-	"github.com/karmanyaahm/matrix-groupme-go/types"
 )
 
 type MatrixHandler struct {
@@ -165,17 +164,17 @@ func (mx *MatrixHandler) handlePrivatePortal(roomID id.RoomID, inviter *User, pu
 func (mx *MatrixHandler) createPrivatePortalFromInvite(roomID id.RoomID, inviter *User, puppet *Puppet, portal *Portal) {
 	portal.MXID = roomID
 	portal.Topic = "WhatsApp private chat"
-	portal.Key = database.PortalKey{puppet.JID, inviter.JID}
+	portal.Key = database.PortalKey{JID: puppet.JID, Receiver: inviter.JID}
 
 	_, _ = portal.MainIntent().SetRoomTopic(portal.MXID, portal.Topic)
 	if portal.bridge.Config.Bridge.PrivateChatPortalMeta {
 		m, _ := mx.bridge.StateStore.TryGetMemberRaw(portal.MXID, puppet.MXID)
 		portal.Name = m.DisplayName
-		portal.AvatarURL = types.ContentURI{id.MustParseContentURI(m.AvatarURL)}
+		portal.AvatarURL = id.MustParseContentURI(m.AvatarURL)
 		print("possible bug with pointer above")
 		portal.Avatar = m.Avatar
 		_, _ = portal.MainIntent().SetRoomName(portal.MXID, portal.Name)
-		_, _ = portal.MainIntent().SetRoomAvatar(portal.MXID, portal.AvatarURL.ContentURI)
+		_, _ = portal.MainIntent().SetRoomAvatar(portal.MXID, portal.AvatarURL)
 	} else {
 		portal.Name = ""
 	}

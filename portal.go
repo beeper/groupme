@@ -196,7 +196,7 @@ func (portal *Portal) handleMessageLoop() {
 			if msg.timestamp+MaxMessageAgeToCreatePortal < uint64(time.Now().Unix()) {
 				portal.log.Debugln("Not creating portal room for incoming message: message is too old")
 				continue
-			} 
+			}
 			portal.log.Debugln("Creating Matrix room from incoming message")
 			err := portal.CreateMatrixRoom(msg.source)
 			if err != nil {
@@ -392,7 +392,7 @@ func (portal *Portal) UpdateAvatar(user *User, avatar string, updateInfo bool) b
 		if err != nil {
 			portal.log.Warnln("Failed to remove avatar:", err)
 		}
-		portal.AvatarURL = types.ContentURI{}
+		portal.AvatarURL = id.ContentURI{}
 		portal.Avatar = avatar
 		return true
 	}
@@ -425,7 +425,7 @@ func (portal *Portal) UpdateAvatar(user *User, avatar string, updateInfo bool) b
 		return false
 	}
 
-	portal.AvatarURL = types.ContentURI{resp.ContentURI}
+	portal.AvatarURL = resp.ContentURI
 	if len(portal.MXID) > 0 {
 		_, err = portal.MainIntent().SetRoomAvatar(portal.MXID, resp.ContentURI)
 		if err != nil {
@@ -951,7 +951,7 @@ func (portal *Portal) CreateMatrixRoom(user *User) error {
 		//m, _ := portal.bridge.StateStore.TryGetMemberRaw(portal.MXID, puppet.MXID)
 		if portal.bridge.Config.Bridge.PrivateChatPortalMeta {
 			portal.Name = meta.DisplayName
-			portal.AvatarURL = types.ContentURI{id.MustParseContentURI(meta.AvatarURL)}
+			portal.AvatarURL = id.MustParseContentURI(meta.AvatarURL)
 			portal.Avatar = meta.Avatar
 		} else {
 			portal.Name = ""
@@ -992,7 +992,7 @@ func (portal *Portal) CreateMatrixRoom(user *User) error {
 		initialState = append(initialState, &event.Event{
 			Type: event.StateRoomAvatar,
 			Content: event.Content{
-				Parsed: event.RoomAvatarEventContent{URL: portal.AvatarURL.ContentURI},
+				Parsed: event.RoomAvatarEventContent{URL: portal.AvatarURL},
 			},
 		})
 	}
@@ -1414,7 +1414,7 @@ func (portal *Portal) handleAttachment(intent *appservice.IntentAPI, attachment 
 		portal.log.Warnln("Unable to handle groupme attachment type", attachment.Type)
 		return nil, true, fmt.Errorf("Unable to handle groupme attachment type %s", attachment.Type)
 	}
-	return nil, true, errors.New("Unknown type")
+	// return nil, true, errors.New("Unknown type")
 }
 func (portal *Portal) HandleMediaMessage(source *User, msg mediaMessage) {
 	//	intent := portal.startHandling(source, msg.info)
