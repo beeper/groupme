@@ -18,10 +18,10 @@ package database
 
 import (
 	log "maunium.net/go/maulogger/v2"
-
-	"github.com/karmanyaahm/matrix-groupme-go/groupmeExt"
-	"github.com/karmanyaahm/matrix-groupme-go/types"
 	"maunium.net/go/mautrix/id"
+
+	"github.com/beeper/groupme/groupmeExt"
+	"github.com/beeper/groupme/types"
 )
 
 type MessageQuery struct {

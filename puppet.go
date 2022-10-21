@@ -28,10 +28,10 @@ import (
 	"maunium.net/go/mautrix/appservice"
 	"maunium.net/go/mautrix/id"
 
-	"github.com/karmanyaahm/matrix-groupme-go/database"
-	"github.com/karmanyaahm/matrix-groupme-go/groupmeExt"
-	"github.com/karmanyaahm/matrix-groupme-go/types"
-	whatsappExt "github.com/karmanyaahm/matrix-groupme-go/whatsapp-ext"
+	"github.com/beeper/groupme/database"
+	"github.com/beeper/groupme/groupmeExt"
+	"github.com/beeper/groupme/types"
+	whatsappExt "github.com/beeper/groupme/whatsapp-ext"
 )
 
 var userIDRegex *regexp.Regexp

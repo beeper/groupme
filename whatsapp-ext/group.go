@@ -17,7 +17,7 @@
 package whatsappExt
 
 import (
-	"github.com/karmanyaahm/matrix-groupme-go/types"
+	"github.com/beeper/groupme/types"
 )
 
 type CreateGroupResponse struct {

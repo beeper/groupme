@@ -40,7 +40,7 @@ func NewSQLCryptoStore(db *Database, userID id.UserID, ghostIDFormat string) *SQ
 	raw, _ := db.DB.DB()
 	return &SQLCryptoStore{
 		SQLCryptoStore: crypto.NewSQLCryptoStore(raw, db.dialect, "", "",
-			[]byte("github.com/karmanyaahm/matrix-groupme-go"),
+			[]byte("github.com/beeper/groupme"),
 			&cryptoLogger{db.log.Sub("CryptoStore")}),
 		UserID:        userID,
 		GhostIDFormat: ghostIDFormat,

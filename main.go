@@ -34,10 +34,10 @@ import (
 	"maunium.net/go/mautrix/event"
 	"maunium.net/go/mautrix/id"
 
-	"github.com/karmanyaahm/matrix-groupme-go/config"
-	"github.com/karmanyaahm/matrix-groupme-go/database"
-	"github.com/karmanyaahm/matrix-groupme-go/database/upgrades"
-	"github.com/karmanyaahm/matrix-groupme-go/types"
+	"github.com/beeper/groupme/config"
+	"github.com/beeper/groupme/database"
+	"github.com/beeper/groupme/database/upgrades"
+	"github.com/beeper/groupme/types"
 )
 
 var (
