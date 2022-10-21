@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -30,6 +31,9 @@ import (
 	"github.com/Rhymen/go-whatsapp"
 
 	"maunium.net/go/mautrix"
+	"maunium.net/go/mautrix/appservice"
+	"maunium.net/go/mautrix/bridge"
+	"maunium.net/go/mautrix/bridge/bridgeconfig"
 	"maunium.net/go/mautrix/event"
 	"maunium.net/go/mautrix/format"
 	"maunium.net/go/mautrix/id"
@@ -46,14 +50,14 @@ type User struct {
 	*database.User
 	Conn *groupme.PushSubscription
 
-	bridge *Bridge
+	bridge *GMBridge
 	log    log.Logger
 
-	Admin               bool
-	Whitelisted         bool
-	RelaybotWhitelisted bool
+	Admin           bool
+	Whitelisted     bool
+	PermissionLevel bridgeconfig.PermissionLevel
 
-	IsRelaybot bool
+	BridgeState *bridge.BridgeStateQueue
 
 	Client           *groupmeExt.Client
 	ConnectionErrors int
@@ -79,7 +83,25 @@ type User struct {
 	mgmtCreateLock sync.Mutex
 }
 
-func (bridge *Bridge) GetUserByMXID(userID id.UserID) *User {
+func (br *GMBridge) getUserByMXID(userID id.UserID, onlyIfExists bool) *User {
+	_, isPuppet := br.ParsePuppetMXID(userID)
+	if isPuppet || userID == br.Bot.UserID {
+		return nil
+	}
+	br.usersLock.Lock()
+	defer br.usersLock.Unlock()
+	user, ok := br.usersByMXID[userID]
+	if !ok {
+		userIDPtr := &userID
+		if onlyIfExists {
+			userIDPtr = nil
+		}
+		return br.loadDBUser(br.DB.User.GetByMXID(userID), userIDPtr)
+	}
+	return user
+}
+
+func (bridge *GMBridge) GetUserByMXID(userID id.UserID) *User {
 	_, isPuppet := bridge.ParsePuppetMXID(userID)
 	if isPuppet || userID == bridge.Bot.UserID {
 		return nil
@@ -93,103 +115,124 @@ func (bridge *Bridge) GetUserByMXID(userID id.UserID) *User {
 	return user
 }
 
-func (bridge *Bridge) GetUserByJID(userID types.GroupMeID) *User {
+func (br *GMBridge) GetUserByMXIDIfExists(userID id.UserID) *User {
+	return br.getUserByMXID(userID, true)
+}
+
+func (bridge *GMBridge) GetUserByGMID(gmid types.GroupMeID) *User {
 	bridge.usersLock.Lock()
 	defer bridge.usersLock.Unlock()
-	user, ok := bridge.usersByJID[userID]
+	user, ok := bridge.usersByGMID[gmid]
 	if !ok {
-		return bridge.loadDBUser(bridge.DB.User.GetByJID(userID), nil)
+		return bridge.loadDBUser(bridge.DB.User.GetByGMID(gmid), nil)
 	}
 	return user
 }
 
-func (user *User) addToJIDMap() {
+func (user *User) addToGMIDMap() {
 	user.bridge.usersLock.Lock()
-	user.bridge.usersByJID[user.JID] = user
+	user.bridge.usersByGMID[user.GMID] = user
 	user.bridge.usersLock.Unlock()
 }
 
-func (user *User) removeFromJIDMap() {
+func (user *User) removeFromGMIDMap() {
 	user.bridge.usersLock.Lock()
-	jidUser, ok := user.bridge.usersByJID[user.JID]
+	jidUser, ok := user.bridge.usersByGMID[user.GMID]
 	if ok && user == jidUser {
-		delete(user.bridge.usersByJID, user.JID)
+		delete(user.bridge.usersByGMID, user.GMID)
 	}
 	user.bridge.usersLock.Unlock()
-	user.bridge.Metrics.TrackLoginState(user.JID, false)
+	user.bridge.Metrics.TrackLoginState(user.GMID, false)
 }
 
-func (bridge *Bridge) GetAllUsers() []*User {
-	bridge.usersLock.Lock()
-	defer bridge.usersLock.Unlock()
-	dbUsers := bridge.DB.User.GetAll()
+func (br *GMBridge) GetAllUsers() []*User {
+	br.usersLock.Lock()
+	defer br.usersLock.Unlock()
+	dbUsers := br.DB.User.GetAll()
 	output := make([]*User, len(dbUsers))
 	for index, dbUser := range dbUsers {
-		user, ok := bridge.usersByMXID[dbUser.MXID]
+		user, ok := br.usersByMXID[dbUser.MXID]
 		if !ok {
-			user = bridge.loadDBUser(dbUser, nil)
+			user = br.loadDBUser(dbUser, nil)
 		}
 		output[index] = user
 	}
 	return output
 }
 
-func (bridge *Bridge) loadDBUser(dbUser *database.User, mxid *id.UserID) *User {
+func (br *GMBridge) loadDBUser(dbUser *database.User, mxid *id.UserID) *User {
 	if dbUser == nil {
 		if mxid == nil {
 			return nil
 		}
-		dbUser = bridge.DB.User.New()
+		dbUser = br.DB.User.New()
 		dbUser.MXID = *mxid
 		dbUser.Insert()
 	}
-	user := bridge.NewUser(dbUser)
-	bridge.usersByMXID[user.MXID] = user
-	if len(user.JID) > 0 {
-		bridge.usersByJID[user.JID] = user
+	user := br.NewUser(dbUser)
+	br.usersByMXID[user.MXID] = user
+	if len(user.GMID) > 0 {
+		br.usersByGMID[user.GMID] = user
 	}
 	if len(user.ManagementRoom) > 0 {
-		bridge.managementRooms[user.ManagementRoom] = user
+		br.managementRooms[user.ManagementRoom] = user
 	}
 	return user
 }
 
-func (user *User) GetPortals() []*Portal {
-	user.bridge.portalsLock.Lock()
-	keys := user.User.GetPortalKeys()
-	portals := make([]*Portal, len(keys))
-
-	for i, key := range keys {
-		portal, ok := user.bridge.portalsByJID[key]
-		if !ok {
-			portal = user.bridge.loadDBPortal(user.bridge.DB.Portal.GetByJID(key), &key)
-		}
-		portals[i] = portal
-	}
-	user.bridge.portalsLock.Unlock()
-	return portals
-}
-
-func (bridge *Bridge) NewUser(dbUser *database.User) *User {
+func (br *GMBridge) NewUser(dbUser *database.User) *User {
 	user := &User{
 		User:   dbUser,
-		bridge: bridge,
-		log:    bridge.Log.Sub("User").Sub(string(dbUser.MXID)),
-
-		IsRelaybot: false,
+		bridge: br,
+		log:    br.Log.Sub("User").Sub(string(dbUser.MXID)),
 
 		chatListReceived: make(chan struct{}, 1),
 		syncPortalsDone:  make(chan struct{}, 1),
 		syncStart:        make(chan struct{}, 1),
 		messageInput:     make(chan PortalMessage),
-		messageOutput:    make(chan PortalMessage, bridge.Config.Bridge.UserMessageBuffer),
+		messageOutput:    make(chan PortalMessage, br.Config.Bridge.UserMessageBuffer),
 	}
-	user.RelaybotWhitelisted = user.bridge.Config.Bridge.Permissions.IsRelaybotWhitelisted(user.MXID)
-	user.Whitelisted = user.bridge.Config.Bridge.Permissions.IsWhitelisted(user.MXID)
-	user.Admin = user.bridge.Config.Bridge.Permissions.IsAdmin(user.MXID)
+
+	user.PermissionLevel = user.bridge.Config.Bridge.Permissions.Get(user.MXID)
+	user.Whitelisted = user.PermissionLevel >= bridgeconfig.PermissionLevelUser
+	user.Admin = user.PermissionLevel >= bridgeconfig.PermissionLevelAdmin
+	user.BridgeState = br.NewBridgeStateQueue(user, user.log)
 	go user.handleMessageLoop()
 	go user.runMessageRingBuffer()
 	return user
+}
+
+func (user *User) ensureInvited(intent *appservice.IntentAPI, roomID id.RoomID, isDirect bool) (ok bool) {
+	extraContent := make(map[string]interface{})
+	if isDirect {
+		extraContent["is_direct"] = true
+	}
+	customPuppet := user.bridge.GetPuppetByCustomMXID(user.MXID)
+	if customPuppet != nil && customPuppet.CustomIntent() != nil {
+		extraContent["fi.mau.will_auto_accept"] = true
+	}
+	_, err := intent.InviteUser(roomID, &mautrix.ReqInviteUser{UserID: user.MXID}, extraContent)
+	var httpErr mautrix.HTTPError
+	if err != nil && errors.As(err, &httpErr) && httpErr.RespError != nil && strings.Contains(httpErr.RespError.Err, "is already in the room") {
+		user.bridge.StateStore.SetMembership(roomID, user.MXID, event.MembershipJoin)
+		ok = true
+		return
+	} else if err != nil {
+		user.log.Warnfln("Failed to invite user to %s: %v", roomID, err)
+	} else {
+		ok = true
+	}
+
+	if customPuppet != nil && customPuppet.CustomIntent() != nil {
+		err = customPuppet.CustomIntent().EnsureJoined(roomID, appservice.EnsureJoinedParams{IgnoreCache: true})
+		if err != nil {
+			user.log.Warnfln("Failed to auto-join %s: %v", roomID, err)
+			ok = false
+		} else {
+			ok = true
+		}
+	}
+	return
 }
 
 func (user *User) GetManagementRoom() id.RoomID {
@@ -618,7 +661,7 @@ func (user *User) syncPortals(createAll bool) {
 		if inCommunity, ok = existingKeys[chat.Portal.Key]; !ok || !inCommunity {
 			inCommunity = user.addPortalToCommunity(chat.Portal)
 			if chat.Portal.IsPrivateChat() {
-				puppet := user.bridge.GetPuppetByJID(chat.Portal.Key.JID)
+				puppet := user.bridge.GetPuppetByJID(chat.Portal.Key.GMID)
 				user.addPuppetToCommunity(puppet)
 			}
 		}
@@ -673,7 +716,7 @@ func (user *User) getDirectChats() map[id.UserID][]id.RoomID {
 	privateChats := user.bridge.DB.Portal.FindPrivateChats(user.JID)
 	for _, portal := range privateChats {
 		if len(portal.MXID) > 0 {
-			res[user.bridge.FormatPuppetMXID(portal.Key.JID)] = []id.RoomID{portal.MXID}
+			res[user.bridge.FormatPuppetMXID(portal.Key.GMID)] = []id.RoomID{portal.MXID}
 		}
 	}
 	return res

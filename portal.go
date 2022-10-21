@@ -61,7 +61,7 @@ import (
 	whatsappExt "github.com/beeper/groupme/whatsapp-ext"
 )
 
-func (bridge *Bridge) GetPortalByMXID(mxid id.RoomID) *Portal {
+func (bridge *GMBridge) GetPortalByMXID(mxid id.RoomID) *Portal {
 	bridge.portalsLock.Lock()
 	defer bridge.portalsLock.Unlock()
 	portal, ok := bridge.portalsByMXID[mxid]
@@ -71,25 +71,25 @@ func (bridge *Bridge) GetPortalByMXID(mxid id.RoomID) *Portal {
 	return portal
 }
 
-func (bridge *Bridge) GetPortalByJID(key database.PortalKey) *Portal {
+func (bridge *GMBridge) GetPortalByGMID(key database.PortalKey) *Portal {
 	bridge.portalsLock.Lock()
 	defer bridge.portalsLock.Unlock()
-	portal, ok := bridge.portalsByJID[key]
+	portal, ok := bridge.portalsByGMID[key]
 	if !ok {
-		return bridge.loadDBPortal(bridge.DB.Portal.GetByJID(key), &key)
+		return bridge.loadDBPortal(bridge.DB.Portal.GetByGMID(key), &key)
 	}
 	return portal
 }
 
-func (bridge *Bridge) GetAllPortals() []*Portal {
-	return bridge.dbPortalsToPortals(bridge.DB.Portal.GetAll())
+func (br *GMBridge) GetAllPortals() []*Portal {
+	return br.dbPortalsToPortals(br.DB.Portal.GetAll())
 }
 
-func (bridge *Bridge) GetAllPortalsByJID(jid types.GroupMeID) []*Portal {
-	return bridge.dbPortalsToPortals(bridge.DB.Portal.GetAllByJID(jid))
+func (br *GMBridge) GetAllPortalsByGMID(gmid types.GroupMeID) []*Portal {
+	return br.dbPortalsToPortals(br.DB.Portal.GetAllByGMID(gmid))
 }
 
-func (bridge *Bridge) dbPortalsToPortals(dbPortals []*database.Portal) []*Portal {
+func (bridge *GMBridge) dbPortalsToPortals(dbPortals []*database.Portal) []*Portal {
 	bridge.portalsLock.Lock()
 	defer bridge.portalsLock.Unlock()
 	output := make([]*Portal, len(dbPortals))
@@ -97,7 +97,7 @@ func (bridge *Bridge) dbPortalsToPortals(dbPortals []*database.Portal) []*Portal
 		if dbPortal == nil {
 			continue
 		}
-		portal, ok := bridge.portalsByJID[dbPortal.Key]
+		portal, ok := bridge.portalsByGMID[dbPortal.Key]
 		if !ok {
 			portal = bridge.loadDBPortal(dbPortal, nil)
 		}
@@ -106,7 +106,7 @@ func (bridge *Bridge) dbPortalsToPortals(dbPortals []*database.Portal) []*Portal
 	return output
 }
 
-func (bridge *Bridge) loadDBPortal(dbPortal *database.Portal, key *database.PortalKey) *Portal {
+func (bridge *GMBridge) loadDBPortal(dbPortal *database.Portal, key *database.PortalKey) *Portal {
 	if dbPortal == nil {
 		if key == nil {
 			return nil
@@ -116,7 +116,7 @@ func (bridge *Bridge) loadDBPortal(dbPortal *database.Portal, key *database.Port
 		dbPortal.Insert()
 	}
 	portal := bridge.NewPortal(dbPortal)
-	bridge.portalsByJID[portal.Key] = portal
+	bridge.portalsByGMID[portal.Key] = portal
 	if len(portal.MXID) > 0 {
 		bridge.portalsByMXID[portal.MXID] = portal
 	}
@@ -127,7 +127,7 @@ func (portal *Portal) GetUsers() []*User {
 	return nil
 }
 
-func (bridge *Bridge) NewManualPortal(key database.PortalKey) *Portal {
+func (bridge *GMBridge) NewManualPortal(key database.PortalKey) *Portal {
 	portal := &Portal{
 		Portal: bridge.DB.Portal.New(),
 		bridge: bridge,
@@ -142,7 +142,7 @@ func (bridge *Bridge) NewManualPortal(key database.PortalKey) *Portal {
 	return portal
 }
 
-func (bridge *Bridge) NewPortal(dbPortal *database.Portal) *Portal {
+func (bridge *GMBridge) NewPortal(dbPortal *database.Portal) *Portal {
 	portal := &Portal{
 		Portal: dbPortal,
 		bridge: bridge,
@@ -168,7 +168,7 @@ type PortalMessage struct {
 type Portal struct {
 	*database.Portal
 
-	bridge *Bridge
+	bridge *GMBridge
 	log    log.Logger
 
 	roomCreateLock sync.Mutex
@@ -250,7 +250,7 @@ func (portal *Portal) markHandled(source *User, message *groupme.Message, mxid i
 	if message.UserID.String() == source.JID {
 		msg.Sender = source.JID
 	} else if portal.IsPrivateChat() {
-		msg.Sender = portal.Key.JID
+		msg.Sender = portal.Key.GMID
 	} else {
 		msg.Sender = message.ID.String()
 		if len(msg.Sender) == 0 {
@@ -482,7 +482,7 @@ func (portal *Portal) UpdateMetadata(user *User) bool {
 	if portal.IsPrivateChat() {
 		return false
 	}
-	group, err := user.Client.ShowGroup(context.TODO(), groupme.ID(strings.Replace(portal.Key.JID, groupmeExt.NewUserSuffix, "", 1)))
+	group, err := user.Client.ShowGroup(context.TODO(), groupme.ID(strings.Replace(portal.Key.GMID, groupmeExt.NewUserSuffix, "", 1)))
 	if err != nil {
 		portal.log.Errorln(err)
 		return false
@@ -528,13 +528,8 @@ func (portal *Portal) ensureMXIDInvited(mxid id.UserID) {
 	}
 }
 
-func (portal *Portal) ensureUserInvited(user *User) {
-	portal.userMXIDAction(user, portal.ensureMXIDInvited)
-
-	customPuppet := portal.bridge.GetPuppetByCustomMXID(user.MXID)
-	if customPuppet != nil && customPuppet.CustomIntent() != nil {
-		_ = customPuppet.CustomIntent().EnsureJoined(portal.MXID)
-	}
+func (portal *Portal) ensureUserInvited(user *User) bool {
+	return user.ensureInvited(portal.MainIntent(), portal.MXID, portal.IsPrivateChat())
 }
 
 func (portal *Portal) Sync(user *User, group *groupme.Group) {
@@ -698,7 +693,7 @@ func (portal *Portal) BackfillHistory(user *User, lastMessageTime uint64) error 
 	portal.log.Infoln("Backfilling history since", lastMessageID, "for", user.MXID)
 	for len(lastMessageID) > 0 {
 		portal.log.Debugln("Fetching 50 messages of history after", lastMessageID)
-		messages, err := user.Client.LoadMessagesAfter(portal.Key.JID, lastMessageID, lastMessageFromMe, portal.IsPrivateChat())
+		messages, err := user.Client.LoadMessagesAfter(portal.Key.GMID, lastMessageID, lastMessageFromMe, portal.IsPrivateChat())
 		if err != nil {
 			return err
 		}
@@ -723,7 +718,7 @@ func (portal *Portal) beginBackfill() func() {
 	portal.backfilling = true
 	var privateChatPuppetInvited bool
 	var privateChatPuppet *Puppet
-	if portal.IsPrivateChat() && portal.bridge.Config.Bridge.InviteOwnPuppetForBackfilling && portal.Key.JID != portal.Key.Receiver {
+	if portal.IsPrivateChat() && portal.bridge.Config.Bridge.InviteOwnPuppetForBackfilling && portal.Key.GMID != portal.Key.Receiver {
 		privateChatPuppet = portal.bridge.GetPuppetByJID(portal.Key.Receiver)
 		portal.privateChatBackfillInvitePuppet = func() {
 			if privateChatPuppetInvited {
@@ -805,7 +800,7 @@ func (portal *Portal) FillInitialHistory(user *User) error {
 			count = n
 		}
 		portal.log.Debugfln("Fetching chunk %d (%d messages / %d cap) before message %s", chunkNum, count, n, before)
-		chunk, err := user.Client.LoadMessagesBefore(portal.Key.JID, before, portal.IsPrivateChat())
+		chunk, err := user.Client.LoadMessagesBefore(portal.Key.GMID, before, portal.IsPrivateChat())
 		if err != nil {
 			return err
 		}
@@ -898,12 +893,12 @@ func (portal *Portal) getBridgeInfo() (string, BridgeInfoContent) {
 			ExternalURL: "https://www.whatsapp.com/",
 		},
 		Channel: BridgeInfoSection{
-			ID:          portal.Key.JID,
+			ID:          portal.Key.GMID,
 			DisplayName: portal.Name,
 			AvatarURL:   portal.AvatarURL.CUString(),
 		},
 	}
-	bridgeInfoStateKey := fmt.Sprintf("net.maunium.whatsapp://whatsapp/%s", portal.Key.JID)
+	bridgeInfoStateKey := fmt.Sprintf("net.maunium.whatsapp://whatsapp/%s", portal.Key.GMID)
 	return bridgeInfoStateKey, bridgeInfo
 }
 
@@ -924,6 +919,15 @@ func (portal *Portal) UpdateBridgeInfo() {
 	}
 }
 
+func (portal *Portal) GetEncryptionEventContent() (evt *event.EncryptionEventContent) {
+	evt = &event.EncryptionEventContent{Algorithm: id.AlgorithmMegolmV1}
+	if rot := portal.bridge.Config.Bridge.Encryption.Rotation; rot.EnableCustom {
+		evt.RotationPeriodMillis = rot.Milliseconds
+		evt.RotationPeriodMessages = rot.Messages
+	}
+	return
+}
+
 func (portal *Portal) CreateMatrixRoom(user *User) error {
 	portal.roomCreateLock.Lock()
 	defer portal.roomCreateLock.Unlock()
@@ -941,7 +945,7 @@ func (portal *Portal) CreateMatrixRoom(user *User) error {
 	var metadata *groupme.Group
 	if portal.IsPrivateChat() {
 		portal.log.Debugln("isPrivateChat")
-		puppet := portal.bridge.GetPuppetByJID(portal.Key.JID)
+		puppet := portal.bridge.GetPuppetByJID(portal.Key.GMID)
 		meta, err := portal.bridge.StateStore.TryGetMemberRaw("", puppet.MXID)
 		if err {
 			println("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
@@ -963,7 +967,7 @@ func (portal *Portal) CreateMatrixRoom(user *User) error {
 	} else {
 		portal.log.Debugln("else: it's not a private chat")
 		var err error
-		metadata, err = user.Client.ShowGroup(context.TODO(), groupme.ID(portal.Key.JID))
+		metadata, err = user.Client.ShowGroup(context.TODO(), groupme.ID(portal.Key.GMID))
 		if err == nil {
 			portal.Name = metadata.Name
 			// portal.Topic = metadata.Topic
@@ -1053,7 +1057,7 @@ func (portal *Portal) CreateMatrixRoom(user *User) error {
 	}
 	user.addPortalToCommunity(portal)
 	if portal.IsPrivateChat() {
-		puppet := user.bridge.GetPuppetByJID(portal.Key.JID)
+		puppet := user.bridge.GetPuppetByJID(portal.Key.GMID)
 		user.addPuppetToCommunity(puppet)
 
 		if portal.bridge.Config.Bridge.Encryption.Default {
@@ -1087,12 +1091,12 @@ func (portal *Portal) HasRelaybot() bool {
 }
 
 func (portal *Portal) IsStatusBroadcastRoom() bool {
-	return portal.Key.JID == "status@broadcast"
+	return portal.Key.GMID == "status@broadcast"
 }
 
 func (portal *Portal) MainIntent() *appservice.IntentAPI {
 	if portal.IsPrivateChat() {
-		return portal.bridge.GetPuppetByJID(portal.Key.JID).DefaultIntent()
+		return portal.bridge.GetPuppetByJID(portal.Key.GMID).DefaultIntent()
 	}
 	return portal.bridge.Bot
 }
@@ -1336,7 +1340,7 @@ func (portal *Portal) handleAttachment(intent *appservice.IntentAPI, attachment 
 		message.Text = strings.Replace(message.Text, attachment.URL, "", 1)
 		return content, true, nil
 	case "file":
-		fileData, fname, fmime := groupmeExt.DownloadFile(portal.Key.JID, attachment.FileID, source.Token)
+		fileData, fname, fmime := groupmeExt.DownloadFile(portal.Key.GMID, attachment.FileID, source.Token)
 		if fmime == "" {
 			fmime = mimetype.Detect(fileData).String()
 		}
@@ -2143,7 +2147,7 @@ func (portal *Portal) convertMatrixMessage(sender *User, evt *event.Event) ([]*g
 		GroupID:        groupme.ID(portal.Key.String()),
 		ConversationID: groupme.ID(portal.Key.String()),
 		ChatID:         groupme.ID(portal.Key.String()),
-		RecipientID:    groupme.ID(portal.Key.JID),
+		RecipientID:    groupme.ID(portal.Key.GMID),
 	}
 	replyToID := content.GetReplyTo()
 	if len(replyToID) > 0 {
@@ -2540,7 +2544,7 @@ func (portal *Portal) HandleMatrixLeave(sender *User) {
 		return
 	} else {
 		// TODO should we somehow deduplicate this call if this leave was sent by the bridge?
-		err := sender.Client.RemoveFromGroup(sender.JID, portal.Key.JID)
+		err := sender.Client.RemoveFromGroup(sender.JID, portal.Key.GMID)
 		if err != nil {
 			portal.log.Errorfln("Failed to leave group as %s: %v", sender.MXID, err)
 			return

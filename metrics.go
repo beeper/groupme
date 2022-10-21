@@ -43,7 +43,7 @@ type MetricsHandler struct {
 	ctx          context.Context
 	stopRecorder func()
 
-	messageHandling         *prometheus.HistogramVec
+	matrixEventHandling     *prometheus.HistogramVec
 	countCollection         prometheus.Histogram
 	disconnections          *prometheus.CounterVec
 	puppetCount             prometheus.Gauge
@@ -66,7 +66,7 @@ type MetricsHandler struct {
 
 func NewMetricsHandler(address string, log log.Logger, db *database.Database) *MetricsHandler {
 	portalCount := promauto.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "whatsapp_portals_total",
+		Name: "groupme_portals_total",
 		Help: "Number of portal rooms on Matrix",
 	}, []string{"type", "encrypted"})
 	return &MetricsHandler{
@@ -75,28 +75,28 @@ func NewMetricsHandler(address string, log log.Logger, db *database.Database) *M
 		log:     log,
 		running: false,
 
-		messageHandling: promauto.NewHistogramVec(prometheus.HistogramOpts{
+		matrixEventHandling: promauto.NewHistogramVec(prometheus.HistogramOpts{
 			Name: "matrix_event",
 			Help: "Time spent processing Matrix events",
 		}, []string{"event_type"}),
 		countCollection: promauto.NewHistogram(prometheus.HistogramOpts{
-			Name: "whatsapp_count_collection",
-			Help: "Time spent collecting the whatsapp_*_total metrics",
+			Name: "groupme_count_collection",
+			Help: "Time spent collecting the groupme_*_total metrics",
 		}),
 		disconnections: promauto.NewCounterVec(prometheus.CounterOpts{
-			Name: "whatsapp_disconnections",
-			Help: "Number of times a Matrix user has been disconnected from WhatsApp",
+			Name: "groupme_disconnections",
+			Help: "Number of times a Matrix user has been disconnected from GroupMe",
 		}, []string{"user_id"}),
 		puppetCount: promauto.NewGauge(prometheus.GaugeOpts{
-			Name: "whatsapp_puppets_total",
-			Help: "Number of WhatsApp users bridged into Matrix",
+			Name: "groupme_puppets_total",
+			Help: "Number of GroupMe users bridged into Matrix",
 		}),
 		userCount: promauto.NewGauge(prometheus.GaugeOpts{
-			Name: "whatsapp_users_total",
+			Name: "groupme_users_total",
 			Help: "Number of Matrix users using the bridge",
 		}),
 		messageCount: promauto.NewGauge(prometheus.GaugeOpts{
-			Name: "whatsapp_messages_total",
+			Name: "groupme_messages_total",
 			Help: "Number of messages bridged",
 		}),
 		portalCount:             portalCount,
@@ -112,7 +112,7 @@ func NewMetricsHandler(address string, log log.Logger, db *database.Database) *M
 		loggedInState: make(map[types.GroupMeID]bool),
 		connected: promauto.NewGauge(prometheus.GaugeOpts{
 			Name: "bridge_connected",
-			Help: "Bridge users connected to WhatsApp",
+			Help: "Bridge users connected to GroupMe",
 		}),
 		connectedState: make(map[types.GroupMeID]bool),
 		syncLocked: promauto.NewGauge(prometheus.GaugeOpts{
@@ -129,14 +129,14 @@ func NewMetricsHandler(address string, log log.Logger, db *database.Database) *M
 
 func noop() {}
 
-func (mh *MetricsHandler) TrackEvent(eventType event.Type) func() {
+func (mh *MetricsHandler) TrackMatrixEvent(eventType event.Type) func() {
 	if !mh.running {
 		return noop
 	}
 	start := time.Now()
 	return func() {
 		duration := time.Now().Sub(start)
-		mh.messageHandling.
+		mh.matrixEventHandling.
 			With(prometheus.Labels{"event_type": eventType.Type}).
 			Observe(duration.Seconds())
 	}
@@ -231,9 +231,9 @@ func (mh *MetricsHandler) updateStats() {
 	// err = mh.db.QueryRowContext(mh.ctx, `
 	// 		SELECT
 	// 			COUNT(CASE WHEN jid LIKE '%@g.us' AND encrypted THEN 1 END) AS encrypted_group_portals,
-	// 			COUNT(CASE WHEN jid LIKE '%@s.whatsapp.net' AND encrypted THEN 1 END) AS encrypted_private_portals,
+	// 			COUNT(CASE WHEN jid LIKE '%@s.groupme.net' AND encrypted THEN 1 END) AS encrypted_private_portals,
 	// 			COUNT(CASE WHEN jid LIKE '%@g.us' AND NOT encrypted THEN 1 END) AS unencrypted_group_portals,
-	// 			COUNT(CASE WHEN jid LIKE '%@s.whatsapp.net' AND NOT encrypted THEN 1 END) AS unencrypted_private_portals
+	// 			COUNT(CASE WHEN jid LIKE '%@s.groupme.net' AND NOT encrypted THEN 1 END) AS unencrypted_private_portals
 	// 		FROM portal WHERE mxid<>''
 	// 	`).Scan(&encryptedGroupCount, &encryptedPrivateCount, &unencryptedGroupCount, &unencryptedPrivateCount)
 	// if err != nil {

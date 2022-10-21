@@ -17,26 +17,21 @@
 package database
 
 import (
-	"os"
-	"strings"
+	"errors"
+	"net"
 
+	"github.com/lib/pq"
 	_ "github.com/lib/pq"
 	_ "github.com/mattn/go-sqlite3"
 
-	log "maunium.net/go/maulogger/v2"
-
-	"gorm.io/driver/postgres"
-	"gorm.io/driver/sqlite"
-	"gorm.io/gorm"
-	"gorm.io/gorm/schema"
+	"maunium.net/go/maulogger/v2"
+	"maunium.net/go/mautrix/util/dbutil"
 
 	"github.com/beeper/groupme/database/upgrades"
 )
 
 type Database struct {
-	*gorm.DB
-	log     log.Logger
-	dialect string
+	*dbutil.Database
 
 	User     *UserQuery
 	Portal   *PortalQuery
@@ -45,92 +40,42 @@ type Database struct {
 	Reaction *ReactionQuery
 }
 
-func New(dbType string, uri string, baseLog log.Logger) (*Database, error) {
-
-	var conn gorm.Dialector
-
-	if dbType == "sqlite3" {
-		//_, _ = conn.Exec("PRAGMA foreign_keys = ON")
-		log.Fatalln("no sqlite for now only postgresql")
-		os.Exit(1)
-		conn = sqlite.Open(uri)
-	} else {
-		conn = postgres.Open(uri)
-	}
-
-	gdb, err := gorm.Open(conn, &gorm.Config{
-		//		Logger: logger.Default.LogMode(logger.Info),
-		// Logger: baseLog,
-
-		DisableForeignKeyConstraintWhenMigrating: true,
-		NamingStrategy: schema.NamingStrategy{
-			NameReplacer: strings.NewReplacer("JID", "Jid", "MXID", "Mxid"),
-		},
-	})
-	if err != nil {
-		panic("failed to connect database")
-	}
-	db := &Database{
-		DB:      gdb,
-		log:     baseLog.Sub("Database"),
-		dialect: dbType,
-	}
+func New(baseDB *dbutil.Database, log maulogger.Logger) *Database {
+	db := &Database{Database: baseDB}
+	db.UpgradeTable = upgrades.Table
 	db.User = &UserQuery{
 		db:  db,
-		log: db.log.Sub("User"),
+		log: log.Sub("User"),
 	}
 	db.Portal = &PortalQuery{
 		db:  db,
-		log: db.log.Sub("Portal"),
+		log: log.Sub("Portal"),
 	}
 	db.Puppet = &PuppetQuery{
 		db:  db,
-		log: db.log.Sub("Puppet"),
+		log: log.Sub("Puppet"),
 	}
 	db.Message = &MessageQuery{
 		db:  db,
-		log: db.log.Sub("Message"),
+		log: log.Sub("Message"),
 	}
 	db.Reaction = &ReactionQuery{
 		db:  db,
-		log: db.log.Sub("Reaction"),
+		log: log.Sub("Reaction"),
 	}
-
-	return db, nil
+	return db
 }
 
-func (db *Database) Init() error {
-	println("actual upgrade")
-	err := db.AutoMigrate(&Portal{}, &Puppet{})
-	if err != nil {
-		return err
+func isRetryableError(err error) bool {
+	if pqError := (&pq.Error{}); errors.As(err, &pqError) {
+		switch pqError.Code.Class() {
+		case "08", // Connection Exception
+			"53", // Insufficient Resources (e.g. too many connections)
+			"57": // Operator Intervention (e.g. server restart)
+			return true
+		}
+	} else if netError := (&net.OpError{}); errors.As(err, &netError) {
+		return true
 	}
-	err = db.AutoMigrate(&Message{})
-	if err != nil {
-		return err
-	}
-
-	err = db.AutoMigrate(&Reaction{})
-	if err != nil {
-		return err
-	}
-
-	err = db.AutoMigrate(&mxRegistered{}, &MxUserProfile{})
-	if err != nil {
-		return err
-	}
-
-	err = db.AutoMigrate(&User{})
-	if err != nil {
-		return err
-	}
-	err = db.AutoMigrate(&UserPortal{})
-	if err != nil {
-		return err
-	}
-	return upgrades.Run(db.log.Sub("Upgrade"), db.dialect, db.DB)
-}
-
-type Scannable interface {
-	Scan(...interface{}) error
+	return false
 }

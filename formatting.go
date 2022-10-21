@@ -32,10 +32,10 @@ var boldRegex = regexp.MustCompile("([\\s>_~]|^)\\*(.+?)\\*([^a-zA-Z\\d]|$)")
 var strikethroughRegex = regexp.MustCompile("([\\s>_*]|^)~(.+?)~([^a-zA-Z\\d]|$)")
 var codeBlockRegex = regexp.MustCompile("```(?:.|\n)+?```")
 
-const mentionedJIDsContextKey = "net.maunium.groupme.mentioned_jids"
+const mentionedGMIDsContextKey = "net.maunium.groupme.mentioned_gmids"
 
 type Formatter struct {
-	bridge *Bridge
+	bridge *GMBridge
 
 	matrixHTMLParser *format.HTMLParser
 
@@ -44,7 +44,7 @@ type Formatter struct {
 	waReplFuncText map[*regexp.Regexp]func(string) string
 }
 
-func NewFormatter(bridge *Bridge) *Formatter {
+func NewFormatter(bridge *GMBridge) *Formatter {
 	formatter := &Formatter{
 		bridge: bridge,
 		matrixHTMLParser: &format.HTMLParser{
@@ -55,11 +55,11 @@ func NewFormatter(bridge *Bridge) *Formatter {
 				if mxid[0] == '@' {
 					puppet := bridge.GetPuppetByMXID(id.UserID(mxid))
 					if puppet != nil {
-						jids, ok := ctx[mentionedJIDsContextKey].([]types.GroupMeID)
+						gmids, ok := ctx[mentionedGMIDsContextKey].([]types.GroupMeID)
 						if !ok {
-							ctx[mentionedJIDsContextKey] = []types.GroupMeID{puppet.JID}
+							ctx[mentionedGMIDsContextKey] = []types.GroupMeID{puppet.GMID}
 						} else {
-							ctx[mentionedJIDsContextKey] = append(jids, puppet.JID)
+							ctx[mentionedGMIDsContextKey] = append(gmids, puppet.GMID)
 						}
 						return "@" + puppet.PhoneNumber()
 					}
@@ -139,6 +139,6 @@ func NewFormatter(bridge *Bridge) *Formatter {
 func (formatter *Formatter) ParseMatrix(html string) (string, []types.GroupMeID) {
 	ctx := make(format.Context)
 	result := formatter.matrixHTMLParser.Parse(html, ctx)
-	mentionedJIDs, _ := ctx[mentionedJIDsContextKey].([]types.GroupMeID)
+	mentionedJIDs, _ := ctx[mentionedGMIDsContextKey].([]types.GroupMeID)
 	return result, mentionedJIDs
 }

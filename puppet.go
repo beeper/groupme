@@ -36,7 +36,7 @@ import (
 
 var userIDRegex *regexp.Regexp
 
-func (bridge *Bridge) ParsePuppetMXID(mxid id.UserID) (types.GroupMeID, bool) {
+func (bridge *GMBridge) ParsePuppetMXID(mxid id.UserID) (types.GroupMeID, bool) {
 	if userIDRegex == nil {
 		userIDRegex = regexp.MustCompile(fmt.Sprintf("^@%s:%s$",
 			bridge.Config.Bridge.FormatUsername("([0-9]+)"),
@@ -51,7 +51,7 @@ func (bridge *Bridge) ParsePuppetMXID(mxid id.UserID) (types.GroupMeID, bool) {
 	return jid, true
 }
 
-func (bridge *Bridge) GetPuppetByMXID(mxid id.UserID) *Puppet {
+func (bridge *GMBridge) GetPuppetByMXID(mxid id.UserID) *Puppet {
 	jid, ok := bridge.ParsePuppetMXID(mxid)
 	if !ok {
 		return nil
@@ -60,7 +60,7 @@ func (bridge *Bridge) GetPuppetByMXID(mxid id.UserID) *Puppet {
 	return bridge.GetPuppetByJID(jid)
 }
 
-func (bridge *Bridge) GetPuppetByJID(jid types.GroupMeID) *Puppet {
+func (bridge *GMBridge) GetPuppetByJID(jid types.GroupMeID) *Puppet {
 	bridge.puppetsLock.Lock()
 	defer bridge.puppetsLock.Unlock()
 	puppet, ok := bridge.puppets[jid]
@@ -80,7 +80,7 @@ func (bridge *Bridge) GetPuppetByJID(jid types.GroupMeID) *Puppet {
 	return puppet
 }
 
-func (bridge *Bridge) GetPuppetByCustomMXID(mxid id.UserID) *Puppet {
+func (bridge *GMBridge) GetPuppetByCustomMXID(mxid id.UserID) *Puppet {
 	bridge.puppetsLock.Lock()
 	defer bridge.puppetsLock.Unlock()
 	puppet, ok := bridge.puppetsByCustomMXID[mxid]
@@ -96,15 +96,15 @@ func (bridge *Bridge) GetPuppetByCustomMXID(mxid id.UserID) *Puppet {
 	return puppet
 }
 
-func (bridge *Bridge) GetAllPuppetsWithCustomMXID() []*Puppet {
+func (bridge *GMBridge) GetAllPuppetsWithCustomMXID() []*Puppet {
 	return bridge.dbPuppetsToPuppets(bridge.DB.Puppet.GetAllWithCustomMXID())
 }
 
-func (bridge *Bridge) GetAllPuppets() []*Puppet {
+func (bridge *GMBridge) GetAllPuppets() []*Puppet {
 	return bridge.dbPuppetsToPuppets(bridge.DB.Puppet.GetAll())
 }
 
-func (bridge *Bridge) dbPuppetsToPuppets(dbPuppets []*database.Puppet) []*Puppet {
+func (bridge *GMBridge) dbPuppetsToPuppets(dbPuppets []*database.Puppet) []*Puppet {
 	bridge.puppetsLock.Lock()
 	defer bridge.puppetsLock.Unlock()
 	output := make([]*Puppet, len(dbPuppets))
@@ -125,7 +125,7 @@ func (bridge *Bridge) dbPuppetsToPuppets(dbPuppets []*database.Puppet) []*Puppet
 	return output
 }
 
-func (bridge *Bridge) FormatPuppetMXID(jid types.GroupMeID) id.UserID {
+func (bridge *GMBridge) FormatPuppetMXID(jid types.GroupMeID) id.UserID {
 	return id.NewUserID(
 		bridge.Config.Bridge.FormatUsername(
 			strings.Replace(
@@ -134,7 +134,7 @@ func (bridge *Bridge) FormatPuppetMXID(jid types.GroupMeID) id.UserID {
 		bridge.Config.Homeserver.Domain)
 }
 
-func (bridge *Bridge) NewPuppet(dbPuppet *database.Puppet) *Puppet {
+func (bridge *GMBridge) NewPuppet(dbPuppet *database.Puppet) *Puppet {
 	return &Puppet{
 		Puppet: dbPuppet,
 		bridge: bridge,
@@ -147,7 +147,7 @@ func (bridge *Bridge) NewPuppet(dbPuppet *database.Puppet) *Puppet {
 type Puppet struct {
 	*database.Puppet
 
-	bridge *Bridge
+	bridge *GMBridge
 	log    log.Logger
 
 	typingIn id.RoomID
@@ -168,7 +168,7 @@ func (puppet *Puppet) PhoneNumber() string {
 func (puppet *Puppet) IntentFor(portal *Portal) *appservice.IntentAPI {
 	if (!portal.IsPrivateChat() && puppet.customIntent == nil) ||
 		(portal.backfilling && portal.bridge.Config.Bridge.InviteOwnPuppetForBackfilling) ||
-		portal.Key.JID == puppet.JID {
+		portal.Key.GMID == puppet.JID {
 		return puppet.DefaultIntent()
 	}
 	return puppet.customIntent

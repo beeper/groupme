@@ -17,9 +17,12 @@
 package database
 
 import (
+	"database/sql"
+
 	log "maunium.net/go/maulogger/v2"
 
 	"maunium.net/go/mautrix/id"
+	"maunium.net/go/mautrix/util/dbutil"
 
 	"github.com/beeper/groupme/types"
 )
@@ -34,120 +37,126 @@ func (pq *PuppetQuery) New() *Puppet {
 		db:  pq.db,
 		log: pq.log,
 
-		EnablePresence: true,
 		EnableReceipts: true,
 	}
 }
 
+const (
+	puppetColumns                    = "gmid, displayname, name_set, avatar, avatar_url, avatar_set, custom_mxid, access_token, next_batch, enable_receipts"
+	getAllPuppetsQuery               = "SELECT " + puppetColumns + " FROM puppets"
+	getPuppetQuery                   = getAllPuppetsQuery + " WHERE gmid=$1"
+	getPuppetByCustomMXIDQuery       = getAllPuppetsQuery + " WHERE custom_mxid=$1"
+	getAllPuppetsWithCustomMXIDQuery = getAllPuppetsQuery + " WHERE custom_mxid<>''"
+)
+
 func (pq *PuppetQuery) GetAll() (puppets []*Puppet) {
-	ans := pq.db.Find(&puppets)
-	if ans.Error != nil || len(puppets) == 0 {
+	rows, err := pq.db.Query(getAllPuppetsQuery)
+	if err != nil || rows == nil {
 		return nil
 	}
-	for _, puppet := range puppets {
-		pq.initializePuppet(puppet)
+	defer rows.Close()
+	for rows.Next() {
+		puppets = append(puppets, pq.New().Scan(rows))
 	}
-	// defer rows.Close()
-	// for rows.Next() {
-	// 	puppets = append(puppets, pq.New().Scan(rows))
-	// }
 	return
 }
 
-func (pq *PuppetQuery) Get(jid types.GroupMeID) *Puppet {
-	puppet := Puppet{}
-	ans := pq.db.Where("jid = ?", jid).Limit(1).Find(&puppet)
-	if ans.Error != nil || ans.RowsAffected == 0 {
+func (pq *PuppetQuery) Get(gmid types.GroupMeID) *Puppet {
+	row := pq.db.QueryRow(getPuppetQuery, gmid)
+	if row == nil {
 		return nil
 	}
-	pq.initializePuppet(&puppet)
-	return &puppet
+	return pq.New().Scan(row)
 }
 
 func (pq *PuppetQuery) GetByCustomMXID(mxid id.UserID) *Puppet {
-	puppet := Puppet{}
-	ans := pq.db.Where("custom_mxid = ?", mxid).Limit(1).Find(&puppet)
-	if ans.Error != nil || ans.RowsAffected == 0 {
+	row := pq.db.QueryRow(getPuppetByCustomMXIDQuery, mxid)
+	if row == nil {
 		return nil
 	}
-	pq.initializePuppet(&puppet)
-	return &puppet
+	return pq.New().Scan(row)
 }
 
 func (pq *PuppetQuery) GetAllWithCustomMXID() (puppets []*Puppet) {
-
-	ans := pq.db.Find(&puppets, "custom_mxid <> ''")
-	if ans.Error != nil || len(puppets) != 0 {
+	rows, err := pq.db.Query(getAllPuppetsWithCustomMXIDQuery)
+	if err != nil || rows == nil {
 		return nil
 	}
-	for _, puppet := range puppets {
-		pq.initializePuppet(puppet)
+	defer rows.Close()
+	for rows.Next() {
+		puppets = append(puppets, pq.New().Scan(rows))
 	}
-	// defer rows.Close()
-	// for rows.Next() {
-	// 	puppets = append(puppets, pq.New().Scan(rows))
-	// }
 	return
 }
 
-func (pq *PuppetQuery) initializePuppet(p *Puppet) {
-	p.db = pq.db
-	p.log = pq.log
-}
-
-//Puppet is comment
+// Puppet is comment
 type Puppet struct {
 	db  *Database
 	log log.Logger
 
-	JID types.GroupMeID `gorm:"primaryKey"`
-	//Avatar      string
-	//AvatarURL   types.ContentURI
-	//Displayname string
-	//NameQuality int8
+	GMID types.GroupMeID
 
-	CustomMXID     id.UserID `gorm:"column:custom_mxid;"`
+	Displayname string
+	NameSet     bool
+
+	Avatar    string
+	AvatarURL id.ContentURI
+	AvatarSet bool
+
+	CustomMXID     id.UserID
 	AccessToken    string
 	NextBatch      string
-	EnablePresence bool `gorm:"notNull;default:true"`
-	EnableReceipts bool `gorm:"notNull;default:true"`
+	EnableReceipts bool
 }
 
-// func (puppet *Puppet) Scan(row Scannable) *Puppet {
-// 	var displayname, avatar, avatarURL, customMXID, accessToken, nextBatch sql.NullString
-// 	var quality sql.NullInt64
-// 	var enablePresence, enableReceipts sql.NullBool
-// 	err := row.Scan(&puppet.JID, &avatar, &avatarURL, &displayname, &quality, &customMXID, &accessToken, &nextBatch, &enablePresence, &enableReceipts)
-// 	if err != nil {
-// 		if err != sql.ErrNoRows {
-// 			puppet.log.Errorln("Database scan failed:", err)
-// 		}
-// 		return nil
-// 	}
-// 	puppet.Displayname = displayname.String
-// 	puppet.Avatar = avatar.String
-// 	puppet.AvatarURL, _ = id.ParseContentURI(avatarURL.String)
-// 	puppet.NameQuality = int8(quality.Int64)
-// 	puppet.CustomMXID = id.UserID(customMXID.String)
-// 	puppet.AccessToken = accessToken.String
-// 	puppet.NextBatch = nextBatch.String
-// 	puppet.EnablePresence = enablePresence.Bool
-// 	puppet.EnableReceipts = enableReceipts.Bool
-// 	return puppet
-// }
+func (puppet *Puppet) Scan(row dbutil.Scannable) *Puppet {
+	var displayname, avatar, avatarURL, customMXID, accessToken, nextBatch sql.NullString
+	var enableReceipts, nameSet, avatarSet sql.NullBool
+	var gmid string
+	err := row.Scan(&gmid, &displayname, &nameSet, &avatar, &avatarURL, &avatarSet, &customMXID, &accessToken, &nextBatch, &enableReceipts)
+	if err != nil {
+		if err != sql.ErrNoRows {
+			puppet.log.Errorln("Database scan failed:", err)
+		}
+		return nil
+	}
+	puppet.GMID = types.NewGroupMeID(gmid)
+	puppet.Displayname = displayname.String
+	puppet.NameSet = nameSet.Bool
+	puppet.Avatar = avatar.String
+	puppet.AvatarURL, _ = id.ParseContentURI(avatarURL.String)
+	puppet.AvatarSet = avatarSet.Bool
+	puppet.CustomMXID = id.UserID(customMXID.String)
+	puppet.AccessToken = accessToken.String
+	puppet.NextBatch = nextBatch.String
+	puppet.EnableReceipts = enableReceipts.Bool
+	return puppet
+}
 
 func (puppet *Puppet) Insert() {
-	// _, err := puppet.db.Exec("INSERT INTO puppet (jid, avatar, avatar_url, displayname, name_quality, custom_mxid, access_token, next_batch, enable_presence, enable_receipts) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
-	// 	puppet.JID, puppet.Avatar, puppet.AvatarURL.String(), puppet.Displayname, puppet.NameQuality, puppet.CustomMXID, puppet.AccessToken, puppet.NextBatch, puppet.EnablePresence, puppet.EnableReceipts)
-	ans := puppet.db.Create(&puppet)
-	if ans.Error != nil {
-		puppet.log.Warnfln("Failed to insert %s: %v", puppet.JID, ans.Error)
+	_, err := puppet.db.Exec(`
+		INSERT INTO puppet (username, avatar, avatar_url, avatar_set, displayname, name_set,
+		                    custom_mxid, access_token, next_batch, enable_receipts)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+	`, puppet.GMID, puppet.Avatar, puppet.AvatarURL.String(), puppet.AvatarSet, puppet.Displayname,
+		puppet.NameSet, puppet.CustomMXID, puppet.AccessToken, puppet.NextBatch,
+		puppet.EnableReceipts,
+	)
+	if err != nil {
+		puppet.log.Warnfln("Failed to insert %s: %v", puppet.GMID, err)
 	}
 }
 
 func (puppet *Puppet) Update() {
-	ans := puppet.db.Where("jid = ?", puppet.JID).Updates(&puppet)
-	if ans.Error != nil {
-		puppet.log.Warnfln("Failed to update %s->%s: %v", puppet.JID, ans.Error)
+	_, err := puppet.db.Exec(`
+		UPDATE puppet
+		SET displayname=$1, name_set=$2, avatar=$3, avatar_url=$4, avatar_set=$5, custom_mxid=$6,
+		access_token=$7, next_batch=$8, enable_receipts=$10
+		WHERE username=$11
+	`, puppet.Displayname, puppet.NameSet, puppet.Avatar, puppet.AvatarURL.String(), puppet.AvatarSet,
+		puppet.CustomMXID, puppet.AccessToken, puppet.NextBatch, puppet.EnableReceipts,
+		puppet.GMID)
+	if err != nil {
+		puppet.log.Warnfln("Failed to update %s: %v", puppet.GMID, err)
 	}
 }

@@ -17,12 +17,15 @@
 package database
 
 import (
+	"database/sql"
 	"strings"
+	"sync"
 	"time"
 
 	log "maunium.net/go/maulogger/v2"
 
 	"maunium.net/go/mautrix/id"
+	"maunium.net/go/mautrix/util/dbutil"
 
 	"github.com/beeper/groupme/types"
 )
@@ -33,218 +36,116 @@ type UserQuery struct {
 }
 
 func (uq *UserQuery) New() *User {
-	return &User{
-		db:  uq.db,
-		log: uq.log,
-	}
+	return &User{db: uq.db, log: uq.log}
 }
 
+const (
+	userColumns        = "gmid, mxid, auth_token, management_room, space_room"
+	getAllUsersQuery   = "SELECT " + userColumns + ` FROM "user"`
+	getUserByMXIDQuery = getAllUsersQuery + ` WHERE mxid=$1`
+	getUserByGMIDQuery = getAllUsersQuery + ` WHERE gmid=$1`
+	insertUserQuery    = `INSERT INTO "user" (` + userColumns + `) VALUES ($1, $2, $3, $4, $5)`
+	updateUserQurey    = `
+		UPDATE "user"
+		SET gmid=$1, auth_token=$2, management_room=$3, space_room=$4
+		WHERE mxid=$5
+	`
+)
+
 func (uq *UserQuery) GetAll() (users []*User) {
-	ans := uq.db.Find(&users)
-	if ans.Error != nil || len(users) == 0 {
+	rows, err := uq.db.Query(getAllUsersQuery)
+	if err != nil || rows == nil {
 		return nil
 	}
-	for _, i := range users {
-		i.db = uq.db
-		i.log = uq.log
+	defer rows.Close()
+	for rows.Next() {
+		users = append(users, uq.New().Scan(rows))
 	}
 	return
 }
 
 func (uq *UserQuery) GetByMXID(userID id.UserID) *User {
-	var user User
-	ans := uq.db.Where("mxid = ?", userID).Take(&user)
-	user.db = uq.db
-	user.log = uq.log
-	if ans.Error != nil {
+	row := uq.db.QueryRow(getUserByMXIDQuery, userID)
+	if row == nil {
 		return nil
 	}
-	return &user
+	return uq.New().Scan(row)
 }
 
-func (uq *UserQuery) GetByJID(userID types.GroupMeID) *User {
-	var user User
-	ans := uq.db.Where("jid = ?", userID).Limit(1).Find(&user)
-	if ans.Error != nil || ans.RowsAffected == 0 {
+func (uq *UserQuery) GetByGMID(gmid types.GroupMeID) *User {
+	row := uq.db.QueryRow(getUserByGMIDQuery, gmid)
+	if row == nil {
 		return nil
 	}
-	user.db = uq.db
-	user.log = uq.log
-
-	return &user
+	return uq.New().Scan(row)
 }
 
 type User struct {
 	db  *Database
 	log log.Logger
 
-	MXID  id.UserID       `gorm:"primaryKey"`
-	JID   types.GroupMeID `gorm:"unique"`
+	MXID           id.UserID
+	GMID           types.GroupMeID
+	ManagementRoom id.RoomID
+	SpaceRoom      id.RoomID
+
 	Token types.AuthToken
 
-	ManagementRoom id.RoomID
-	LastConnection uint64 `gorm:"notNull;default:0"`
+	lastReadCache     map[PortalKey]time.Time
+	lastReadCacheLock sync.Mutex
+	inSpaceCache      map[PortalKey]bool
+	inSpaceCacheLock  sync.Mutex
 }
 
-//func (user *User) Scan(row Scannable) *User {
-//	var jid, clientID, clientToken, serverToken sql.NullString
-//	var encKey, macKey []byte
-//	err := row.Scan(&user.MXID, &jid, &user.ManagementRoom, &user.LastConnection, &clientID, &clientToken, &serverToken, &encKey, &macKey)
-//	if err != nil {
-//		if err != sql.ErrNoRows {
-//			user.log.Errorln("Database scan failed:", err)
-//		}
-//		return nil
-//	}
-//	if len(jid.String) > 0 && len(clientID.String) > 0 {
-//		user.JID = jid.String + whatsappExt.NewUserSuffix
-//		// user.Session = &whatsapp.Session{
-//		// 	ClientId:    clientID.String,
-//		// 	ClientToken: clientToken.String,
-//		// 	ServerToken: serverToken.String,
-//		// 	EncKey:      encKey,
-//		// 	MacKey:      macKey,
-//		// 	Wid:         jid.String + whatsappExt.OldUserSuffix,
-//		// }
-//	} // else {
-//	// 	user.Session = nil
-//	// }
-//	return user
-//}
+func (user *User) Scan(row dbutil.Scannable) *User {
+	var gmid, authToken sql.NullString
+	err := row.Scan(&gmid, &user.MXID, &authToken, &user.ManagementRoom, &user.SpaceRoom)
+	if err != nil {
+		if err != sql.ErrNoRows {
+			user.log.Errorln("Database scan failed:", err)
+		}
+		return nil
+	}
+	if len(gmid.String) > 0 {
+		user.GMID = types.NewGroupMeID(gmid.String)
+	}
+	if len(authToken.String) > 0 {
+		user.Token = types.AuthToken(authToken.String)
+	}
+	return user
+}
 
-func stripSuffix(jid types.GroupMeID) string {
-	if len(jid) == 0 {
-		return jid
+func stripSuffix(gmid types.GroupMeID) string {
+	if len(gmid) == 0 {
+		return gmid.String()
 	}
 
-	index := strings.IndexRune(jid, '@')
+	index := strings.IndexRune(gmid.String(), '@')
 	if index < 0 {
-		return jid
+		return gmid.String()
 	}
 
-	return jid[:index]
+	return gmid.String()[:index]
 }
 
-func (user *User) jidPtr() *string {
-	if len(user.JID) > 0 {
-		str := stripSuffix(user.JID)
+func (user *User) gmidPtr() *string {
+	if len(user.GMID) > 0 {
+		str := stripSuffix(user.GMID)
 		return &str
 	}
 	return nil
 }
 
-//func (user *User) sessionUnptr() (sess whatsapp.Session) {
-//	// if user.Session != nil {
-//	// 	sess = *user.Session
-//	// }
-//	return
-//}
-
 func (user *User) Insert() {
-	ans := user.db.Create(&user)
-	if ans.Error != nil {
-		user.log.Warnfln("Failed to insert %s: %v", user.MXID, ans.Error)
+	_, err := user.db.Exec(insertUserQuery, user.gmidPtr(), user.MXID, user.Token, user.ManagementRoom, user.SpaceRoom)
+	if err != nil {
+		user.log.Warnfln("Failed to insert %s: %v", user.MXID, err)
 	}
-}
-
-func (user *User) UpdateLastConnection() {
-	user.LastConnection = uint64(time.Now().Unix())
-	user.Update()
 }
 
 func (user *User) Update() {
-	ans := user.db.Save(&user)
-	if ans.Error != nil {
-		user.log.Warnfln("Failed to update user: %v", ans.Error)
+	_, err := user.db.Exec(updateUserQurey, user.gmidPtr(), user.Token, user.ManagementRoom, user.SpaceRoom, user.MXID)
+	if err != nil {
+		user.log.Warnfln("Failed to update %s: %v", user.MXID, err)
 	}
-
-}
-
-type PortalKeyWithMeta struct {
-	PortalKey
-	InCommunity bool
-}
-
-type UserPortal struct {
-	UserJID types.GroupMeID `gorm:"primaryKey;"`
-
-	PortalJID      types.GroupMeID `gorm:"primaryKey;"`
-	PortalReceiver types.GroupMeID `gorm:"primaryKey;"`
-
-	InCommunity bool `gorm:"notNull;default:false;"`
-
-	User   User   `gorm:"foreignKey:UserJID;references:jid;constraint:OnDelete:CASCADE;"`
-	Portal Portal `gorm:"foreignKey:PortalJID,PortalReceiver;references:JID,Receiver;constraint:OnDelete:CASCADE;"`
-}
-
-func (user *User) SetPortalKeys(newKeys []PortalKeyWithMeta) error {
-	tx := user.db.Begin()
-	ans := tx.Where("user_jid = ?", *user.jidPtr()).Delete(UserPortal{})
-
-	if ans.Error != nil {
-		_ = tx.Rollback()
-		return ans.Error
-	}
-
-	for _, key := range newKeys {
-		ans = tx.Create(&UserPortal{
-			UserJID:        *user.jidPtr(),
-			PortalJID:      key.JID,
-			PortalReceiver: key.Receiver,
-			InCommunity:    key.InCommunity,
-		})
-		if ans.Error != nil {
-			_ = tx.Rollback()
-			return ans.Error
-		}
-	}
-
-	println("portalkey transaction complete")
-	return tx.Commit().Error
-}
-
-func (user *User) IsInPortal(key PortalKey) bool {
-	var count int64
-	user.db.Find(&UserPortal{
-		UserJID:        *user.jidPtr(),
-		PortalJID:      key.JID,
-		PortalReceiver: key.Receiver,
-	}).Count(&count) //TODO: efficient
-	return count > 0
-}
-
-func (user *User) GetPortalKeys() []PortalKey {
-	var up []UserPortal
-	ans := user.db.Where("user_jid = ?", *user.jidPtr()).Find(&up)
-	if ans.Error != nil {
-		user.log.Warnln("Failed to get user portal keys:", ans.Error)
-		return nil
-	}
-	var keys []PortalKey
-	for _, i := range up {
-		key := PortalKey{
-			JID:      i.PortalJID,
-			Receiver: i.PortalReceiver,
-		}
-		keys = append(keys, key)
-	}
-	return keys
-}
-
-func (user *User) GetInCommunityMap() map[PortalKey]bool {
-	var up []UserPortal
-	ans := user.db.Where("user_jid = ?", *user.jidPtr()).Find(&up)
-	if ans.Error != nil {
-		user.log.Warnln("Failed to get user portal keys:", ans.Error)
-		return nil
-	}
-	keys := make(map[PortalKey]bool)
-	for _, i := range up {
-		key := PortalKey{
-			JID:      i.PortalJID,
-			Receiver: i.PortalReceiver,
-		}
-		keys[key] = i.InCommunity
-	}
-	return keys
 }

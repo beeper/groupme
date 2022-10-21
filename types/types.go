@@ -16,13 +16,22 @@
 
 package types
 
-// GroupMeID is a WhatsApp JID.
-type GroupMeID = string
+// GroupMeID is a string that represents a GroupMe ID.
+type GroupMeID string
 
-// WhatsAppMessageID is the internal ID of a WhatsApp message.
-type WhatsAppMessageID = string
+func NewGroupMeID(id string) GroupMeID {
+	return GroupMeID(id)
+}
 
-//AuthToken is the authentication token
-type AuthToken = string
+func (gmid GroupMeID) String() string {
+	return string(gmid)
+}
 
-type TmpID = GroupMeID
+func (gmid GroupMeID) IsEmpty() bool {
+	return gmid == ""
+}
+
+type GroupMeMessageID string
+
+// AuthToken is the authentication token
+type AuthToken string
