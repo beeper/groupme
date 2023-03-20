@@ -1,4 +1,5 @@
 .idea
+logs/*
 
 *.session
 *.json

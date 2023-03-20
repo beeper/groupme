@@ -69,10 +69,10 @@
     * [x] At startup
     * [x] When receiving invite
     * [x] When receiving message
-  * [ ] Private chat creation by inviting Matrix puppet of WhatsApp user to new room
-  * [ ] Option to use own Matrix account for messages sent from WhatsApp mobile/other web clients
+  * [ ] Private chat creation by inviting Matrix puppet of GroupMe user to new room
+  * [ ] Option to use own Matrix account for messages sent from GroupMe mobile/other web clients
   * [ ] Shared group chat portals
 
-<sup>[1]</sup> Basic feature works. Improvements are TODO. 
-<sup>[2]</sup> May already work  
-<sup>[3]</sup> May not be possible  
+<sup>[1]</sup> Basic feature works. Improvements are TODO.
+<sup>[2]</sup> May already work
+<sup>[3]</sup> May not be possible

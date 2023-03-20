@@ -37,7 +37,6 @@ import (
 	"maunium.net/go/mautrix/bridge/bridgeconfig"
 	"maunium.net/go/mautrix/crypto/attachment"
 
-	"github.com/Rhymen/go-whatsapp"
 	"github.com/gabriel-vasile/mimetype"
 
 	"github.com/beeper/groupme-lib"
@@ -385,7 +384,7 @@ func (portal *Portal) SyncParticipants(metadata *groupme.Group) {
 				if !shouldBePresent {
 					_, err := portal.MainIntent().KickUser(portal.MXID, &mautrix.ReqKickUser{
 						UserID: member,
-						Reason: "User had left this WhatsApp chat",
+						Reason: "User had left this GroupMe chat",
 					})
 					if err != nil {
 						portal.log.Warnfln("Failed to kick user %s who had left: %v", member, err)
@@ -1158,7 +1157,6 @@ func (portal *Portal) HandleTextMessage(source *User, message *groupme.Message) 
 		sendText = sendText && text
 	}
 
-	//	portal.bridge.Formatter.ParseWhatsApp(content, message.ContextInfo.MentionedJID)
 	//	portal.SetReply(content, message.ContextInfo)
 	//TODO: mentions
 	content := &event.MessageEventContent{
@@ -1261,108 +1259,6 @@ func (portal *Portal) HandleTextMessage(source *User, message *groupme.Message) 
 
 // 	return
 // }
-
-func (portal *Portal) HandleLocationMessage(source *User, message whatsapp.LocationMessage) {
-	//	intent := portal.startHandling(source, message.Info)
-	//	if intent == nil {
-	//		return
-	//	}
-	//
-	//	url := message.Url
-	//	if len(url) == 0 {
-	//		url = fmt.Sprintf("https://maps.google.com/?q=%.5f,%.5f", message.DegreesLatitude, message.DegreesLongitude)
-	//	}
-	//	name := message.Name
-	//	if len(name) == 0 {
-	//		latChar := 'N'
-	//		if message.DegreesLatitude < 0 {
-	//			latChar = 'S'
-	//		}
-	//		longChar := 'E'
-	//		if message.DegreesLongitude < 0 {
-	//			longChar = 'W'
-	//		}
-	//		name = fmt.Sprintf("%.4f° %c %.4f° %c", math.Abs(message.DegreesLatitude), latChar, math.Abs(message.DegreesLongitude), longChar)
-	//	}
-	//
-	//	content := &event.MessageEventContent{
-	//		MsgType:       event.MsgLocation,
-	//		Body:          fmt.Sprintf("Location: %s\n%s\n%s", name, message.Address, url),
-	//		Format:        event.FormatHTML,
-	//		FormattedBody: fmt.Sprintf("Location: <a href='%s'>%s</a><br>%s", url, name, message.Address),
-	//		GeoURI:        fmt.Sprintf("geo:%.5f,%.5f", message.DegreesLatitude, message.DegreesLongitude),
-	//	}
-	//
-	//	if len(message.JpegThumbnail) > 0 {
-	//		thumbnailMime := http.DetectContentType(message.JpegThumbnail)
-	//		uploadedThumbnail, _ := intent.UploadBytes(message.JpegThumbnail, thumbnailMime)
-	//		if uploadedThumbnail != nil {
-	//			cfg, _, _ := image.DecodeConfig(bytes.NewReader(message.JpegThumbnail))
-	//			content.Info = &event.FileInfo{
-	//				ThumbnailInfo: &event.FileInfo{
-	//					Size:     len(message.JpegThumbnail),
-	//					Width:    cfg.Width,
-	//					Height:   cfg.Height,
-	//					MimeType: thumbnailMime,
-	//				},
-	//				ThumbnailURL: uploadedThumbnail.ContentURI.CUString(),
-	//			}
-	//		}
-	//	}
-	//
-	//	portal.SetReply(content, message.ContextInfo)
-	//
-	//	_, _ = intent.UserTyping(portal.MXID, false, 0)
-	//	resp, err := portal.sendMessage(intent, event.EventMessage, content, int64(message.Info.Timestamp*1000))
-	//	if err != nil {
-	//		portal.log.Errorfln("Failed to handle message %s: %v", message.Info.Id, err)
-	//		return
-	//	}
-	//	portal.finishHandling(source, message.Info.Source, resp.EventID)
-	//}
-
-	//func (portal *Portal) HandleContactMessage(source *User, message whatsapp.ContactMessage) {
-	//	intent := portal.startHandling(source, message.Info)
-	//	if intent == nil {
-	//		return
-	//	}
-	//
-	//	fileName := fmt.Sprintf("%s.vcf", message.DisplayName)
-	//	data := []byte(message.Vcard)
-	//	mimeType := "text/vcard"
-	//	data, uploadMimeType, file := portal.encryptFile(data, mimeType)
-	//
-	//	uploadResp, err := intent.UploadBytesWithName(data, uploadMimeType, fileName)
-	//	if err != nil {
-	//		portal.log.Errorfln("Failed to upload vcard of %s: %v", message.DisplayName, err)
-	//		return
-	//	}
-	//
-	//	content := &event.MessageEventContent{
-	//		Body:    fileName,
-	//		MsgType: event.MsgFile,
-	//		File:    file,
-	//		Info: &event.FileInfo{
-	//			MimeType: mimeType,
-	//			Size:     len(message.Vcard),
-	//		},
-	//	}
-	//	if content.File != nil {
-	//		content.File.URL = uploadResp.ContentURI.CUString()
-	//	} else {
-	//		content.URL = uploadResp.ContentURI.CUString()
-	//	}
-	//
-	//	portal.SetReply(content, message.ContextInfo)
-	//
-	//	_, _ = intent.UserTyping(portal.MXID, false, 0)
-	//	resp, err := portal.sendMessage(intent, event.EventMessage, content, int64(message.Info.Timestamp*1000))
-	//	if err != nil {
-	//		portal.log.Errorfln("Failed to handle message %s: %v", message.Info.Id, err)
-	//		return
-	//	}
-	//	portal.finishHandling(source, message.Info.Source, resp.EventID)
-}
 
 func (portal *Portal) sendMediaBridgeFailure(source *User, intent *appservice.IntentAPI, message groupme.Message, bridgeErr error) {
 	portal.log.Errorfln("Failed to bridge media for %s: %v", message.UserID.String(), bridgeErr)
@@ -1467,93 +1363,13 @@ func (portal *Portal) convertMatrixMessage(sender *User, evt *event.Event) ([]*g
 	case event.MsgText, event.MsgEmote, event.MsgNotice:
 		text := content.Body
 		if content.Format == event.FormatHTML {
-			text, _ = portal.bridge.Formatter.ParseMatrix(content.FormattedBody)
-			//TODO mentions
+			text = portal.parseMatrixHTML(content)
 		}
 		if content.MsgType == event.MsgEmote && !relaybotFormatted {
 			text = "/me " + text
 		}
 		info.Text = text
 
-	//	if ctxInfo.StanzaId != nil || ctxInfo.MentionedJid != nil {
-	//		info.Message.ExtendedTextMessage = &waProto.ExtendedTextMessage{
-	//			Text:        &text,
-	//			ContextInfo: ctxInfo,
-	//		}
-	// }
-	//else {
-	//			info.Message.Conversation = &text
-	//		}
-	//	 case event.MsgImage:
-	//	 	media := portal.preprocessMatrixMedia(sender, relaybotFormatted, content, evt.ID, whatsapp.MediaImage)
-	//	 	if media == nil {
-	//	 		return nil, sender
-	//	 	}
-	//	 	ctxInfo.MentionedJid = media.MentionedJIDs
-	//	 	info.Message.ImageMessage = &waProto.ImageMessage{
-	//	 		ContextInfo:   ctxInfo,
-	//	 		Caption:       &media.Caption,
-	//	 		JpegThumbnail: media.Thumbnail,
-	//	 		Url:           &media.URL,
-	//	 		MediaKey:      media.MediaKey,
-	//	 		Mimetype:      &content.GetInfo().MimeType,
-	//	 		FileEncSha256: media.FileEncSHA256,
-	//	 		FileSha256:    media.FileSHA256,
-	//	 		FileLength:    &media.FileLength,
-	//	 	}
-	//	 case event.MsgVideo:
-	//	 	gifPlayback := content.GetInfo().MimeType == "image/gif"
-	//	 	media := portal.preprocessMatrixMedia(sender, relaybotFormatted, content, evt.ID, whatsapp.MediaVideo)
-	//	 	if media == nil {
-	//	 		return nil, sender
-	//	 	}
-	//	 	duration := uint32(content.GetInfo().Duration)
-	//	 	ctxInfo.MentionedJid = media.MentionedJIDs
-	//	 	info.Message.VideoMessage = &waProto.VideoMessage{
-	//	 		ContextInfo:   ctxInfo,
-	//	 		Caption:       &media.Caption,
-	//	 		JpegThumbnail: media.Thumbnail,
-	//	 		Url:           &media.URL,
-	//	 		MediaKey:      media.MediaKey,
-	//	 		Mimetype:      &content.GetInfo().MimeType,
-	//	 		GifPlayback:   &gifPlayback,
-	//	 		Seconds:       &duration,
-	//	 		FileEncSha256: media.FileEncSHA256,
-	//	 		FileSha256:    media.FileSHA256,
-	//	 		FileLength:    &media.FileLength,
-	//	 	}
-	//	 case event.MsgAudio:
-	//	 	media := portal.preprocessMatrixMedia(sender, relaybotFormatted, content, evt.ID, whatsapp.MediaAudio)
-	//	 	if media == nil {
-	//	 		return nil, sender
-	//	 	}
-	//	 	duration := uint32(content.GetInfo().Duration)
-	//	 	info.Message.AudioMessage = &waProto.AudioMessage{
-	//	 		ContextInfo:   ctxInfo,
-	//	 		Url:           &media.URL,
-	//	 		MediaKey:      media.MediaKey,
-	//	 		Mimetype:      &content.GetInfo().MimeType,
-	//	 		Seconds:       &duration,
-	//	 		FileEncSha256: media.FileEncSHA256,
-	//	 		FileSha256:    media.FileSHA256,
-	//	 		FileLength:    &media.FileLength,
-	//	 	}
-	//	 case event.MsgFile:
-	//	 	media := portal.preprocessMatrixMedia(sender, relaybotFormatted, content, evt.ID, whatsapp.MediaDocument)
-	//	 	if media == nil {
-	//	 		return nil, sender
-	//	 	}
-	//	 	info.Message.DocumentMessage = &waProto.DocumentMessage{
-	//	 		ContextInfo:   ctxInfo,
-	//	 		Url:           &media.URL,
-	//	 		Title:         &content.Body,
-	//	 		FileName:      &content.Body,
-	//	 		MediaKey:      media.MediaKey,
-	//	 		Mimetype:      &content.GetInfo().MimeType,
-	//	 		FileEncSha256: media.FileEncSHA256,
-	//	 		FileSha256:    media.FileSHA256,
-	//	 		FileLength:    &media.FileLength,
-	//	 	}
 	default:
 		portal.log.Debugln("Unhandled Matrix event %s: unknown msgtype %s", evt.ID, content.MsgType)
 		return nil, sender
@@ -1562,13 +1378,6 @@ func (portal *Portal) convertMatrixMessage(sender *User, evt *event.Event) ([]*g
 }
 
 func (portal *Portal) wasMessageSent(sender *User, id string) bool {
-	// _, err := sender.Conn.LoadMessagesAfter(portal.Key.JID, id, true, 0)
-	// if err != nil {
-	// 	if err != whatsapp.ErrServerRespondedWith404 {
-	// 		portal.log.Warnfln("Failed to check if message was bridged without response: %v", err)
-	// 	}
-	// 	return false
-	// }
 	return true
 }
 
@@ -1620,98 +1429,9 @@ func (portal *Portal) sendRaw(sender *User, evt *event.Event, info *groupme.Mess
 		}
 	}
 	return m, nil
-	// errChan := make(chan error, 1)
-	// go sender.Conn.SendRaw(info, errChan)
-
-	// var err error
-	// var errorEventID id.EventID
-	// select {
-	// case err = <-errChan:
-	// 	var statusResp whatsapp.StatusResponse
-	// 	if !isRetry && errors.As(err, &statusResp) && statusResp.Status == 599 {
-	// 		portal.log.Debugfln("599 status response sending %s to WhatsApp (%+v), retrying...", evt.ID, statusResp)
-	// 		errorEventID = portal.sendErrorMessage(fmt.Sprintf("%v. The bridge will retry in 5 seconds.", err))
-	// 		time.Sleep(5 * time.Second)
-	// 		portal.sendRaw(sender, evt, info, true)
-	// 	}
-	// case <-time.After(time.Duration(portal.bridge.Config.Bridge.ConnectionTimeout) * time.Second):
-	// 	if portal.bridge.Config.Bridge.FetchMessageOnTimeout && portal.wasMessageSent(sender, info.Key.GetId()) {
-	// 		portal.log.Debugln("Matrix event %s was bridged, but response didn't arrive within timeout")
-	// 		portal.sendDeliveryReceipt(evt.ID)
-	// 	} else {
-	// 		portal.log.Warnfln("Response when bridging Matrix event %s is taking long to arrive", evt.ID)
-	// 		errorEventID = portal.sendErrorMessage(timeout.Error())
-	// 	}
-	// 	err = <-errChan
-	// }
-	// if err != nil {
-	// 	portal.log.Errorfln("Error handling Matrix event %s: %v", evt.ID, err)
-	// 	var statusResp whatsapp.StatusResponse
-	// 	if errors.As(err, &statusResp) && statusResp.Status == 599 {
-	// 		portal.log.Debugfln("599 status response data: %+v", statusResp)
-	// 	}
-	// 	portal.sendErrorMessage(err.Error())
-	// } else {
-	// 	portal.log.Debugfln("Handled Matrix event %s", evt.ID)
-	// 	portal.sendDeliveryReceipt(evt.ID)
-	// }
-	// if errorEventID != "" {
-	// 	_, err = portal.MainIntent().RedactEvent(portal.MXID, errorEventID)
-	// 	if err != nil {
-	// 		portal.log.Warnfln("Failed to redact timeout warning message %s: %v", errorEventID, err)
-	// 	}
-	// }
 }
 
 func (portal *Portal) HandleMatrixRedaction(sender *User, evt *event.Event) {
-	// if portal.IsPrivateChat() && sender.JID != portal.Key.Receiver {
-	// 	return
-	// }
-
-	// msg := portal.bridge.DB.Message.GetByMXID(evt.Redacts)
-	// if msg == nil || msg.Sender != sender.JID {
-	// 	return
-	// }
-
-	// ts := uint64(evt.Timestamp / 1000)
-	// status := waProto.WebMessageInfo_PENDING
-	// protoMsgType := waProto.ProtocolMessage_REVOKE
-	// fromMe := true
-	// info := &waProto.WebMessageInfo{
-	// 	Key: &waProto.MessageKey{
-	// 		FromMe:    &fromMe,
-	// 		Id:        makeMessageID(),
-	// 		RemoteJid: &portal.Key.JID,
-	// 	},
-	// 	MessageTimestamp: &ts,
-	// 	Message: &waProto.Message{
-	// 		ProtocolMessage: &waProto.ProtocolMessage{
-	// 			Type: &protoMsgType,
-	// 			Key: &waProto.MessageKey{
-	// 				FromMe:    &fromMe,
-	// 				Id:        &msg.JID,
-	// 				RemoteJid: &portal.Key.JID,
-	// 			},
-	// 		},
-	// 	},
-	// 	Status: &status,
-	// }
-	// errChan := make(chan error, 1)
-	// go sender.Conn.SendRaw(info, errChan)
-
-	// var err error
-	// select {
-	// case err = <-errChan:
-	// case <-time.After(time.Duration(portal.bridge.Config.Bridge.ConnectionTimeout) * time.Second):
-	// 	portal.log.Warnfln("Response when bridging Matrix redaction %s is taking long to arrive", evt.ID)
-	// 	err = <-errChan
-	// }
-	// if err != nil {
-	// 	portal.log.Errorfln("Error handling Matrix redaction %s: %v", evt.ID, err)
-	// } else {
-	// 	portal.log.Debugln("Handled Matrix redaction %s of %s", evt.ID, evt.Redacts)
-	// 	portal.sendDeliveryReceipt(evt.ID)
-	// }
 }
 
 func (portal *Portal) Delete() {
@@ -1811,25 +1531,7 @@ func (portal *Portal) HandleMatrixLeave(sender *User) {
 }
 
 func (portal *Portal) HandleMatrixKick(sender *User, evt *event.Event) {
-	// puppet := portal.bridge.GetPuppetByMXID(id.UserID(evt.GetStateKey()))
-	// if puppet != nil {
-	// 	resp, err := sender.Conn.RemoveMember(portal.Key.JID, []string{puppet.JID})
-	// 	if err != nil {
-	// 		portal.log.Errorfln("Failed to kick %s from group as %s: %v", puppet.JID, sender.MXID, err)
-	// 		return
-	// 	}
-	// 	portal.log.Infoln("Kick %s response: %s", puppet.JID, <-resp)
-	// }
 }
 
 func (portal *Portal) HandleMatrixInvite(sender *User, evt *event.Event) {
-	// puppet := portal.bridge.GetPuppetByMXID(id.UserID(evt.GetStateKey()))
-	// if puppet != nil {
-	// 	resp, err := sender.Conn.AddMember(portal.Key.JID, []string{puppet.JID})
-	// 	if err != nil {
-	// 		portal.log.Errorfln("Failed to add %s to group as %s: %v", puppet.JID, sender.MXID, err)
-	// 		return
-	// 	}
-	// 	portal.log.Infoln("Add %s response: %s", puppet.JID, <-resp)
-	// }
 }

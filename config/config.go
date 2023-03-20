@@ -24,13 +24,15 @@ import (
 type Config struct {
 	*bridgeconfig.BaseConfig `yaml:",inline"`
 
-	SegmentKey string `yaml:"segment_key"`
+	SegmentKey    string `yaml:"segment_key"`
+	SegmentUserID string `yaml:"segment_user_id"`
 
 	Metrics struct {
 		Enabled bool   `yaml:"enabled"`
 		Listen  string `yaml:"listen"`
 	} `yaml:"metrics"`
 
+	// TODO need these?
 	GroupMe struct {
 		OSName            string `yaml:"os_name"`
 		BrowserName       string `yaml:"browser_name"`

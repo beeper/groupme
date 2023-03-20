@@ -98,7 +98,7 @@ func (br *GMBridge) newDoublePuppetClient(mxid id.UserID, accessToken string) (*
 	homeserverURL, found := br.Config.Bridge.DoublePuppetServerMap[homeserver]
 	if !found {
 		if homeserver == br.AS.HomeserverDomain {
-			homeserverURL = br.AS.HomeserverURL
+			homeserverURL = ""
 		} else if br.Config.Bridge.DoublePuppetAllowDiscovery {
 			resp, err := mautrix.DiscoverClientAPI(homeserver)
 			if err != nil {
@@ -110,14 +110,7 @@ func (br *GMBridge) newDoublePuppetClient(mxid id.UserID, accessToken string) (*
 			return nil, fmt.Errorf("double puppeting from %s is not allowed", homeserver)
 		}
 	}
-	client, err := mautrix.NewClient(homeserverURL, mxid, accessToken)
-	if err != nil {
-		return nil, err
-	}
-	client.Logger = br.AS.Log.Sub(mxid.String())
-	client.Client = br.AS.HTTPClient
-	client.DefaultHTTPRetries = br.AS.DefaultHTTPRetries
-	return client, nil
+	return br.AS.NewExternalMautrixClient(mxid, accessToken, homeserverURL)
 }
 
 func (puppet *Puppet) newCustomIntent() (*appservice.IntentAPI, error) {

@@ -20,6 +20,7 @@ import (
 	_ "embed"
 	"sync"
 
+	"maunium.net/go/mautrix"
 	"maunium.net/go/mautrix/bridge"
 	"maunium.net/go/mautrix/bridge/commands"
 	"maunium.net/go/mautrix/bridge/status"
@@ -48,7 +49,6 @@ type GMBridge struct {
 	Config       *config.Config
 	DB           *database.Database
 	Provisioning *ProvisioningAPI
-	Formatter    *Formatter
 	Metrics      *MetricsHandler
 
 	usersByMXID         map[id.UserID]*User
@@ -70,10 +70,16 @@ func (br *GMBridge) Init() {
 	br.CommandProcessor = commands.NewProcessor(&br.Bridge)
 	br.RegisterCommands()
 
+	matrixHTMLParser.PillConverter = br.pillConverter
+
 	Segment.log = br.Log.Sub("Segment")
 	Segment.key = br.Config.SegmentKey
+	Segment.userID = br.Config.SegmentUserID
 	if Segment.IsEnabled() {
 		Segment.log.Infoln("Segment metrics are enabled")
+		if Segment.userID != "" {
+			Segment.log.Infoln("Overriding Segment user_id with %v", Segment.userID)
+		}
 	}
 
 	br.DB = database.New(br.Bridge.DB, br.Log.Sub("Database"))
@@ -83,47 +89,18 @@ func (br *GMBridge) Init() {
 		br.Provisioning = &ProvisioningAPI{bridge: br}
 	}
 
-	br.Formatter = NewFormatter(br)
 	br.Metrics = NewMetricsHandler(br.Config.Metrics.Listen, br.Log.Sub("Metrics"), br.DB)
 	br.MatrixHandler.TrackEventDuration = br.Metrics.TrackMatrixEvent
 }
 
-func (bridge *GMBridge) Start() {
-	if bridge.Provisioning != nil {
-		bridge.Log.Debugln("Initializing provisioning API")
-		bridge.Provisioning.Init()
+func (br *GMBridge) Start() {
+	if br.Provisioning != nil {
+		br.Log.Debugln("Initializing provisioning API")
+		br.Provisioning.Init()
 	}
-	go bridge.StartUsers()
-	if bridge.Config.Metrics.Enabled {
-		go bridge.Metrics.Start()
-	}
-}
-
-func (bridge *GMBridge) UpdateBotProfile() {
-	bridge.Log.Debugln("Updating bot profile")
-	botConfig := bridge.Config.AppService.Bot
-
-	var err error
-	var mxc id.ContentURI
-	if botConfig.Avatar == "remove" {
-		err = bridge.Bot.SetAvatarURL(mxc)
-	} else if len(botConfig.Avatar) > 0 {
-		mxc, err = id.ParseContentURI(botConfig.Avatar)
-		if err == nil {
-			err = bridge.Bot.SetAvatarURL(mxc)
-		}
-	}
-	if err != nil {
-		bridge.Log.Warnln("Failed to update bot avatar:", err)
-	}
-
-	if botConfig.Displayname == "remove" {
-		err = bridge.Bot.SetDisplayName("")
-	} else if len(botConfig.Avatar) > 0 {
-		err = bridge.Bot.SetDisplayName(botConfig.Displayname)
-	}
-	if err != nil {
-		bridge.Log.Warnln("Failed to update bot displayname:", err)
+	go br.StartUsers()
+	if br.Config.Metrics.Enabled {
+		go br.Metrics.Start()
 	}
 }
 
@@ -131,7 +108,7 @@ func (br *GMBridge) StartUsers() {
 	br.Log.Debugln("Starting users")
 	foundAnySessions := false
 	for _, user := range br.GetAllUsers() {
-		if user.GMID.String() != "" {
+		if user.GMID.Valid() {
 			foundAnySessions = true
 		}
 		go user.Connect()
@@ -172,6 +149,20 @@ func (br *GMBridge) GetConfigPtr() interface{} {
 	}
 	br.Config.BaseConfig.Bridge = &br.Config.Bridge
 	return br.Config
+}
+
+const unstableFeatureBatchSending = "org.matrix.msc2716"
+
+func (br *GMBridge) CheckFeatures(versions *mautrix.RespVersions) (string, bool) {
+	if br.Config.Bridge.HistorySync.Backfill {
+		supported, known := versions.UnstableFeatures[unstableFeatureBatchSending]
+		if !known {
+			return "Backfilling is enabled in bridge config, but homeserver does not support MSC2716 batch sending", false
+		} else if !supported {
+			return "Backfilling is enabled in bridge config, but MSC2716 batch sending is not enabled on homeserver", false
+		}
+	}
+	return "", true
 }
 
 func main() {
