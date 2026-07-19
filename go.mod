@@ -5,7 +5,6 @@ go 1.19
 require (
 	github.com/beeper/groupme-lib v0.2.1-0.20221021205945-8f23e04eea71
 	github.com/gabriel-vasile/mimetype v1.1.2
-	github.com/karmanyaahm/wray v0.0.0-20210303233435-756d58657c14
 	github.com/lib/pq v1.10.7
 	github.com/mattn/go-sqlite3 v1.14.16
 	github.com/prometheus/client_golang v1.9.0
@@ -43,3 +42,5 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	maunium.net/go/mauflag v1.0.0 // indirect
 )
+
+replace github.com/beeper/groupme-lib => github.com/mesocom/groupme-lib v0.2.1-0.20260719214115-3e9c5efe334b

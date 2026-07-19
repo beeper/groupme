@@ -156,12 +156,29 @@ bridge:
     # Existing users won't be affected when these are changed.
     default_bridge_receipts: true
     default_bridge_presence: true
-    # Shared secret for https://github.com/devture/matrix-synapse-shared-secret-auth
+    # Map from homeserver domain to the client-server API URL to use for
+    # double puppeting users on that homeserver. Only necessary when the
+    # double puppet account lives on a different homeserver than the one this
+    # appservice is registered on.
+    double_puppet_server_map:
+        example.com: https://example.com
+    # Whether to allow discovering the client-server API URL of homeservers
+    # that aren't in the map above using .well-known.
+    double_puppet_allow_discovery: false
+    # Map from homeserver domain to the shared secret used to log in as users
+    # on that homeserver.
     #
-    # If set, custom puppets will be enabled automatically for local users
-    # instead of users having to find an access token and run `login-matrix`
-    # manually.
-    login_shared_secret: null
+    # If set, custom puppets will be enabled automatically for users on that
+    # homeserver instead of users having to find an access token and run
+    # `login-matrix` manually.
+    #
+    # Set to "appservice" to log in using the appservice's own as_token
+    # (MSC2778), which needs no extra homeserver-side configuration, but
+    # requires the user to be inside the appservice's user namespace.
+    # Otherwise, use a shared secret from
+    # https://github.com/devture/matrix-synapse-shared-secret-auth
+    login_shared_secret_map:
+        example.com: foobar
 
     # Whether or not to invite own GroupMe user's Matrix puppet into private
     # chat portals when backfilling if needed.

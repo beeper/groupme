@@ -1,4 +1,4 @@
--- v0 -> v1: Latest revision
+-- v0 -> v2: Latest revision
 
 CREATE TABLE "user" (
     mxid TEXT PRIMARY KEY,
@@ -62,8 +62,9 @@ CREATE TABLE reaction (
     target_gmid   TEXT,
     sender        TEXT,
 
-    mxid TEXT NOT NULL,
-    gmid TEXT NOT NULL,
+    mxid  TEXT NOT NULL,
+    gmid  TEXT NOT NULL,
+    emoji TEXT NOT NULL DEFAULT '',
 
     PRIMARY KEY (chat_gmid, chat_receiver, target_gmid, sender),
     FOREIGN KEY (chat_gmid, chat_receiver, target_gmid) REFERENCES message(chat_gmid, chat_receiver, gmid)

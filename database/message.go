@@ -43,17 +43,25 @@ func (mq *MessageQuery) New() *Message {
 const (
 	getAllMessagesSelect = `
 		SELECT chat_gmid, chat_receiver, gmid, mxid, sender, timestamp, sent
-		FROM messages
+		FROM message
 	`
 	getAllMessagesQuery = getAllMessagesSelect + `
 		WHERE chat_gmid=$1 AND chat_receiver=$2
 	`
-	getByGMIDQuery            = getAllMessagesQuery + "AND jid=$3"
+	getByGMIDQuery            = getAllMessagesQuery + "AND gmid=$3"
 	getByMXIDQuery            = getAllMessagesSelect + "WHERE mxid=$1"
 	getLastMessageInChatQuery = getAllMessagesQuery + `
 		AND timestamp<=$3 AND sent=true
 		ORDER BY timestamp DESC
 		LIMIT 1
+	`
+	insertMessageQuery = `
+		INSERT INTO message (chat_gmid, chat_receiver, gmid, mxid, sender, timestamp, sent)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		ON CONFLICT (chat_gmid, chat_receiver, gmid) DO UPDATE SET mxid=excluded.mxid, timestamp=excluded.timestamp, sent=excluded.sent
+	`
+	deleteMessageQuery = `
+		DELETE FROM message WHERE gmid=$1 AND chat_gmid=$2
 	`
 	getFirstMessageInChatQuery = getAllMessagesQuery + `
 		AND sent=true
@@ -142,4 +150,19 @@ func (msg *Message) Scan(row dbutil.Scannable) *Message {
 		msg.Timestamp = time.Unix(ts, 0)
 	}
 	return msg
+}
+
+func (msg *Message) Insert() {
+	_, err := msg.db.Exec(insertMessageQuery,
+		msg.Chat.GMID, msg.Chat.Receiver, msg.GMID, msg.MXID, msg.Sender, msg.Timestamp.Unix(), msg.Sent)
+	if err != nil {
+		msg.log.Warnfln("Failed to insert message %s: %v", msg.GMID, err)
+	}
+}
+
+func (msg *Message) Delete() {
+	_, err := msg.db.Exec(deleteMessageQuery, msg.GMID, msg.Chat.GMID)
+	if err != nil {
+		msg.log.Warnfln("Failed to delete message %s: %v", msg.GMID, err)
+	}
 }

@@ -58,7 +58,9 @@ func DownloadImage(URL string) (bytes *[]byte, mime string, err error) {
 	return
 }
 
-func DownloadFile(RoomJID groupme.ID, FileID string, token string) (contents []byte, fname, mime string) {
+// DownloadFile downloads a file attachment, returning its contents, file
+// name and mime type.
+func DownloadFile(RoomJID groupme.ID, FileID string, token string) (contents []byte, fname, mime string, err error) {
 	client := &http.Client{}
 	b, _ := json.Marshal(struct {
 		FileIDS []string `json:"file_ids"`
@@ -66,58 +68,70 @@ func DownloadFile(RoomJID groupme.ID, FileID string, token string) (contents []b
 		FileIDS: []string{FileID},
 	})
 
-	req, _ := http.NewRequest("POST", fmt.Sprintf("https://file.groupme.com/v1/%s/fileData", RoomJID), bytes.NewReader(b))
+	req, err := http.NewRequest("POST", fmt.Sprintf("https://file.groupme.com/v1/%s/fileData", RoomJID), bytes.NewReader(b))
+	if err != nil {
+		return nil, "", "", err
+	}
 	req.Header.Add("X-Access-Token", token)
 	req.Header.Add("Content-Type", "application/json")
 	resp, err := client.Do(req)
 	if err != nil {
-		// TODO: FIX
-		panic(err)
+		return nil, "", "", fmt.Errorf("failed to fetch file metadata: %w", err)
 	}
-
 	defer resp.Body.Close()
+
 	data := []ImgData{}
-	json.NewDecoder(resp.Body).Decode(&data)
-	fmt.Println(data, RoomJID, FileID, token)
+	if err = json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		return nil, "", "", fmt.Errorf("failed to decode file metadata: %w", err)
+	}
 	if len(data) < 1 {
-		return
+		return nil, "", "", fmt.Errorf("no file metadata returned for file %s", FileID)
 	}
 
-	req, _ = http.NewRequest("POST", fmt.Sprintf("https://file.groupme.com/v1/%s/files/%s", RoomJID, FileID), nil)
-	req.URL.Query().Add("token", token)
+	req, err = http.NewRequest("POST", fmt.Sprintf("https://file.groupme.com/v1/%s/files/%s", RoomJID, FileID), nil)
+	if err != nil {
+		return nil, "", "", err
+	}
 	req.Header.Add("X-Access-Token", token)
 	resp, err = client.Do(req)
 	if err != nil {
-		// TODO: FIX
-		panic(err)
+		return nil, "", "", fmt.Errorf("failed to download file: %w", err)
 	}
 	defer resp.Body.Close()
 
-	bytes, _ := ioutil.ReadAll(resp.Body)
-	return bytes, data[0].FileData.FileName, data[0].FileData.Mime
-
+	contents, err = ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return nil, "", "", fmt.Errorf("failed to read file contents: %w", err)
+	}
+	return contents, data[0].FileData.FileName, data[0].FileData.Mime, nil
 }
 
-func DownloadVideo(previewURL, videoURL, token string) (vidContents []byte, mime string) {
+// DownloadVideo downloads a video attachment, returning its contents and
+// mime type.
+func DownloadVideo(previewURL, videoURL, token string) (vidContents []byte, mime string, err error) {
 	//preview TODO
 	client := &http.Client{}
 
-	req, _ := http.NewRequest("GET", videoURL, nil)
+	req, err := http.NewRequest("GET", videoURL, nil)
+	if err != nil {
+		return nil, "", err
+	}
 	req.AddCookie(&http.Cookie{Name: "token", Value: token})
 	resp, err := client.Do(req)
 	if err != nil {
-		fmt.Println(err)
-		return nil, ""
+		return nil, "", fmt.Errorf("failed to download video: %w", err)
 	}
 	defer resp.Body.Close()
 
-	bytes, _ := ioutil.ReadAll(resp.Body)
+	vidContents, err = ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to read video contents: %w", err)
+	}
 	mime = resp.Header.Get("Content-Type")
 	if len(mime) == 0 {
-		mime = http.DetectContentType(bytes)
+		mime = http.DetectContentType(vidContents)
 	}
-	return bytes, mime
-
+	return vidContents, mime, nil
 }
 
 type ImgData struct {

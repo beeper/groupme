@@ -25,19 +25,24 @@ func (mq *ReactionQuery) New() *Reaction {
 
 const (
 	getReactionByTargetGMIDQuery = `
-		SELECT chat_gmid, chat_receiver, target_gmid, sender, mxid, gmid
+		SELECT chat_gmid, chat_receiver, target_gmid, sender, mxid, gmid, emoji
 		FROM reaction
 		WHERE chat_gmid=$1 AND chat_receiver=$2 AND target_gmid=$3 AND sender=$4
 	`
+	getAllReactionsByTargetGMIDQuery = `
+		SELECT chat_gmid, chat_receiver, target_gmid, sender, mxid, gmid, emoji
+		FROM reaction
+		WHERE chat_gmid=$1 AND chat_receiver=$2 AND target_gmid=$3
+	`
 	getReactionByMXIDQuery = `
-		SELECT chat_gmid, chat_receiver, target_gmid, sender, mxid, gmid FROM reaction
+		SELECT chat_gmid, chat_receiver, target_gmid, sender, mxid, gmid, emoji FROM reaction
 		WHERE mxid=$1
 	`
 	upsertReactionQuery = `
-		INSERT INTO reaction (chat_gmid, chat_receiver, target_gmid, sender, mxid, gmid)
-		VALUES ($1, $2, $3, $4, $5, $6)
+		INSERT INTO reaction (chat_gmid, chat_receiver, target_gmid, sender, mxid, gmid, emoji)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
 		ON CONFLICT (chat_gmid, chat_receiver, target_gmid, sender)
-			DO UPDATE SET mxid=excluded.mxid, gmid=excluded.gmid
+			DO UPDATE SET mxid=excluded.mxid, gmid=excluded.gmid, emoji=excluded.emoji
 	`
 	deleteReactionQuery = `
 		DELETE FROM reaction WHERE chat_gmid=$1 AND chat_receiver=$2 AND target_gmid=$3 AND sender=$4 AND mxid=$5
@@ -46,6 +51,23 @@ const (
 
 func (rq *ReactionQuery) GetByTargetGMID(chat PortalKey, gmid groupme.ID, sender groupme.ID) *Reaction {
 	return rq.maybeScan(rq.db.QueryRow(getReactionByTargetGMIDQuery, chat.GMID, chat.Receiver, gmid, sender))
+}
+
+func (rq *ReactionQuery) GetAllByTargetGMID(chat PortalKey, targetGMID groupme.ID) []*Reaction {
+	rows, err := rq.db.Query(getAllReactionsByTargetGMIDQuery, chat.GMID, chat.Receiver, targetGMID)
+	if err != nil || rows == nil {
+		return nil
+	}
+	defer rows.Close()
+	var reactions []*Reaction
+	for rows.Next() {
+		reaction := rq.New()
+		err := rows.Scan(&reaction.Chat.GMID, &reaction.Chat.Receiver, &reaction.TargetGMID, &reaction.Sender, &reaction.MXID, &reaction.GMID, &reaction.Emoji)
+		if err == nil {
+			reactions = append(reactions, reaction)
+		}
+	}
+	return reactions
 }
 
 func (rq *ReactionQuery) GetByMXID(mxid id.EventID) *Reaction {
@@ -68,10 +90,11 @@ type Reaction struct {
 	Sender     groupme.ID
 	MXID       id.EventID
 	GMID       groupme.ID
+	Emoji      string
 }
 
 func (reaction *Reaction) Scan(row dbutil.Scannable) *Reaction {
-	err := row.Scan(&reaction.Chat.GMID, &reaction.Chat.Receiver, &reaction.TargetGMID, &reaction.Sender, &reaction.MXID, &reaction.GMID)
+	err := row.Scan(&reaction.Chat.GMID, &reaction.Chat.Receiver, &reaction.TargetGMID, &reaction.Sender, &reaction.MXID, &reaction.GMID, &reaction.Emoji)
 	if err != nil {
 		if !errors.Is(err, sql.ErrNoRows) {
 			reaction.log.Errorln("Database scan failed:", err)
@@ -85,7 +108,7 @@ func (reaction *Reaction) Upsert(txn dbutil.Execable) {
 	if txn == nil {
 		txn = reaction.db
 	}
-	_, err := txn.Exec(upsertReactionQuery, reaction.Chat.GMID, reaction.Chat.Receiver, reaction.TargetGMID, reaction.Sender, reaction.MXID, reaction.GMID)
+	_, err := txn.Exec(upsertReactionQuery, reaction.Chat.GMID, reaction.Chat.Receiver, reaction.TargetGMID, reaction.Sender, reaction.MXID, reaction.GMID, reaction.Emoji)
 	if err != nil {
 		reaction.log.Warnfln("Failed to upsert reaction to %s@%s by %s: %v", reaction.Chat, reaction.TargetGMID, reaction.Sender, err)
 	}

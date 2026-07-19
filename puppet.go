@@ -303,7 +303,15 @@ func (puppet *Puppet) Sync(source *User, member *groupme.Member, forceAvatarSync
 		puppet.log.Errorln("Failed to ensure registered:", err)
 	}
 
-	puppet.log.Debugfln("Syncing info through %s", source.GMID)
+	if source != nil {
+		puppet.log.Debugfln("Syncing info through %s", source.GMID)
+	}
 
-	// TODO
+	if member != nil {
+		puppet.UpdateName(*member, forcePortalSync)
+	}
+
+	if source != nil {
+		puppet.UpdateAvatar(source, forceAvatarSync)
+	}
 }

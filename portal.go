@@ -156,7 +156,8 @@ func (bridge *GMBridge) NewManualPortal(key database.PortalKey) *Portal {
 
 		recentlyHandled: make([]string, recentlyHandledLength),
 
-		messages: make(chan PortalMessage, bridge.Config.Bridge.PortalMessageBuffer),
+		messages:       make(chan PortalMessage, bridge.Config.Bridge.PortalMessageBuffer),
+		matrixMessages: make(chan PortalMatrixMessage, bridge.Config.Bridge.PortalMessageBuffer),
 	}
 	portal.Key = key
 	go portal.handleMessageLoop()
@@ -171,7 +172,8 @@ func (bridge *GMBridge) NewPortal(dbPortal *database.Portal) *Portal {
 
 		recentlyHandled: make([]string, recentlyHandledLength),
 
-		messages: make(chan PortalMessage, bridge.Config.Bridge.PortalMessageBuffer),
+		messages:       make(chan PortalMessage, bridge.Config.Bridge.PortalMessageBuffer),
+		matrixMessages: make(chan PortalMatrixMessage, bridge.Config.Bridge.PortalMessageBuffer),
 	}
 	go portal.handleMessageLoop()
 	return portal
@@ -180,10 +182,11 @@ func (bridge *GMBridge) NewPortal(dbPortal *database.Portal) *Portal {
 const recentlyHandledLength = 100
 
 type PortalMessage struct {
-	chat      database.PortalKey
-	source    *User
-	data      *groupme.Message
-	timestamp uint64
+	chat       database.PortalKey
+	source     *User
+	data       *groupme.Message
+	timestamp  uint64
+	isReaction bool
 }
 
 type PortalMatrixMessage struct {
@@ -213,26 +216,40 @@ type Portal struct {
 	messages       chan PortalMessage
 	matrixMessages chan PortalMatrixMessage
 
+	currentlyTyping     map[id.UserID]context.CancelFunc
+	currentlyTypingLock sync.Mutex
+
 	hasRelaybot *bool
 }
 
 const MaxMessageAgeToCreatePortal = 5 * 60 // 5 minutes
 
 func (portal *Portal) handleMessageLoop() {
-	for msg := range portal.messages {
-		if len(portal.MXID) == 0 {
-			if msg.timestamp+MaxMessageAgeToCreatePortal < uint64(time.Now().Unix()) {
-				portal.log.Debugln("Not creating portal room for incoming message: message is too old")
-				continue
+	for {
+		select {
+		case msg, ok := <-portal.messages:
+			if !ok {
+				return
 			}
-			portal.log.Debugln("Creating Matrix room from incoming message")
-			err := portal.CreateMatrixRoom(msg.source)
-			if err != nil {
-				portal.log.Errorln("Failed to create portal room:", err)
-				continue
+			if len(portal.MXID) == 0 {
+				if msg.timestamp+MaxMessageAgeToCreatePortal < uint64(time.Now().Unix()) {
+					portal.log.Debugln("Not creating portal room for incoming message: message is too old")
+					continue
+				}
+				portal.log.Debugln("Creating Matrix room from incoming message")
+				err := portal.CreateMatrixRoom(msg.source)
+				if err != nil {
+					portal.log.Errorln("Failed to create portal room:", err)
+					continue
+				}
 			}
+			portal.handleMessage(msg)
+		case msg, ok := <-portal.matrixMessages:
+			if !ok {
+				return
+			}
+			portal.HandleMatrixMessage(msg.user, msg.evt)
 		}
-		portal.handleMessage(msg)
 	}
 }
 
@@ -241,8 +258,11 @@ func (portal *Portal) handleMessage(msg PortalMessage) {
 		portal.log.Warnln("handleMessage called even though portal.MXID is empty")
 		return
 	}
+	if msg.isReaction {
+		portal.handleReaction(msg.data)
+		return
+	}
 	portal.HandleTextMessage(msg.source, msg.data)
-	// portal.handleReaction(msg.data.ID.String(), msg.data.FavoritedBy)
 }
 
 func (portal *Portal) isRecentlyHandled(id groupme.ID) bool {
@@ -280,7 +300,7 @@ func (portal *Portal) markHandled(source *User, message *groupme.Message, mxid i
 	} else {
 		msg.Sender = message.SenderID
 	}
-	// msg.Insert()
+	msg.Insert()
 
 	portal.recentlyHandledLock.Lock()
 	portal.recentlyHandled[0] = "" //FIFO queue being implemented here //TODO: is this efficent
@@ -296,7 +316,8 @@ func (portal *Portal) getMessageIntent(user *User, info *groupme.Message) *appse
 		}
 		return portal.MainIntent()
 	} else if len(info.UserID.String()) == 0 {
-		println("TODO weird uid stuff")
+		portal.log.Warnfln("Message %s has no user ID, using main intent", info.ID)
+		return portal.MainIntent()
 	} else if info.UserID == user.GetGMID() { //from me
 		return portal.bridge.GetPuppetByGMID(user.GMID).IntentFor(portal)
 	}
@@ -313,11 +334,24 @@ func (portal *Portal) startHandling(source *User, info *groupme.Message) *appser
 		portal.log.Debugfln("Not handling %s: message is older (%d) than last bridge message (%d)", info.ID, info.CreatedAt, portal.lastMessageTs)
 	} else if portal.isRecentlyHandled(info.ID) {
 		portal.log.Debugfln("Not handling %s: message was recently handled", info.ID)
+	} else if info.SourceGUID != "" && portal.isRecentlyHandled(groupme.ID(info.SourceGUID)) {
+		portal.log.Debugfln("Not handling %s: source GUID %s was recently handled", info.ID, info.SourceGUID)
 	} else if portal.isDuplicate(info.ID) {
 		portal.log.Debugfln("Not handling %s: message is duplicate", info.ID)
 	} else if info.System {
 		portal.log.Debugfln("Not handling %s: message is from system: %s", info.ID, info.Text)
+		if info.Event != nil && info.Event.Type == "message.deleted" {
+			if targetMsgID, ok := info.Event.Data["message_id"].(string); ok && targetMsgID != "" {
+				portal.HandleGroupMeDeletion(groupme.ID(targetMsgID))
+			}
+		}
 	} else {
+		portal.recentlyHandledLock.Lock()
+		portal.recentlyHandled[0] = ""
+		portal.recentlyHandled = portal.recentlyHandled[1:]
+		portal.recentlyHandled = append(portal.recentlyHandled, info.ID.String())
+		portal.recentlyHandledLock.Unlock()
+
 		portal.lastMessageTs = uint64(info.CreatedAt.ToTime().Unix())
 		intent := portal.getMessageIntent(source, info)
 		if intent != nil {
@@ -554,14 +588,17 @@ func (portal *Portal) ensureUserInvited(user *User) bool {
 func (portal *Portal) Sync(user *User, group *groupme.Group) {
 	portal.log.Infoln("Syncing portal for", user.MXID)
 
-	sub := user.Conn.SubscribeToGroup
-	if portal.IsPrivateChat() {
-		sub = user.Conn.SubscribeToDM
-	}
-	err := sub(context.TODO(), groupme.ID(portal.Key.Receiver), user.Token)
-	if err != nil {
-		portal.log.Errorln("Subscribing failed, live metadata updates won't work", err)
-	}
+	go func() {
+		var err error
+		if portal.IsPrivateChat() {
+			err = user.Conn.SubscribeToDM(context.TODO(), dmConversationID(portal.Key), user.Token)
+		} else {
+			err = user.Conn.SubscribeToGroup(context.TODO(), portal.Key.GMID, user.Token)
+		}
+		if err != nil {
+			portal.log.Errorln("Subscribing failed, live metadata updates won't work", err)
+		}
+	}()
 
 	if len(portal.MXID) == 0 {
 		if !portal.IsPrivateChat() {
@@ -574,11 +611,16 @@ func (portal *Portal) Sync(user *User, group *groupme.Group) {
 		}
 	} else {
 		portal.ensureUserInvited(user)
+		if portal.bridge.Config.Bridge.Encryption.Default {
+			_ = portal.MainIntent().EnsureJoined(portal.MXID)
+		}
 	}
 
 	if portal.IsPrivateChat() {
 		return
 	}
+
+	portal.SyncParticipants(group)
 
 	update := false
 	update = portal.UpdateMetadata(user) || update
@@ -751,11 +793,14 @@ func (portal *Portal) CreateMatrixRoom(user *User) error {
 	} else {
 		var err error
 		metadata, err = user.Client.ShowGroup(context.TODO(), groupme.ID(portal.Key.GMID))
-		if err == nil {
+		if err != nil {
+			portal.log.Warnfln("Failed to fetch group info to create room: %v", err)
+			metadata = nil
+		} else {
 			portal.Name = metadata.Name
 			portal.Topic = metadata.Description
+			portal.UpdateAvatar(user, metadata.ImageURL, false)
 		}
-		portal.UpdateAvatar(user, metadata.ImageURL, false)
 	}
 
 	bridgeInfoStateKey, bridgeInfo := portal.getBridgeInfo()
@@ -895,6 +940,10 @@ const MessageSendRetries = 5
 const MediaUploadRetries = 5
 const BadGatewaySleep = 5 * time.Second
 
+// MediaUploadTimeout bounds the total time spent downloading Matrix media,
+// uploading it to GroupMe and waiting for async processing to finish.
+const MediaUploadTimeout = 15 * time.Minute
+
 func (portal *Portal) sendReaction(intent *appservice.IntentAPI, eventID id.EventID, reaction string) (*mautrix.RespSendEvent, error) {
 	var content event.ReactionEventContent
 	content.RelatesTo = event.RelatesTo{
@@ -1006,7 +1055,10 @@ func (portal *Portal) handleAttachment(intent *appservice.IntentAPI, attachment 
 
 		return content, true, nil
 	case "video":
-		vidContents, mime := groupmeext.DownloadVideo(attachment.VideoPreviewURL, attachment.URL, source.Token)
+		vidContents, mime, err := groupmeext.DownloadVideo(attachment.VideoPreviewURL, attachment.URL, source.Token)
+		if err != nil {
+			return nil, true, fmt.Errorf("failed to download video: %w", err)
+		}
 		if mime == "" {
 			mime = mimetype.Detect(vidContents).String()
 		}
@@ -1046,7 +1098,10 @@ func (portal *Portal) handleAttachment(intent *appservice.IntentAPI, attachment 
 		message.Text = strings.Replace(message.Text, attachment.URL, "", 1)
 		return content, true, nil
 	case "file":
-		fileData, fname, fmime := groupmeext.DownloadFile(portal.Key.GMID, attachment.FileID, source.Token)
+		fileData, fname, fmime, err := groupmeext.DownloadFile(portal.Key.GMID, attachment.FileID, source.Token)
+		if err != nil {
+			return nil, true, fmt.Errorf("failed to download file: %w", err)
+		}
 		if fmime == "" {
 			fmime = mimetype.Detect(fileData).String()
 		}
@@ -1112,7 +1167,6 @@ func (portal *Portal) handleAttachment(intent *appservice.IntentAPI, attachment 
 
 		return content, false, nil
 	case "reply":
-		fmt.Printf("%+v\n", attachment)
 		content := &event.MessageEventContent{
 			Body:    message.Text,
 			MsgType: event.MsgText,
@@ -1133,6 +1187,15 @@ func (portal *Portal) HandleTextMessage(source *User, message *groupme.Message) 
 		return
 	}
 
+	puppet := portal.bridge.GetPuppetByGMID(message.UserID)
+	if puppet != nil {
+		puppet.Sync(source, &groupme.Member{
+			UserID:   message.UserID,
+			Nickname: message.Name,
+			ImageURL: message.AvatarURL,
+		}, false, false)
+	}
+
 	sendText := true
 	var sentID id.EventID
 	for _, a := range message.Attachments {
@@ -1146,7 +1209,7 @@ func (portal *Portal) HandleTextMessage(source *User, message *groupme.Message) 
 		if msg == nil {
 			continue
 		}
-		resp, err := portal.sendMessage(intent, event.EventMessage, msg, nil, message.CreatedAt.ToTime().Unix())
+		resp, err := portal.sendMessage(intent, event.EventMessage, msg, nil, message.CreatedAt.ToTime().Unix()*1000)
 		if err != nil {
 			portal.log.Errorfln("Failed to handle message %s: %v", "TODOID", err)
 			portal.sendMediaBridgeFailure(source, intent, *message, err)
@@ -1165,8 +1228,8 @@ func (portal *Portal) HandleTextMessage(source *User, message *groupme.Message) 
 	}
 
 	_, _ = intent.UserTyping(portal.MXID, false, 0)
-	if sendText {
-		resp, err := portal.sendMessage(intent, event.EventMessage, content, nil, message.CreatedAt.ToTime().Unix())
+	if sendText && strings.TrimSpace(message.Text) != "" {
+		resp, err := portal.sendMessage(intent, event.EventMessage, content, nil, message.CreatedAt.ToTime().Unix()*1000)
 		if err != nil {
 			portal.log.Errorfln("Failed to handle message %s: %v", message.ID, err)
 			return
@@ -1177,88 +1240,144 @@ func (portal *Portal) HandleTextMessage(source *User, message *groupme.Message) 
 	portal.finishHandling(source, message, sentID)
 }
 
-// func (portal *Portal) handleReaction(msgID groupme.ID, ppl []groupme.ID) {
-// 	reactions := portal.bridge.DB.Reaction.GetByGMID(msgID)
-// 	newLikes := newReactions(reactions, ppl)
-// 	removeLikes := oldReactions(reactions, ppl)
+const defaultReactionEmoji = "❤️"
 
-// 	var eventID id.EventID
-// 	if len(newLikes) > 0 {
-// 		message := portal.bridge.DB.Message.GetByGMID(portal.Key, msgID)
-// 		if message == nil {
-// 			portal.log.Errorln("Received reaction for unknown message", msgID)
-// 			return
-// 		}
-// 		eventID = message.MXID
-// 	}
+// desiredReactions maps each reacting user to the emoji they reacted with.
+// The reactions array from "favorite" push events carries per-emoji user
+// lists; older payloads only have favorited_by, which implies the default ❤️.
+func desiredReactions(message *groupme.Message) map[groupme.ID]string {
+	desired := make(map[groupme.ID]string)
+	for _, userID := range message.FavoritedBy {
+		desired[groupme.ID(userID)] = defaultReactionEmoji
+	}
+	for _, reaction := range message.Reactions {
+		emoji := reaction.Code
+		if reaction.Type != "unicode" || emoji == "" {
+			// GroupMe powerup emoji can't be represented on Matrix.
+			emoji = defaultReactionEmoji
+		}
+		for _, userID := range reaction.UserIDs {
+			desired[userID] = emoji
+		}
+	}
+	return desired
+}
 
-// 	for _, jid := range newLikes {
-// 		intent := portal.getReactionIntent(jid)
-// 		resp, err := portal.sendReaction(intent, eventID, "❤")
-// 		if err != nil {
-// 			portal.log.Errorln("Something wrong with sending reaction", msgID, jid, err)
-// 			continue
-// 		}
+func (portal *Portal) handleReaction(message *groupme.Message) {
+	msgID := message.ID
+	desired := desiredReactions(message)
+	existing := portal.bridge.DB.Reaction.GetAllByTargetGMID(portal.Key, msgID)
 
-// 		newReaction := portal.bridge.DB.Reaction.New()
-// 		newReaction.MXID = resp.EventID
-// 		newReaction.MessageJID = msgID
-// 		newReaction.MessageMXID = eventID
-// 		newReaction.PuppetJID = jid
+	target := portal.bridge.DB.Message.GetByGMID(portal.Key, msgID)
+	if target == nil {
+		portal.log.Debugfln("Received reaction for unknown message %s", msgID)
+		return
+	}
 
-// 		newReaction.Insert()
+	existingBySender := make(map[groupme.ID]*database.Reaction, len(existing))
+	for _, reaction := range existing {
+		existingBySender[reaction.Sender] = reaction
+	}
 
-// 	}
+	// Send new reactions and update ones whose emoji changed.
+	for sender, emoji := range desired {
+		prev := existingBySender[sender]
+		if prev != nil && prev.Emoji == emoji {
+			continue
+		}
+		puppet := portal.bridge.GetPuppetByGMID(sender)
+		if puppet == nil {
+			continue
+		}
+		intent := puppet.IntentFor(portal)
 
-// 	for _, reaction := range removeLikes {
-// 		if len(reaction.Puppet.JID) == 0 {
-// 			portal.log.Warnln("Reaction user state wrong", reaction.MXID, msgID)
-// 			continue
-// 		}
-// 		intent := portal.getReactionIntent(reaction.PuppetJID)
-// 		_, err := intent.RedactEvent(portal.MXID, reaction.MXID)
-// 		if err != nil {
-// 			portal.log.Errorln("Something wrong with reaction redaction", reaction.MXID)
-// 			continue
-// 		}
-// 		reaction.Delete()
+		if prev != nil {
+			// Emoji changed: redact the old annotation first.
+			if _, err := intent.RedactEvent(portal.MXID, prev.MXID); err != nil {
+				portal.log.Warnfln("Failed to redact old reaction %s: %v", prev.MXID, err)
+			}
+		}
 
-// 	}
-// }
+		resp, err := portal.sendReaction(intent, target.MXID, emoji)
+		if err != nil {
+			portal.log.Errorfln("Failed to send reaction to %s from %s: %v", msgID, sender, err)
+			continue
+		}
 
-// func oldReactions(a []*database.Reaction, b []string) (ans []*database.Reaction) {
-// 	for _, i := range a {
-// 		flag := false
-// 		for _, j := range b {
-// 			if i.PuppetJID == j {
-// 				flag = true
-// 				break
-// 			}
-// 		}
-// 		if !flag {
-// 			ans = append(ans, i)
-// 		}
-// 	}
+		dbReaction := portal.bridge.DB.Reaction.New()
+		dbReaction.Chat = portal.Key
+		dbReaction.TargetGMID = msgID
+		dbReaction.Sender = sender
+		dbReaction.MXID = resp.EventID
+		dbReaction.GMID = "" // GroupMe reactions don't have IDs of their own
+		dbReaction.Emoji = emoji
+		dbReaction.Upsert(nil)
+	}
 
-// 	return
-// }
+	// Redact reactions that were removed on GroupMe.
+	for sender, reaction := range existingBySender {
+		if _, stillThere := desired[sender]; stillThere {
+			continue
+		}
+		puppet := portal.bridge.GetPuppetByGMID(sender)
+		if puppet == nil {
+			continue
+		}
+		if _, err := puppet.IntentFor(portal).RedactEvent(portal.MXID, reaction.MXID); err != nil {
+			portal.log.Errorfln("Failed to redact reaction %s: %v", reaction.MXID, err)
+		}
+		reaction.Delete()
+	}
+}
 
-// func newReactions(a []*database.Reaction, b []string) (ans []string) {
-// 	for _, j := range b {
-// 		flag := false
-// 		for _, i := range a {
-// 			if i.GMID == j {
-// 				flag = true
-// 				break
-// 			}
-// 		}
-// 		if !flag {
-// 			ans = append(ans, j)
-// 		}
-// 	}
+// HandleGroupMeDeletion redacts the Matrix event for a message that was
+// deleted on GroupMe.
+func (portal *Portal) HandleGroupMeDeletion(msgID groupme.ID) {
+	msgRecord := portal.bridge.DB.Message.GetByGMID(portal.Key, msgID)
+	if msgRecord == nil {
+		portal.log.Debugfln("Ignoring deletion of unknown message %s", msgID)
+		return
+	}
+	_, err := portal.MainIntent().RedactEvent(portal.MXID, msgRecord.MXID, mautrix.ReqRedact{
+		Reason: "Deleted in GroupMe",
+	})
+	if err != nil {
+		portal.log.Errorfln("Failed to redact Matrix event for GroupMe message %s: %v", msgID, err)
+		return
+	}
+	msgRecord.Delete()
+}
 
-// 	return
-// }
+// HandleMessageEdit bridges a GroupMe message edit as a Matrix edit event.
+func (portal *Portal) HandleMessageEdit(source *User, message *groupme.Message) {
+	msgRecord := portal.bridge.DB.Message.GetByGMID(portal.Key, message.ID)
+	if msgRecord == nil {
+		portal.log.Debugfln("Ignoring edit of unknown message %s", message.ID)
+		return
+	}
+
+	intent := portal.getMessageIntent(source, message)
+	if intent == nil {
+		return
+	}
+
+	content := &event.MessageEventContent{
+		MsgType: event.MsgText,
+		Body:    "* " + message.Text,
+		NewContent: &event.MessageEventContent{
+			MsgType: event.MsgText,
+			Body:    message.Text,
+		},
+		RelatesTo: &event.RelatesTo{
+			Type:    event.RelReplace,
+			EventID: msgRecord.MXID,
+		},
+	}
+
+	if _, err := portal.sendMessage(intent, event.EventMessage, content, nil, 0); err != nil {
+		portal.log.Errorfln("Failed to bridge edit of message %s: %v", message.ID, err)
+	}
+}
 
 func (portal *Portal) sendMediaBridgeFailure(source *User, intent *appservice.IntentAPI, message groupme.Message, bridgeErr error) {
 	portal.log.Errorfln("Failed to bridge media for %s: %v", message.UserID.String(), bridgeErr)
@@ -1314,6 +1433,43 @@ func (portal *Portal) removeUser(isSameUser bool, kicker *appservice.IntentAPI, 
 	}
 }
 
+func (portal *Portal) downloadMatrixMedia(content *event.MessageEventContent) ([]byte, string, error) {
+	var data []byte
+	var err error
+	var mime string
+
+	if content.File != nil {
+		var parsedURL id.ContentURI
+		parsedURL, err = content.File.URL.Parse()
+		if err != nil {
+			return nil, "", err
+		}
+		data, err = portal.MainIntent().DownloadBytes(parsedURL)
+		if err != nil {
+			return nil, "", err
+		}
+		data, err = content.File.Decrypt(data)
+		if err != nil {
+			return nil, "", err
+		}
+	} else {
+		var parsedURL id.ContentURI
+		parsedURL, err = content.URL.Parse()
+		if err != nil {
+			return nil, "", err
+		}
+		data, err = portal.MainIntent().DownloadBytes(parsedURL)
+		if err != nil {
+			return nil, "", err
+		}
+	}
+
+	if content.Info != nil {
+		mime = content.Info.MimeType
+	}
+	return data, mime, nil
+}
+
 func (portal *Portal) convertMatrixMessage(sender *User, evt *event.Event) ([]*groupme.Message, *User) {
 	content, ok := evt.Content.Parsed.(*event.MessageEventContent)
 	if !ok {
@@ -1321,21 +1477,15 @@ func (portal *Portal) convertMatrixMessage(sender *User, evt *event.Event) ([]*g
 		return nil, sender
 	}
 
-	//ts := uint64(evt.Timestamp / 1000)
-	//status := waProto.WebMessageInfo_ERROR
-	//fromMe := true
-	//	info := &waProto.WebMessageInfo{
-	//		Key: &waProto.MessageKey{
-	//			FromMe:    &fromMe,
-	//			Id:        makeMessageID(),
-	//			RemoteJid: &portal.Key.JID,
-	//		},
-	//		MessageTimestamp: &ts,
-	//		Message:          &waProto.Message{},
-	//		Status:           &status,
-	//	}
-	//
+	// Message edits are bridged through the v4 edit endpoint instead of
+	// being sent as new messages.
+	if replaceID := content.RelatesTo.GetReplaceID(); len(replaceID) > 0 {
+		portal.handleMatrixEdit(sender, evt, content, replaceID)
+		return nil, sender
+	}
+
 	info := groupme.Message{
+		SourceGUID:     evt.ID.String(),
 		GroupID:        groupme.ID(portal.Key.String()),
 		ConversationID: groupme.ID(portal.Key.String()),
 		ChatID:         groupme.ID(portal.Key.String()),
@@ -1343,13 +1493,14 @@ func (portal *Portal) convertMatrixMessage(sender *User, evt *event.Event) ([]*g
 	}
 	replyToID := content.GetReplyTo()
 	if len(replyToID) > 0 {
-		//		content.RemoveReplyFallback()
-		//		msg := portal.bridge.DB.Message.GetByMXID(replyToID)
-		//		if msg != nil && msg.Content != nil {
-		//			ctxInfo.StanzaId = &msg.JID
-		//			ctxInfo.Participant = &msg.Sender
-		//			ctxInfo.QuotedMessage = msg.Content
-		//		}
+		content.RemoveReplyFallback()
+		if replyTarget := portal.bridge.DB.Message.GetByMXID(replyToID); replyTarget != nil {
+			info.Attachments = append(info.Attachments, &groupme.Attachment{
+				Type:        groupme.Reply,
+				ReplyID:     replyTarget.GMID,
+				BaseReplyID: replyTarget.GMID,
+			})
+		}
 	}
 	relaybotFormatted := false
 
@@ -1370,6 +1521,93 @@ func (portal *Portal) convertMatrixMessage(sender *User, evt *event.Event) ([]*g
 		}
 		info.Text = text
 
+	case event.MsgImage:
+		info.Text = content.Body
+		data, mime, err := portal.downloadMatrixMedia(content)
+		if err != nil {
+			portal.log.Errorfln("Failed to download matrix media for %s: %v", evt.ID, err)
+			return nil, sender
+		}
+		url, err := sender.Client.UploadImage(context.TODO(), data, mime)
+		if err != nil {
+			portal.log.Errorfln("Failed to upload image to GroupMe for %s: %v", evt.ID, err)
+			return nil, sender
+		}
+		info.Attachments = append(info.Attachments, &groupme.Attachment{
+			Type: groupme.Image,
+			URL:  url,
+		})
+
+	case event.MsgVideo:
+		// Video uploads go through GroupMe's async transcode service, which
+		// can take a while; handle them in the background.
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), MediaUploadTimeout)
+			defer cancel()
+			data, _, err := portal.downloadMatrixMedia(content)
+			if err != nil {
+				portal.log.Errorfln("Failed to download Matrix video for %s: %v", evt.ID, err)
+				return
+			}
+			statusURL, err := sender.Client.UploadVideoAsync(ctx, info.GroupID, data, content.Body)
+			if err != nil {
+				portal.log.Errorfln("Failed to start async video upload for %s: %v", evt.ID, err)
+				return
+			}
+			videoURL, previewURL, err := sender.Client.PollVideoStatus(ctx, statusURL)
+			if err != nil {
+				portal.log.Errorfln("Failed to poll video status for %s: %v", evt.ID, err)
+				return
+			}
+			msgCopy := info
+			msgCopy.Text = content.Body
+			msgCopy.Attachments = append(msgCopy.Attachments, &groupme.Attachment{
+				Type:            groupme.Video,
+				URL:             videoURL,
+				VideoPreviewURL: previewURL,
+			})
+			if m, err := portal.sendRaw(sender, evt, &msgCopy, -1); err != nil {
+				portal.log.Errorfln("Failed to send video message for %s: %v", evt.ID, err)
+			} else {
+				portal.markHandled(sender, m, evt.ID)
+			}
+		}()
+		return nil, sender
+
+	case event.MsgFile, event.MsgAudio:
+		// File uploads also go through an async upload service.
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), MediaUploadTimeout)
+			defer cancel()
+			data, _, err := portal.downloadMatrixMedia(content)
+			if err != nil {
+				portal.log.Errorfln("Failed to download Matrix file for %s: %v", evt.ID, err)
+				return
+			}
+			statusURL, err := sender.Client.UploadFileAsync(ctx, info.GroupID, data, content.Body)
+			if err != nil {
+				portal.log.Errorfln("Failed to start async file upload for %s: %v", evt.ID, err)
+				return
+			}
+			fileID, err := sender.Client.PollFileStatus(ctx, statusURL)
+			if err != nil {
+				portal.log.Errorfln("Failed to poll file status for %s: %v", evt.ID, err)
+				return
+			}
+			msgCopy := info
+			msgCopy.Text = content.Body
+			msgCopy.Attachments = append(msgCopy.Attachments, &groupme.Attachment{
+				Type:   groupme.File,
+				FileID: fileID,
+			})
+			if m, err := portal.sendRaw(sender, evt, &msgCopy, -1); err != nil {
+				portal.log.Errorfln("Failed to send file message for %s: %v", evt.ID, err)
+			} else {
+				portal.markHandled(sender, m, evt.ID)
+			}
+		}()
+		return nil, sender
+
 	default:
 		portal.log.Debugln("Unhandled Matrix event %s: unknown msgtype %s", evt.ID, content.MsgType)
 		return nil, sender
@@ -1384,18 +1622,34 @@ func (portal *Portal) wasMessageSent(sender *User, id string) bool {
 var timeout = errors.New("message sending timed out")
 
 func (portal *Portal) HandleMatrixMessage(sender *User, evt *event.Event) {
-	portal.log.Debugfln("Received event %s", evt.ID)
+	portal.log.Debugfln("Received event %s of type %s", evt.ID, evt.Type.Type)
+
+	if evt.Type == event.EventReaction || evt.Type.Type == "m.reaction" {
+		portal.handleMatrixReaction(sender, evt)
+		return
+	}
+	if evt.Type == event.EventRedaction || evt.Type.Type == "m.room.redaction" {
+		portal.HandleMatrixRedaction(sender, evt)
+		return
+	}
+
 	info, sender := portal.convertMatrixMessage(sender, evt)
 	if info == nil {
 		return
 	}
 	for _, i := range info {
-		portal.log.Debugln("Sending event", evt.ID, "to GroupMe", info[0].ID)
+		portal.log.Debugln("Sending event", evt.ID, "to GroupMe")
+
+		portal.recentlyHandledLock.Lock()
+		portal.recentlyHandled[0] = ""
+		portal.recentlyHandled = portal.recentlyHandled[1:]
+		portal.recentlyHandled = append(portal.recentlyHandled, evt.ID.String())
+		portal.recentlyHandledLock.Unlock()
 
 		var err error
-		i, err = portal.sendRaw(sender, evt, info[0], -1) //TODO deal with multiple messages for longer messages
+		i, err = portal.sendRaw(sender, evt, i, -1) //TODO deal with multiple messages for longer messages
 		if err != nil {
-			portal.log.Warnln("Unable to handle message from Matrix", evt.ID)
+			portal.log.Warnfln("Unable to handle message %s from Matrix: %v", evt.ID, err)
 			//TODO handle deleted room and such
 		} else {
 			portal.markHandled(sender, i, evt.ID)
@@ -1417,21 +1671,159 @@ func (portal *Portal) sendRaw(sender *User, evt *event.Event, info *groupme.Mess
 		m, err = sender.Client.CreateMessage(context.TODO(), info.GroupID, info)
 	}
 
-	id := ""
-	if m != nil {
-		id = m.ID.String()
-	}
 	if err != nil {
-		portal.log.Warnln(err, id, info.GroupID.String())
-
+		portal.log.Warnfln("Failed to send message to %s: %v", info.GroupID, err)
 		if retries > 0 {
 			return portal.sendRaw(sender, evt, info, retries-1)
 		}
+		return nil, err
 	}
 	return m, nil
 }
 
+// handleMatrixEdit bridges a Matrix edit (m.replace) to GroupMe's message
+// edit endpoint. GroupMe only supports editing group messages, and only for
+// a limited period after they were sent.
+func (portal *Portal) handleMatrixEdit(sender *User, evt *event.Event, content *event.MessageEventContent, replaceID id.EventID) {
+	msg := portal.bridge.DB.Message.GetByMXID(replaceID)
+	if msg == nil {
+		portal.log.Warnfln("Failed to find message %s to bridge edit %s", replaceID, evt.ID)
+		return
+	}
+	if portal.IsPrivateChat() {
+		portal.log.Warnfln("Ignoring edit %s: GroupMe does not support editing direct messages", evt.ID)
+		return
+	}
+
+	newContent := content.NewContent
+	if newContent == nil {
+		newContent = content
+	}
+	text := newContent.Body
+	if newContent.Format == event.FormatHTML {
+		text = portal.parseMatrixHTML(newContent)
+	}
+
+	err := sender.Client.EditMessage(context.TODO(), portal.Key.GMID, msg.GMID, text, nil)
+	if err != nil {
+		portal.log.Errorfln("Failed to edit GroupMe message %s: %v", msg.GMID, err)
+	}
+}
+
 func (portal *Portal) HandleMatrixRedaction(sender *User, evt *event.Event) {
+	if sender.Client == nil {
+		portal.log.Warnfln("Sender %s has no GroupMe client, dropping redaction %s", sender.MXID, evt.ID)
+		return
+	}
+
+	// The redacted event ID is normally in the top-level `redacts` field, but
+	// room version 11 (MSC2174) and some clients (including Beeper) put it in
+	// the content instead. mautrix v0.15.0 only parses the top-level field, so
+	// fall back to the content when it's empty.
+	redacts := evt.Redacts
+	if redacts == "" {
+		if raw, ok := evt.Content.Raw["redacts"].(string); ok {
+			redacts = id.EventID(raw)
+		}
+	}
+	if redacts == "" {
+		portal.log.Warnfln("Dropping redaction %s with no redacts target", evt.ID)
+		return
+	}
+	portal.log.Debugfln("Handling redaction %s targeting %s", evt.ID, redacts)
+
+	if reaction := portal.bridge.DB.Reaction.GetByMXID(redacts); reaction != nil {
+		portal.log.Debugfln("Redaction %s matched reaction on GroupMe message %s, removing", evt.ID, reaction.TargetGMID)
+		err := sender.Client.DestroyLike(context.Background(), portal.Key.GMID, reaction.TargetGMID)
+		if err != nil {
+			portal.log.Errorfln("Failed to remove reaction on GroupMe message %s: %v", reaction.TargetGMID, err)
+			return
+		}
+		reaction.Delete()
+		return
+	}
+
+	if msg := portal.bridge.DB.Message.GetByMXID(redacts); msg != nil {
+		err := sender.Client.DeleteMessage(context.Background(), portal.Key.GMID, msg.GMID)
+		if err != nil {
+			portal.log.Errorfln("Failed to delete GroupMe message %s: %v", msg.GMID, err)
+			return
+		}
+		msg.Delete()
+		return
+	}
+
+	portal.log.Debugfln("Redaction %s (target %s) matched no known reaction or message", evt.ID, redacts)
+}
+
+// getValidGroupMeReaction returns the emoji to send to GroupMe for a Matrix
+// reaction. GroupMe accepts arbitrary unicode emoji as reactions (verified
+// against the live API), so the reaction key is passed through as-is; only a
+// blank key falls back to the default heart.
+func getValidGroupMeReaction(reaction string) string {
+	reaction = strings.TrimSpace(reaction)
+	if reaction == "" {
+		return defaultReactionEmoji
+	}
+	return reaction
+}
+
+func (portal *Portal) handleMatrixReaction(sender *User, evt *event.Event) {
+	reaction, ok := evt.Content.Parsed.(*event.ReactionEventContent)
+	if !ok {
+		portal.log.Warnfln("Failed to parse content of reaction %s", evt.ID)
+		return
+	}
+
+	msg := portal.bridge.DB.Message.GetByMXID(reaction.RelatesTo.EventID)
+	if msg == nil {
+		portal.log.Warnfln("Failed to find message %s for reaction %s", reaction.RelatesTo.EventID, evt.ID)
+		return
+	}
+
+	if sender.Client == nil {
+		portal.log.Warnfln("Sender %s has no GroupMe client, cannot send reaction", sender.MXID)
+		return
+	}
+
+	// GroupMe only allows one reaction per user per message. If this user
+	// already reacted to this message, Matrix lets them stack a second
+	// reaction, but GroupMe will just replace the old one. Capture the
+	// previous reaction so we can redact it below and keep the two in sync.
+	prev := portal.bridge.DB.Reaction.GetByTargetGMID(portal.Key, msg.GMID, sender.GMID)
+
+	emoji := getValidGroupMeReaction(reaction.RelatesTo.Key)
+	portal.log.Debugfln("Sending reaction %q (from key %q) to GroupMe message %s as event %s", emoji, reaction.RelatesTo.Key, msg.GMID, evt.ID)
+	err := sender.Client.CreateLike(context.Background(), portal.Key.GMID, msg.GMID, &groupme.ReactionRequest{
+		LikeIcon: groupme.ReactionIcon{
+			Type: "unicode",
+			Code: emoji,
+		},
+	})
+	if err != nil {
+		portal.log.Errorfln("Failed to react to GroupMe message %s: %v", msg.GMID, err)
+		return
+	}
+
+	dbReaction := portal.bridge.DB.Reaction.New()
+	dbReaction.Chat = portal.Key
+	dbReaction.TargetGMID = msg.GMID
+	dbReaction.Sender = sender.GMID
+	dbReaction.MXID = evt.ID
+	dbReaction.GMID = "" // GroupMe reactions don't have IDs of their own
+	dbReaction.Emoji = emoji
+	dbReaction.Upsert(nil)
+
+	// GroupMe replaced any previous reaction by this user, so redact the
+	// superseded Matrix reaction. This mirrors GroupMe's one-reaction-per-user
+	// model and keeps the stored event ID (used for removal) correct. The
+	// redaction is done with the bridge bot so it isn't echoed back to us.
+	if prev != nil && prev.MXID != evt.ID {
+		portal.log.Debugfln("Redacting superseded reaction %s (replaced by %s)", prev.MXID, evt.ID)
+		if _, err := portal.MainIntent().RedactEvent(portal.MXID, prev.MXID); err != nil {
+			portal.log.Warnfln("Failed to redact superseded reaction %s: %v", prev.MXID, err)
+		}
+	}
 }
 
 func (portal *Portal) Delete() {
@@ -1534,4 +1926,91 @@ func (portal *Portal) HandleMatrixKick(sender *User, evt *event.Event) {
 }
 
 func (portal *Portal) HandleMatrixInvite(sender *User, evt *event.Event) {
+}
+
+// dmConversationID builds the GroupMe DM conversation ID ("smallerID+largerID")
+// for a private chat portal.
+func dmConversationID(key database.PortalKey) groupme.ID {
+	a, b := key.GMID.String(), key.Receiver.String()
+	// GroupMe puts the numerically smaller user ID first.
+	if len(b) < len(a) || (len(a) == len(b) && b < a) {
+		a, b = b, a
+	}
+	return groupme.ID(a + "+" + b)
+}
+
+// HandleMatrixReadReceipt bridges Matrix read receipts to GroupMe. GroupMe
+// only supports read receipts in direct messages.
+func (portal *Portal) HandleMatrixReadReceipt(sender bridge.User, eventID id.EventID, receipt event.ReadReceipt) {
+	user, ok := sender.(*User)
+	if !ok || user.Client == nil || !portal.IsPrivateChat() {
+		return
+	}
+	msg := portal.bridge.DB.Message.GetByMXID(eventID)
+	if msg == nil {
+		return
+	}
+	err := user.Client.MarkDirectMessageRead(context.TODO(), dmConversationID(portal.Key), msg.GMID)
+	if err != nil {
+		portal.log.Warnfln("Failed to mark message %s as read on GroupMe: %v", msg.GMID, err)
+	}
+}
+
+// HandleMatrixTyping bridges Matrix typing notifications to GroupMe. GroupMe
+// expects a fresh typing event every 5 seconds while the user keeps typing,
+// so a background loop re-publishes until the user stops.
+func (portal *Portal) HandleMatrixTyping(userIDs []id.UserID) {
+	portal.currentlyTypingLock.Lock()
+	defer portal.currentlyTypingLock.Unlock()
+	if portal.currentlyTyping == nil {
+		portal.currentlyTyping = make(map[id.UserID]context.CancelFunc)
+	}
+
+	typing := make(map[id.UserID]bool, len(userIDs))
+	for _, mxid := range userIDs {
+		typing[mxid] = true
+		if _, alreadyTyping := portal.currentlyTyping[mxid]; alreadyTyping {
+			continue
+		}
+		user := portal.bridge.GetUserByMXIDIfExists(mxid)
+		if user == nil || user.Conn == nil || len(user.GMID) == 0 {
+			continue
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		portal.currentlyTyping[mxid] = cancel
+		go portal.sendTypingLoop(ctx, user)
+	}
+
+	for mxid, cancel := range portal.currentlyTyping {
+		if !typing[mxid] {
+			cancel()
+			delete(portal.currentlyTyping, mxid)
+		}
+	}
+}
+
+func (portal *Portal) sendTypingLoop(ctx context.Context, user *User) {
+	chatID := portal.Key.GMID
+	isDM := portal.IsPrivateChat()
+	if isDM {
+		chatID = dmConversationID(portal.Key)
+	}
+	ticker := time.NewTicker(4 * time.Second)
+	defer ticker.Stop()
+	// Matrix servers resend the typing state regularly, but cap the loop in
+	// case a stop event is missed.
+	deadline := time.After(90 * time.Second)
+	for {
+		if err := user.Conn.SendTyping(ctx, chatID, isDM, user.GMID); err != nil {
+			portal.log.Debugfln("Failed to send typing indicator to GroupMe: %v", err)
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-deadline:
+			return
+		case <-ticker.C:
+		}
+	}
 }

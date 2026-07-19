@@ -43,7 +43,7 @@ func (pq *PuppetQuery) New() *Puppet {
 
 const (
 	puppetColumns                    = "gmid, displayname, name_set, avatar, avatar_url, avatar_set, custom_mxid, access_token, next_batch, enable_receipts"
-	getAllPuppetsQuery               = "SELECT " + puppetColumns + " FROM puppets"
+	getAllPuppetsQuery               = "SELECT " + puppetColumns + " FROM puppet"
 	getPuppetQuery                   = getAllPuppetsQuery + " WHERE gmid=$1"
 	getPuppetByCustomMXIDQuery       = getAllPuppetsQuery + " WHERE custom_mxid=$1"
 	getAllPuppetsWithCustomMXIDQuery = getAllPuppetsQuery + " WHERE custom_mxid<>''"
@@ -135,7 +135,7 @@ func (puppet *Puppet) Scan(row dbutil.Scannable) *Puppet {
 
 func (puppet *Puppet) Insert() {
 	_, err := puppet.db.Exec(`
-		INSERT INTO puppet (username, avatar, avatar_url, avatar_set, displayname, name_set,
+		INSERT INTO puppet (gmid, avatar, avatar_url, avatar_set, displayname, name_set,
 		                    custom_mxid, access_token, next_batch, enable_receipts)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 	`, puppet.GMID, puppet.Avatar, puppet.AvatarURL.String(), puppet.AvatarSet, puppet.Displayname,
@@ -151,8 +151,8 @@ func (puppet *Puppet) Update() {
 	_, err := puppet.db.Exec(`
 		UPDATE puppet
 		SET displayname=$1, name_set=$2, avatar=$3, avatar_url=$4, avatar_set=$5, custom_mxid=$6,
-		access_token=$7, next_batch=$8, enable_receipts=$10
-		WHERE username=$11
+		access_token=$7, next_batch=$8, enable_receipts=$9
+		WHERE gmid=$10
 	`, puppet.Displayname, puppet.NameSet, puppet.Avatar, puppet.AvatarURL.String(), puppet.AvatarSet,
 		puppet.CustomMXID, puppet.AccessToken, puppet.NextBatch, puppet.EnableReceipts,
 		puppet.GMID)

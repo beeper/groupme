@@ -188,9 +188,11 @@ type UsernameTemplateArgs struct {
 
 func (bc BridgeConfig) FormatDisplayname(gmid groupme.ID, member groupme.Member) string {
 	var buf strings.Builder
-	_ = bc.displaynameTemplate.Execute(&buf, map[string]string{
-		"Name": member.Nickname,
-		"GMID": gmid.String(),
+	_ = bc.displaynameTemplate.Execute(&buf, map[string]interface{}{
+		"Nickname": member.Nickname,
+		"UserID":   member.UserID,
+		"Name":     member.Nickname,
+		"GMID":     gmid,
 	})
 	return buf.String()
 }

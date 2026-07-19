@@ -329,6 +329,41 @@ func (user *User) SetManagementRoom(roomID id.RoomID) {
 	user.Update()
 }
 
+func (user *User) SyncChats() {
+	if user.Client == nil {
+		return
+	}
+	user.log.Infoln("Syncing chats and creating portals")
+
+	// Fetch groups
+	groups, err := user.Client.IndexAllGroups()
+	if err != nil {
+		user.log.Errorln("Failed to fetch groups:", err)
+	} else {
+		for _, group := range groups {
+			portal := user.bridge.GetPortalByGMID(database.GroupPortalKey(group.ID))
+			portal.Sync(user, group)
+		}
+	}
+
+	// Fetch DMs
+	dms, err := user.Client.IndexAllChats()
+	if err != nil {
+		user.log.Errorln("Failed to fetch DMs:", err)
+	} else {
+		for _, dm := range dms {
+			portal := user.bridge.GetPortalByGMID(database.NewPortalKey(dm.OtherUser.ID, user.GMID))
+			portal.Sync(user, nil)
+			puppet := user.bridge.GetPuppetByGMID(dm.OtherUser.ID)
+			puppet.Sync(user, &groupme.Member{
+				Nickname: dm.OtherUser.Name,
+				UserID:   dm.OtherUser.ID,
+			}, false, false)
+		}
+	}
+	user.log.Infoln("Finished syncing chats")
+}
+
 func (user *User) Connect() bool {
 	if user.Conn != nil {
 		return true
@@ -337,28 +372,160 @@ func (user *User) Connect() bool {
 	}
 
 	user.log.Debugfln("Connecting to GroupMe")
+	if user.Client == nil {
+		user.Client = groupmeext.NewClient(user.Token)
+	}
+	if len(user.GMID) == 0 {
+		myuser, err := user.Client.MyUser(context.TODO())
+		if err != nil {
+			user.log.Errorln("Failed to get own GroupMe ID:", err)
+			return false
+		}
+		user.GMID = myuser.ID
+		user.Update()
+		user.addToGMIDMap()
+	}
+
+	user.tryAutomaticDoublePuppeting()
+
+	// Launch REST-based chat sync immediately in the background so it's not blocked by Faye
+	go user.SyncChats()
+
+	// Launch the REST polling fallback, used while the push connection is down
+	go user.PollLoop()
+
 	timeout := time.Duration(user.bridge.Config.GroupMe.ConnectionTimeout)
 	if timeout == 0 {
 		timeout = 20
 	}
 	conn := groupme.NewPushSubscription(context.Background())
 	user.Conn = &conn
-	user.Conn.StartListening(context.Background(), groupmeext.NewFayeClient(user.log))
+	user.Conn.StartListening(context.Background(), groupmeext.NewFayeClient(user.log), user.Token)
 	user.Conn.AddFullHandler(user)
 
 	//TODO: typing notification?
 	return user.RestoreSession()
 }
 
+// PollLoop polls the REST API for new messages as a fallback for the Faye
+// push connection. While the push connection is healthy it only runs an
+// occasional safety-net pass; when the connection drops it polls every tick
+// until the connection recovers. Messages already bridged via push are
+// deduplicated by Portal.startHandling.
+func (user *User) PollLoop() {
+	const pollInterval = 10 * time.Second
+	// While connected, only poll every Nth tick as a safety net.
+	const connectedPollDivisor = 6
+
+	user.log.Infoln("Starting GroupMe message polling fallback loop")
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+
+	// Map to track the last processed message ID for each portal (key: portal.Key.String())
+	lastMessageIDs := make(map[string]groupme.ID)
+
+	tick := 0
+	for range ticker.C {
+		if user.Client == nil {
+			return
+		}
+		tick++
+		if user.Conn != nil && user.Conn.Connected() && tick%connectedPollDivisor != 0 {
+			continue
+		}
+
+		user.bridge.portalsLock.Lock()
+		var activePortals []*Portal
+		for _, portal := range user.bridge.portalsByGMID {
+			if len(portal.MXID) > 0 {
+				activePortals = append(activePortals, portal)
+			}
+		}
+		user.bridge.portalsLock.Unlock()
+
+		for _, portal := range activePortals {
+			if portal.IsPrivateChat() && portal.Key.Receiver != user.GMID {
+				continue
+			}
+
+			var messages []*groupme.Message
+			var err error
+
+			if portal.IsPrivateChat() {
+				var resp groupme.IndexDirectMessagesResponse
+				resp, err = user.Client.IndexDirectMessages(context.TODO(), portal.Key.GMID.String(), &groupme.IndexDirectMessagesQuery{})
+				messages = resp.Messages
+			} else {
+				var resp groupme.IndexMessagesResponse
+				resp, err = user.Client.IndexMessages(context.TODO(), portal.Key.GMID, &groupme.IndexMessagesQuery{Limit: 10})
+				messages = resp.Messages
+			}
+
+			if err != nil {
+				continue
+			}
+
+			portalKeyStr := portal.Key.String()
+
+			lastID, ok := lastMessageIDs[portalKeyStr]
+			if !ok {
+				// Initialize last processed message ID with the latest message in this fetch
+				if len(messages) > 0 {
+					lastMessageIDs[portalKeyStr] = messages[0].ID
+				} else {
+					lastMessageIDs[portalKeyStr] = ""
+				}
+				continue
+			}
+
+			// Find if the last processed message is in the current fetch
+			foundLast := false
+			var newMessages []*groupme.Message
+			for _, msg := range messages {
+				if msg.ID == lastID {
+					foundLast = true
+					break
+				}
+				newMessages = append(newMessages, msg)
+			}
+
+			// Process new messages in chronological order (oldest first)
+			if foundLast {
+				for i := len(newMessages) - 1; i >= 0; i-- {
+					msg := newMessages[i]
+					if portal.isRecentlyHandled(msg.ID) {
+						continue
+					}
+					portal.log.Debugfln("Polled new message %s from GroupMe, forwarding to Matrix", msg.ID)
+					portal.HandleTextMessage(user, msg)
+				}
+			} else {
+				// Fallback if the last message isn't found (e.g. fresh portal, or gap of >10 messages)
+				for i := len(messages) - 1; i >= 0; i-- {
+					msg := messages[i]
+					if portal.isRecentlyHandled(msg.ID) {
+						continue
+					}
+					portal.log.Debugfln("Polled new message %s (gap fallback) from GroupMe, forwarding to Matrix", msg.ID)
+					portal.HandleTextMessage(user, msg)
+				}
+			}
+
+			// Update the last message ID to the most recent one
+			if len(messages) > 0 {
+				lastMessageIDs[portalKeyStr] = messages[0].ID
+			}
+		}
+	}
+}
+
 func (user *User) RestoreSession() bool {
 	if len(user.Token) > 0 {
 		err := user.Conn.SubscribeToUser(context.TODO(), groupme.ID(user.GMID), user.Token)
 		if err != nil {
-			fmt.Println(err)
+			user.log.Errorln("Failed to subscribe to user channel:", err)
 		}
-		//TODO: typing notifics
 		user.ConnectionErrors = 0
-		//user.SetSession(&sess)
 		user.log.Debugln("Session restored successfully")
 		user.PostLogin()
 		return true
@@ -401,7 +568,20 @@ func (user *User) GetGMID() groupme.ID {
 func (user *User) Login(token string) error {
 	user.Token = token
 
-	user.addToGMIDMap()
+	if user.Client == nil {
+		user.Client = groupmeext.NewClient(user.Token)
+	}
+	if len(user.GMID) == 0 {
+		myuser, err := user.Client.MyUser(context.TODO())
+		if err != nil {
+			user.log.Errorln("Failed to get own GroupMe ID:", err)
+			return err
+		}
+		user.GMID = myuser.ID
+		user.Update()
+		user.addToGMIDMap()
+	}
+
 	user.PostLogin()
 	if user.Connect() {
 		return nil
@@ -727,6 +907,25 @@ func (user *User) UpdateDirectChats(chats map[id.UserID][]id.RoomID) {
 }
 
 func (user *User) HandleError(err error) {
+	user.log.Errorln("GroupMe connection error:", err)
+}
+
+// portalKeyFromMessage resolves the portal key for a pushed message, using
+// the group ID or falling back to the DM conversation ID. For DMs the key is
+// normalized so that Receiver is this user and GMID is the other user.
+func (user *User) portalKeyFromMessage(message *groupme.Message) *database.PortalKey {
+	key := database.ParsePortalKey(message.GroupID.String())
+	if key == nil {
+		key = database.ParsePortalKey(message.ConversationID.String())
+	}
+	return user.normalizePortalKey(key)
+}
+
+func (user *User) normalizePortalKey(key *database.PortalKey) *database.PortalKey {
+	if key != nil && key.IsPrivate() && key.GMID == user.GMID {
+		key.GMID, key.Receiver = key.Receiver, key.GMID
+	}
+	return key
 }
 
 func (user *User) ShouldCallSynchronously() bool {
@@ -778,21 +977,60 @@ func (user *User) handleMessageLoop() {
 }
 
 func (user *User) HandleTextMessage(message groupme.Message) {
-	id := database.ParsePortalKey(message.GroupID.String())
-
-	if id == nil {
-		id = database.ParsePortalKey(message.ConversationID.String())
-	}
+	id := user.portalKeyFromMessage(&message)
 	if id == nil {
 		user.log.Errorln("Error parsing conversationid/portalkey", message.ConversationID.String(), "ignoring message")
 		return
 	}
 
-	user.messageInput <- PortalMessage{*id, user, &message, uint64(message.CreatedAt.ToTime().Unix())}
+	user.messageInput <- PortalMessage{*id, user, &message, uint64(message.CreatedAt.ToTime().Unix()), false}
 }
 
 func (user *User) HandleLike(msg groupme.Message) {
-	user.HandleTextMessage(msg)
+	id := user.portalKeyFromMessage(&msg)
+	if id == nil {
+		user.log.Errorln("Error parsing conversationid/portalkey for like", msg.ConversationID.String())
+		return
+	}
+
+	user.messageInput <- PortalMessage{*id, user, &msg, uint64(msg.CreatedAt.ToTime().Unix()), true}
+}
+
+// HandleTyping bridges an incoming GroupMe typing indicator to Matrix.
+// GroupMe repeats typing events every 5 seconds while the user keeps typing.
+func (user *User) HandleTyping(chat groupme.ID, userID groupme.ID) {
+	if userID == user.GMID {
+		return
+	}
+	key := user.normalizePortalKey(database.ParsePortalKey(chat.String()))
+	if key == nil {
+		return
+	}
+	portal := user.bridge.GetPortalByGMID(*key)
+	if portal == nil || len(portal.MXID) == 0 {
+		return
+	}
+	puppet := user.bridge.GetPuppetByGMID(userID)
+	if puppet == nil {
+		return
+	}
+	_, err := puppet.IntentFor(portal).UserTyping(portal.MXID, true, 8*time.Second)
+	if err != nil {
+		user.log.Debugfln("Failed to bridge typing indicator from %s: %v", userID, err)
+	}
+}
+
+// HandleMessageUpdate bridges a GroupMe message edit to Matrix.
+func (user *User) HandleMessageUpdate(message groupme.Message) {
+	key := user.portalKeyFromMessage(&message)
+	if key == nil {
+		return
+	}
+	portal := user.bridge.GetPortalByGMID(*key)
+	if portal == nil || len(portal.MXID) == 0 {
+		return
+	}
+	portal.HandleMessageEdit(user, &message)
 }
 
 func (user *User) HandleJoin(id groupme.ID) {
@@ -850,4 +1088,16 @@ type FakeMessage struct {
 	Text  string
 	ID    string
 	Alert bool
+}
+
+func (user *User) HandleMessageDeleted(message groupme.Message) {
+	key := user.portalKeyFromMessage(&message)
+	if key == nil {
+		return
+	}
+	portal := user.bridge.GetPortalByGMID(*key)
+	if portal == nil || len(portal.MXID) == 0 {
+		return
+	}
+	portal.HandleGroupMeDeletion(message.ID)
 }

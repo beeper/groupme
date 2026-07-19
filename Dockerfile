@@ -1,12 +1,13 @@
-FROM golang:1.19-alpine3.16 AS builder
+FROM golang:1.19-alpine3.18 AS builder
 
 RUN apk add --no-cache git ca-certificates build-base su-exec olm-dev
 
 COPY . /build
 WORKDIR /build
+RUN chmod +x docker-run.sh
 RUN go build -o /usr/bin/go-groupme
 
-FROM alpine:3.16
+FROM alpine:3.18
 
 ENV UID=1337 \
     GID=1337
