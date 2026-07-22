@@ -79,6 +79,9 @@ func DownloadFile(RoomJID groupme.ID, FileID string, token string) (contents []b
 		return nil, "", "", fmt.Errorf("failed to fetch file metadata: %w", err)
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return nil, "", "", fmt.Errorf("file metadata request returned HTTP %s", resp.Status)
+	}
 
 	data := []ImgData{}
 	if err = json.NewDecoder(resp.Body).Decode(&data); err != nil {
@@ -98,6 +101,9 @@ func DownloadFile(RoomJID groupme.ID, FileID string, token string) (contents []b
 		return nil, "", "", fmt.Errorf("failed to download file: %w", err)
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return nil, "", "", fmt.Errorf("file download returned HTTP %s", resp.Status)
+	}
 
 	contents, err = ioutil.ReadAll(resp.Body)
 	if err != nil {
@@ -122,6 +128,9 @@ func DownloadVideo(previewURL, videoURL, token string) (vidContents []byte, mime
 		return nil, "", fmt.Errorf("failed to download video: %w", err)
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return nil, "", fmt.Errorf("video download returned HTTP %s", resp.Status)
+	}
 
 	vidContents, err = ioutil.ReadAll(resp.Body)
 	if err != nil {

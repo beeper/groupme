@@ -394,10 +394,6 @@ func (user *User) Connect() bool {
 	// Launch the REST polling fallback, used while the push connection is down
 	go user.PollLoop()
 
-	timeout := time.Duration(user.bridge.Config.GroupMe.ConnectionTimeout)
-	if timeout == 0 {
-		timeout = 20
-	}
 	conn := groupme.NewPushSubscription(context.Background())
 	user.Conn = &conn
 	user.Conn.StartListening(context.Background(), groupmeext.NewFayeClient(user.log), user.Token)
@@ -497,7 +493,7 @@ func (user *User) PollLoop() {
 						continue
 					}
 					portal.log.Debugfln("Polled new message %s from GroupMe, forwarding to Matrix", msg.ID)
-					portal.HandleTextMessage(user, msg)
+					user.HandleTextMessage(*msg)
 				}
 			} else {
 				// Fallback if the last message isn't found (e.g. fresh portal, or gap of >10 messages)
@@ -507,7 +503,7 @@ func (user *User) PollLoop() {
 						continue
 					}
 					portal.log.Debugfln("Polled new message %s (gap fallback) from GroupMe, forwarding to Matrix", msg.ID)
-					portal.HandleTextMessage(user, msg)
+					user.HandleTextMessage(*msg)
 				}
 			}
 

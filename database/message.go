@@ -61,7 +61,7 @@ const (
 		ON CONFLICT (chat_gmid, chat_receiver, gmid) DO UPDATE SET mxid=excluded.mxid, timestamp=excluded.timestamp, sent=excluded.sent
 	`
 	deleteMessageQuery = `
-		DELETE FROM message WHERE gmid=$1 AND chat_gmid=$2
+		DELETE FROM message WHERE gmid=$1 AND chat_gmid=$2 AND chat_receiver=$3
 	`
 	getFirstMessageInChatQuery = getAllMessagesQuery + `
 		AND sent=true
@@ -161,7 +161,7 @@ func (msg *Message) Insert() {
 }
 
 func (msg *Message) Delete() {
-	_, err := msg.db.Exec(deleteMessageQuery, msg.GMID, msg.Chat.GMID)
+	_, err := msg.db.Exec(deleteMessageQuery, msg.GMID, msg.Chat.GMID, msg.Chat.Receiver)
 	if err != nil {
 		msg.log.Warnfln("Failed to delete message %s: %v", msg.GMID, err)
 	}

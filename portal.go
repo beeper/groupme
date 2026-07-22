@@ -216,7 +216,7 @@ type Portal struct {
 	messages       chan PortalMessage
 	matrixMessages chan PortalMatrixMessage
 
-	currentlyTyping     map[id.UserID]context.CancelFunc
+	currentlyTyping     map[id.UserID]*typingSession
 	currentlyTypingLock sync.Mutex
 
 	hasRelaybot *bool
@@ -1963,7 +1963,7 @@ func (portal *Portal) HandleMatrixTyping(userIDs []id.UserID) {
 	portal.currentlyTypingLock.Lock()
 	defer portal.currentlyTypingLock.Unlock()
 	if portal.currentlyTyping == nil {
-		portal.currentlyTyping = make(map[id.UserID]context.CancelFunc)
+		portal.currentlyTyping = make(map[id.UserID]*typingSession)
 	}
 
 	typing := make(map[id.UserID]bool, len(userIDs))
@@ -1977,19 +1977,36 @@ func (portal *Portal) HandleMatrixTyping(userIDs []id.UserID) {
 			continue
 		}
 		ctx, cancel := context.WithCancel(context.Background())
-		portal.currentlyTyping[mxid] = cancel
-		go portal.sendTypingLoop(ctx, user)
+		session := &typingSession{cancel: cancel}
+		portal.currentlyTyping[mxid] = session
+		go portal.sendTypingLoop(ctx, user, session)
 	}
 
-	for mxid, cancel := range portal.currentlyTyping {
+	for mxid, session := range portal.currentlyTyping {
 		if !typing[mxid] {
-			cancel()
+			session.cancel()
 			delete(portal.currentlyTyping, mxid)
 		}
 	}
 }
 
-func (portal *Portal) sendTypingLoop(ctx context.Context, user *User) {
+// typingSession identifies a single sendTypingLoop invocation so the loop only
+// removes its own currentlyTyping entry on exit, never a newer one that has
+// already replaced it.
+type typingSession struct {
+	cancel context.CancelFunc
+}
+
+func (portal *Portal) sendTypingLoop(ctx context.Context, user *User, session *typingSession) {
+	// Clear our own entry when the loop exits (deadline, cancel, or send
+	// error) so a later typing notification can start a fresh loop.
+	defer func() {
+		portal.currentlyTypingLock.Lock()
+		if portal.currentlyTyping[user.MXID] == session {
+			delete(portal.currentlyTyping, user.MXID)
+		}
+		portal.currentlyTypingLock.Unlock()
+	}()
 	chatID := portal.Key.GMID
 	isDM := portal.IsPrivateChat()
 	if isDM {
