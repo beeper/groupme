@@ -18,6 +18,8 @@ package main
 
 import (
 	"fmt"
+	"io"
+	"net/http"
 	"regexp"
 	"sync"
 
@@ -301,9 +303,72 @@ func (puppet *Puppet) Sync(source *User, member *groupme.Member, forceAvatarSync
 	err := puppet.DefaultIntent().EnsureRegistered()
 	if err != nil {
 		puppet.log.Errorln("Failed to ensure registered:", err)
+		return
 	}
 
-	puppet.log.Debugfln("Syncing info through %s", source.GMID)
+	if source != nil {
+		puppet.log.Debugfln("Syncing info through %s", source.GMID)
+	} else {
+		puppet.log.Debugln("Syncing info without a source user")
+	}
 
-	// TODO
+	if member == nil {
+		return
+	}
+
+	puppet.UpdateName(*member, forcePortalSync)
+	puppet.updateAvatarFromURL(member.ImageURL, forceAvatarSync, forcePortalSync)
+	puppet.Update()
+}
+
+func (puppet *Puppet) updateAvatarFromURL(avatar string, forceAvatarSync, forcePortalSync bool) bool {
+	if avatar == "" {
+		if forcePortalSync {
+			go puppet.updatePortalAvatar()
+		}
+		return false
+	}
+	if !forceAvatarSync && puppet.Avatar == avatar && puppet.AvatarSet {
+		if forcePortalSync {
+			go puppet.updatePortalAvatar()
+		}
+		return false
+	}
+
+	resp, err := http.Get(avatar)
+	if err != nil {
+		puppet.log.Warnln("Failed to download avatar:", err)
+		return false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		puppet.log.Warnfln("Failed to download avatar: HTTP %d", resp.StatusCode)
+		return false
+	}
+
+	image, err := io.ReadAll(resp.Body)
+	if err != nil {
+		puppet.log.Warnln("Failed to read downloaded avatar:", err)
+		return false
+	}
+	mime := resp.Header.Get("Content-Type")
+	if mime == "" {
+		mime = http.DetectContentType(image)
+	}
+	uploaded, err := puppet.DefaultIntent().UploadBytes(image, mime)
+	if err != nil {
+		puppet.log.Warnln("Failed to upload avatar:", err)
+		return false
+	}
+
+	puppet.Avatar = avatar
+	puppet.AvatarURL = uploaded.ContentURI
+	if err = puppet.DefaultIntent().SetAvatarURL(uploaded.ContentURI); err != nil {
+		puppet.log.Warnln("Failed to set avatar:", err)
+		puppet.AvatarSet = false
+	} else {
+		puppet.AvatarSet = true
+		go puppet.updatePortalAvatar()
+	}
+	return true
 }

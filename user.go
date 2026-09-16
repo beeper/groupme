@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -67,6 +68,15 @@ type User struct {
 
 	chatListReceived chan struct{}
 	syncPortalsDone  chan struct{}
+
+	chatListLock    sync.RWMutex
+	pollOnce        sync.Once
+	pollSeenLock    sync.Mutex
+	pollSeen        map[string]struct{}
+	pollSeenOrder   []string
+	pollInitialized map[string]bool
+	pollUpdated     map[string]string
+	pollPrimed      bool
 
 	messageInput  chan PortalMessage
 	messageOutput chan PortalMessage
@@ -198,6 +208,9 @@ func (br *GMBridge) NewUser(dbUser *database.User) *User {
 		syncPortalsDone:  make(chan struct{}, 1),
 		messageInput:     make(chan PortalMessage),
 		messageOutput:    make(chan PortalMessage, br.Config.Bridge.PortalMessageBuffer),
+		pollSeen:         make(map[string]struct{}),
+		pollInitialized:  make(map[string]bool),
+		pollUpdated:      make(map[string]string),
 	}
 
 	user.PermissionLevel = user.bridge.Config.Bridge.Permissions.Get(user.MXID)
@@ -210,12 +223,22 @@ func (br *GMBridge) NewUser(dbUser *database.User) *User {
 }
 
 func (user *User) ensureInvited(intent *appservice.IntentAPI, roomID id.RoomID, isDirect bool) (ok bool) {
+	// Avoid re-inviting users who Hungryserv already placed into the room.
+	if members, err := intent.JoinedMembers(roomID); err == nil {
+		if _, joined := members.Joined[user.MXID]; joined {
+			user.bridge.StateStore.SetMembership(roomID, user.MXID, event.MembershipJoin)
+			return true
+		}
+	}
+
 	extraContent := make(map[string]interface{})
 	if isDirect {
 		extraContent["is_direct"] = true
 	}
 	customPuppet := user.bridge.GetPuppetByCustomMXID(user.MXID)
-	if customPuppet != nil && customPuppet.CustomIntent() != nil {
+	autoAcceptInvite := user.bridge.Config.Homeserver.Software == bridgeconfig.SoftwareHungry ||
+		(customPuppet != nil && customPuppet.CustomIntent() != nil)
+	if autoAcceptInvite {
 		extraContent["fi.mau.will_auto_accept"] = true
 	}
 	_, err := intent.InviteUser(roomID, &mautrix.ReqInviteUser{UserID: user.MXID}, extraContent)
@@ -225,6 +248,15 @@ func (user *User) ensureInvited(intent *appservice.IntentAPI, roomID id.RoomID, 
 		ok = true
 		return
 	} else if err != nil {
+		// Hungryserv may report a forbidden invite even if the user is already
+		// present through Beeper initial-members handling. Verify actual room
+		// membership before treating the invite as a failure.
+		if members, memberErr := intent.JoinedMembers(roomID); memberErr == nil {
+			if _, joined := members.Joined[user.MXID]; joined {
+				user.bridge.StateStore.SetMembership(roomID, user.MXID, event.MembershipJoin)
+				return true
+			}
+		}
 		user.log.Warnfln("Failed to invite user to %s: %v", roomID, err)
 	} else {
 		ok = true
@@ -329,43 +361,46 @@ func (user *User) SetManagementRoom(roomID id.RoomID) {
 	user.Update()
 }
 
+func (user *User) ensureRESTClient() error {
+	if len(user.Token) == 0 {
+		return errors.New("missing GroupMe access token")
+	}
+	if user.Client == nil {
+		user.Client = groupmeext.NewClient(user.Token)
+	}
+	if len(user.GMID) == 0 {
+		me, err := user.Client.MyUser(context.TODO())
+		if err != nil {
+			return fmt.Errorf("failed to resolve GroupMe user: %w", err)
+		}
+		user.GMID = me.ID
+		user.Update()
+	}
+	user.addToGMIDMap()
+	return nil
+}
+
 func (user *User) Connect() bool {
-	if user.Conn != nil {
-		return true
-	} else if len(user.Token) == 0 {
+	if len(user.Token) == 0 {
+		return false
+	}
+	if err := user.ensureRESTClient(); err != nil {
+		user.log.Errorln("Failed to initialize GroupMe REST client:", err)
 		return false
 	}
 
-	user.log.Debugfln("Connecting to GroupMe")
-	timeout := time.Duration(user.bridge.Config.GroupMe.ConnectionTimeout)
-	if timeout == 0 {
-		timeout = 20
-	}
-	conn := groupme.NewPushSubscription(context.Background())
-	user.Conn = &conn
-	user.Conn.StartListening(context.Background(), groupmeext.NewFayeClient(user.log))
-	user.Conn.AddFullHandler(user)
-
-	//TODO: typing notification?
-	return user.RestoreSession()
+	// GroupMe's legacy Faye endpoint currently returns gateway timeouts during
+	// the Bayeux handshake. Keep the bridge usable by relying on the REST API
+	// for both initial chat discovery and a lightweight message poller.
+	user.log.Infoln("Using GroupMe REST polling fallback; realtime Faye push is disabled")
+	user.ConnectionErrors = 0
+	user.PostLogin()
+	user.startRESTPolling()
+	return true
 }
 
 func (user *User) RestoreSession() bool {
-	if len(user.Token) > 0 {
-		err := user.Conn.SubscribeToUser(context.TODO(), groupme.ID(user.GMID), user.Token)
-		if err != nil {
-			fmt.Println(err)
-		}
-		//TODO: typing notifics
-		user.ConnectionErrors = 0
-		//user.SetSession(&sess)
-		user.log.Debugln("Session restored successfully")
-		user.PostLogin()
-		return true
-	} else {
-		user.log.Debugln("tried login but no token")
-		return false
-	}
+	return user.Connect()
 }
 
 func (user *User) HasSession() bool {
@@ -373,40 +408,48 @@ func (user *User) HasSession() bool {
 }
 
 func (user *User) IsConnected() bool {
-	// TODO: better connection check
-	return user.Conn != nil
+	return user.Client != nil && len(user.Token) > 0
 }
 
 func (user *User) IsLoggedIn() bool {
-	return true
+	return user.IsConnected()
 }
 
 func (user *User) IsLoginInProgress() bool {
-	// return user.Conn != nil && user.Conn.IsLoginInProgress()
 	return false
 }
 
 func (user *User) GetGMID() groupme.ID {
 	if len(user.GMID) == 0 {
-		u, err := user.Client.MyUser(context.TODO())
-		if err != nil {
+		if err := user.ensureRESTClient(); err != nil {
 			user.log.Errorln("Failed to get own GroupMe ID:", err)
 			return ""
 		}
-		user.GMID = u.ID
 	}
 	return user.GMID
 }
 
 func (user *User) Login(token string) error {
-	user.Token = token
+	oldToken := user.Token
+	oldClient := user.Client
+	oldGMID := user.GMID
 
-	user.addToGMIDMap()
-	user.PostLogin()
-	if user.Connect() {
-		return nil
+	user.Token = token
+	user.Client = groupmeext.NewClient(token)
+	user.GMID = ""
+	if err := user.ensureRESTClient(); err != nil {
+		user.Token = oldToken
+		user.Client = oldClient
+		user.GMID = oldGMID
+		return err
 	}
-	return errors.New("failed to connect")
+	if !user.Connect() {
+		user.Token = oldToken
+		user.Client = oldClient
+		user.GMID = oldGMID
+		return errors.New("failed to connect")
+	}
+	return nil
 }
 
 type Chat struct {
@@ -434,7 +477,7 @@ func (user *User) PostLogin() {
 	user.bridge.Metrics.TrackConnectionState(user.GMID, true)
 	user.bridge.Metrics.TrackLoginState(user.GMID, true)
 	user.bridge.Metrics.TrackBufferLength(user.MXID, 0)
-	// go user.intPostLogin()
+	go user.intPostLogin()
 }
 
 func (user *User) tryAutomaticDoublePuppeting() {
@@ -502,6 +545,16 @@ func (user *User) postConnPing() bool {
 	return true
 }
 
+func (user *User) intPostLogin() {
+	user.lastReconnection = time.Now().Unix()
+	if err := user.ensureRESTClient(); err != nil {
+		user.log.Errorln("Post-login initialization failed:", err)
+		return
+	}
+	user.tryAutomaticDoublePuppeting()
+	user.HandleChatList()
+}
+
 // func (user *User) intPostLogin() {
 // 	defer user.syncWait.Done()
 // 	user.lastReconnection = time.Now().Unix()
@@ -553,7 +606,9 @@ func (user *User) HandleChatList() {
 	for _, chat := range chats {
 		chatMap[chat.ID] = *chat
 	}
+	user.chatListLock.Lock()
 	user.GroupList = chatMap
+	user.chatListLock.Unlock()
 
 	dmMap := map[groupme.ID]groupme.Chat{}
 	dms, err := user.Client.IndexAllChats()
@@ -564,7 +619,9 @@ func (user *User) HandleChatList() {
 	for _, dm := range dms {
 		dmMap[dm.OtherUser.ID] = *dm
 	}
+	user.chatListLock.Lock()
 	user.ChatList = dmMap
+	user.chatListLock.Unlock()
 
 	userMap := map[groupme.ID]groupme.User{}
 	users, err := user.Client.IndexAllRelations()
@@ -581,91 +638,284 @@ func (user *User) HandleChatList() {
 		}, false, false)
 		userMap[u.ID] = *u
 	}
+	user.chatListLock.Lock()
 	user.RelationList = userMap
+	user.chatListLock.Unlock()
 
 	user.log.Infoln("Chat list received")
-	user.chatListReceived <- struct{}{}
+	select {
+	case user.chatListReceived <- struct{}{}:
+	default:
+	}
 	go user.syncPortals(false)
 }
 
+func (user *User) snapshotChats() (map[groupme.ID]groupme.Group, map[groupme.ID]groupme.Chat) {
+	user.chatListLock.RLock()
+	defer user.chatListLock.RUnlock()
+	groups := make(map[groupme.ID]groupme.Group, len(user.GroupList))
+	for id, group := range user.GroupList {
+		groups[id] = group
+	}
+	dms := make(map[groupme.ID]groupme.Chat, len(user.ChatList))
+	for id, chat := range user.ChatList {
+		dms[id] = chat
+	}
+	return groups, dms
+}
+
 func (user *User) syncPortals(createAll bool) {
-	//	user.log.Infoln("Reading chat list")
+	groups, dms := user.snapshotChats()
+	chats := make(ChatList, 0, len(groups)+len(dms))
 
-	//	chats := make(ChatList, 0, len(user.GroupList)+len(user.ChatList))
-	//	portalKeys := make([]database.PortalKeyWithMeta, 0, cap(chats))
+	for _, group := range groups {
+		portal := user.bridge.GetPortalByGMID(database.GroupPortalKey(group.ID))
+		chats = append(chats, Chat{
+			Portal:          portal,
+			LastMessageTime: uint64(group.UpdatedAt.ToTime().Unix()),
+			Group:           &group,
+		})
+	}
+	for _, dm := range dms {
+		portal := user.bridge.GetPortalByGMID(database.NewPortalKey(dm.OtherUser.ID, user.GMID))
+		chats = append(chats, Chat{
+			Portal:          portal,
+			LastMessageTime: uint64(dm.UpdatedAt.ToTime().Unix()),
+			DM:              &dm,
+		})
+	}
 
-	//	for _, group := range user.GroupList {
+	sort.Sort(chats)
+	limit := user.bridge.Config.Bridge.HistorySync.MaxInitialConversations
+	if limit <= 0 {
+		limit = 5
+	}
+	if limit > len(chats) {
+		limit = len(chats)
+	}
+	for i, chat := range chats {
+		if chat.Portal == nil {
+			continue
+		}
+		if createAll || len(chat.Portal.MXID) > 0 || i < limit {
+			chat.Portal.Sync(user, chat.Group)
+		}
+	}
+	user.UpdateDirectChats(nil)
+	user.log.Infoln("Finished syncing portals")
+	select {
+	case user.syncPortalsDone <- struct{}{}:
+	default:
+	}
+}
 
-	//		portal := user.bridge.GetPortalByJID(database.GroupPortalKey(group.ID.String()))
+const restPollInterval = 10 * time.Second
+const restChatRefreshInterval = 1 * time.Minute
+const restSeenMessageLimit = 5000
 
-	//		chats = append(chats, Chat{
-	//			Portal:          portal,
-	//			LastMessageTime: uint64(group.UpdatedAt.ToTime().Unix()),
-	//			Group:           &group,
-	//		})
-	//	}
-	//	for _, dm := range user.ChatList {
-	//		portal := user.bridge.GetPortalByJID(database.NewPortalKey(dm.OtherUser.ID.String(), user.JID))
-	//		chats = append(chats, Chat{
-	//			Portal:          portal,
-	//			LastMessageTime: uint64(dm.UpdatedAt.ToTime().Unix()),
-	//			DM:              &dm,
-	//		})
-	//	}
+func (user *User) rememberPolledMessage(conversation string, messageID groupme.ID) (seenBefore bool, initialized bool) {
+	key := conversation + ":" + messageID.String()
+	user.pollSeenLock.Lock()
+	defer user.pollSeenLock.Unlock()
+	initialized = user.pollInitialized[conversation]
+	_, seenBefore = user.pollSeen[key]
+	if !seenBefore {
+		user.pollSeen[key] = struct{}{}
+		user.pollSeenOrder = append(user.pollSeenOrder, key)
+		if len(user.pollSeenOrder) > restSeenMessageLimit {
+			old := user.pollSeenOrder[0]
+			user.pollSeenOrder = user.pollSeenOrder[1:]
+			delete(user.pollSeen, old)
+		}
+	}
+	return
+}
 
-	//	for _, chat := range chats {
-	//		var inCommunity, ok bool
-	//		if inCommunity, ok = existingKeys[chat.Portal.Key]; !ok || !inCommunity {
-	//			inCommunity = user.addPortalToCommunity(chat.Portal)
-	//			if chat.Portal.IsPrivateChat() {
-	//				puppet := user.bridge.GetPuppetByJID(chat.Portal.Key.GMID)
-	//				user.addPuppetToCommunity(puppet)
-	//			}
-	//		}
-	//		portalKeys = append(portalKeys, database.PortalKeyWithMeta{PortalKey: chat.Portal.Key, InCommunity: inCommunity})
-	//	}
-	//	user.log.Infoln("Read chat list, updating user-portal mapping")
+func (user *User) markPollConversationInitialized(conversation string) {
+	user.pollSeenLock.Lock()
+	user.pollInitialized[conversation] = true
+	user.pollSeenLock.Unlock()
+}
 
-	//	err := user.SetPortalKeys(portalKeys)
-	//	if err != nil {
-	//		user.log.Warnln("Failed to update user-portal mapping:", err)
-	//	}
-	//	sort.Sort(chats)
-	//	limit := user.bridge.Config.Bridge.InitialChatSync
-	//	if limit < 0 {
-	//		limit = len(chats)
-	//	}
-	//	now := uint64(time.Now().Unix())
-	//	user.log.Infoln("Syncing portals")
+func (user *User) pollGroupMessages(group groupme.Group) {
+	resp, err := user.Client.IndexMessages(context.TODO(), group.ID, &groupme.IndexMessagesQuery{Limit: 20})
+	if err != nil {
+		user.log.Warnfln("REST poll failed for group %s: %v", group.ID, err)
+		return
+	}
+	conversation := "group:" + group.ID.String()
+	for i := len(resp.Messages) - 1; i >= 0; i-- {
+		msg := resp.Messages[i]
+		if msg == nil || len(msg.ID) == 0 {
+			continue
+		}
+		seen, initialized := user.rememberPolledMessage(conversation, msg.ID)
+		if initialized && !seen {
+			key := database.GroupPortalKey(group.ID)
+			portal := user.bridge.GetPortalByGMID(key)
+			if portal != nil && len(portal.MXID) == 0 {
+				portal.Sync(user, &group)
+			}
+			user.messageInput <- PortalMessage{key, user, msg, uint64(msg.CreatedAt.ToTime().Unix())}
+		}
+	}
+	user.markPollConversationInitialized(conversation)
+}
 
-	//	wg := sync.WaitGroup{}
-	//	for i, chat := range chats {
-	//		if chat.LastMessageTime+user.bridge.Config.Bridge.SyncChatMaxAge < now {
-	//			break
-	//		}
-	//		wg.Add(1)
-	//		go func(chat Chat, i int) {
-	//			create := (chat.LastMessageTime >= user.LastConnection && user.LastConnection > 0) || i < limit
-	//			if len(chat.Portal.MXID) > 0 || create || createAll {
-	//				chat.Portal.Sync(user, chat.Group)
-	//				err := chat.Portal.BackfillHistory(user, chat.LastMessageTime)
-	//				if err != nil {
-	//					chat.Portal.log.Errorln("Error backfilling history:", err)
-	//				}
-	//			}
+func (user *User) pollDMMessages(chat groupme.Chat) {
+	conversation := "dm:" + chat.OtherUser.ID.String()
+	key := database.NewPortalKey(chat.OtherUser.ID, user.GMID)
 
-	//			wg.Done()
-	//		}(chat, i)
+	// The /chats response already contains the complete latest DM message.
+	// Prefer that over a second /direct_messages request: it is cheaper and,
+	// more importantly, avoids relying on another legacy endpoint just to get
+	// the message we already have in hand.
+	msg := chat.LastMessage
+	if msg == nil || len(msg.ID) == 0 {
+		user.log.Debugfln("REST poll DM %s has no last_message payload", chat.OtherUser.ID)
+		user.markPollConversationInitialized(conversation)
+		return
+	}
 
-	// }
-	// wg.Wait()
-	// //TODO: handle leave from groupme side
-	// user.UpdateDirectChats(nil)
-	// user.log.Infoln("Finished syncing portals")
-	// select {
-	// case user.syncPortalsDone <- struct{}{}:
-	// default:
-	// }
+	seen, initialized := user.rememberPolledMessage(conversation, msg.ID)
+	user.log.Debugfln("REST poll DM %s latest=%s initialized=%t seen=%t", chat.OtherUser.ID, msg.ID, initialized, seen)
+	if initialized && !seen {
+		portal := user.bridge.GetPortalByGMID(key)
+		if portal != nil && len(portal.MXID) == 0 {
+			portal.Sync(user, nil)
+		}
+		user.log.Infofln("REST poll detected new DM message %s from %s; queueing for Matrix", msg.ID, msg.UserID)
+		user.messageInput <- PortalMessage{key, user, msg, uint64(msg.CreatedAt.ToTime().Unix())}
+	}
+	user.markPollConversationInitialized(conversation)
+}
+
+func (user *User) conversationNeedsPoll(conversation, cursor string) (needsPoll, knownConversation bool) {
+	user.pollSeenLock.Lock()
+	defer user.pollSeenLock.Unlock()
+	previous, ok := user.pollUpdated[conversation]
+	user.pollUpdated[conversation] = cursor
+	return !ok || cursor != previous, ok
+}
+
+func (user *User) pollingPrimed() bool {
+	user.pollSeenLock.Lock()
+	defer user.pollSeenLock.Unlock()
+	return user.pollPrimed
+}
+
+func (user *User) markPollingPrimed() {
+	user.pollSeenLock.Lock()
+	user.pollPrimed = true
+	user.pollSeenLock.Unlock()
+}
+
+func groupPollCursor(group *groupme.Group) string {
+	if group == nil {
+		return ""
+	}
+	if len(group.Messages.LastMessageID) > 0 {
+		return "message:" + group.Messages.LastMessageID.String()
+	}
+	return fmt.Sprintf("updated:%d", group.UpdatedAt.ToTime().Unix())
+}
+
+func dmPollCursor(chat *groupme.Chat) string {
+	if chat == nil {
+		return ""
+	}
+	if chat.LastMessage != nil && len(chat.LastMessage.ID) > 0 {
+		return "message:" + chat.LastMessage.ID.String()
+	}
+	return fmt.Sprintf("updated:%d", chat.UpdatedAt.ToTime().Unix())
+}
+
+func (user *User) pollChangedMessages() {
+	primed := user.pollingPrimed()
+	groups, groupErr := user.Client.IndexAllGroups()
+	if groupErr != nil {
+		user.log.Warnln("REST polling failed to refresh groups:", groupErr)
+	} else {
+		groupMap := make(map[groupme.ID]groupme.Group, len(groups))
+		for _, group := range groups {
+			if group == nil {
+				continue
+			}
+			groupMap[group.ID] = *group
+			conversation := "group:" + group.ID.String()
+			cursor := groupPollCursor(group)
+			needsPoll, knownConversation := user.conversationNeedsPoll(conversation, cursor)
+			if needsPoll {
+				if primed && !knownConversation {
+					// This group appeared after the startup baseline. Treat its current
+					// latest messages as live instead of silently seeding them.
+					user.markPollConversationInitialized(conversation)
+					user.log.Infofln("REST poll discovered new group %s after startup; current messages are eligible for delivery", group.ID)
+				}
+				user.log.Debugfln("REST poll group %s cursor changed to %s", group.ID, cursor)
+				user.pollGroupMessages(*group)
+			}
+		}
+		user.chatListLock.Lock()
+		user.GroupList = groupMap
+		user.chatListLock.Unlock()
+	}
+
+	dms, dmErr := user.Client.IndexAllChats()
+	if dmErr != nil {
+		user.log.Warnln("REST polling failed to refresh direct chats:", dmErr)
+	} else {
+		dmMap := make(map[groupme.ID]groupme.Chat, len(dms))
+		for _, dm := range dms {
+			if dm == nil {
+				continue
+			}
+			dmMap[dm.OtherUser.ID] = *dm
+			conversation := "dm:" + dm.OtherUser.ID.String()
+			cursor := dmPollCursor(dm)
+			needsPoll, knownConversation := user.conversationNeedsPoll(conversation, cursor)
+			if needsPoll {
+				if primed && !knownConversation {
+					user.markPollConversationInitialized(conversation)
+					user.log.Infofln("REST poll discovered new DM %s after startup; current message is eligible for delivery", dm.OtherUser.ID)
+				}
+				user.log.Debugfln("REST poll DM %s cursor changed to %s", dm.OtherUser.ID, cursor)
+				user.pollDMMessages(*dm)
+			}
+		}
+		user.chatListLock.Lock()
+		user.ChatList = dmMap
+		user.chatListLock.Unlock()
+	}
+
+	if !primed {
+		user.markPollingPrimed()
+		user.log.Debugln("REST polling startup baseline complete")
+	}
+}
+
+func (user *User) startRESTPolling() {
+	user.pollOnce.Do(func() {
+		go func() {
+			// Initial pass seeds each conversation's latest messages without replaying them.
+			// Subsequent passes fetch message bodies only when the chat's updated_at changes.
+			user.pollChangedMessages()
+			pollTicker := time.NewTicker(restPollInterval)
+			refreshTicker := time.NewTicker(restChatRefreshInterval)
+			defer pollTicker.Stop()
+			defer refreshTicker.Stop()
+			for {
+				select {
+				case <-pollTicker.C:
+					user.pollChangedMessages()
+				case <-refreshTicker.C:
+					// Refresh relations/puppet metadata and ensure newly discovered chats
+					// get portal rooms according to the configured initial sync limit.
+					user.HandleChatList()
+				}
+			}
+		}()
+	})
 }
 
 func (user *User) getDirectChats() map[id.UserID][]id.RoomID {

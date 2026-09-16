@@ -105,6 +105,7 @@ func fnLogin(ce *WrappedCommandEvent) {
 	err := ce.User.Login(ce.Args[0])
 	if err != nil {
 		ce.Reply("Failed to log in: %v", err)
+		return
 	}
 
 	ce.Reply("Logged in successfully!")

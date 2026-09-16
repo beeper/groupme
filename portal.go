@@ -280,7 +280,8 @@ func (portal *Portal) markHandled(source *User, message *groupme.Message, mxid i
 	} else {
 		msg.Sender = message.SenderID
 	}
-	// msg.Insert()
+	msg.Sent = true
+	msg.Insert()
 
 	portal.recentlyHandledLock.Lock()
 	portal.recentlyHandled[0] = "" //FIFO queue being implemented here //TODO: is this efficent
@@ -410,15 +411,26 @@ func (portal *Portal) UpdateAvatar(user *User, avatar string, updateInfo bool) b
 	//	}
 	//TODO: duplicated code from puppet.UpdateAvatar
 	if len(avatar) == 0 {
-		if len(portal.Avatar) == 0 {
+		// Group avatars belong to the Matrix room, not to the bridge/puppet
+		// account. The old code called SetAvatarURL here, which changes the
+		// intent user's profile avatar and leaves any stale room avatar in
+		// place. Explicitly clear the room avatar instead.
+		if len(portal.Avatar) == 0 && portal.AvatarURL.IsEmpty() {
 			return false
 		}
-		err := portal.MainIntent().SetAvatarURL(id.ContentURI{})
-		if err != nil {
-			portal.log.Warnln("Failed to remove avatar:", err)
+		if len(portal.MXID) > 0 {
+			_, err := portal.MainIntent().SetRoomAvatar(portal.MXID, id.ContentURI{})
+			if err != nil {
+				portal.log.Warnln("Failed to clear room avatar:", err)
+				return false
+			}
 		}
 		portal.AvatarURL = id.ContentURI{}
-		portal.Avatar = avatar
+		portal.Avatar = ""
+		portal.AvatarSet = true
+		if updateInfo {
+			portal.UpdateBridgeInfo()
+		}
 		return true
 	}
 
@@ -454,11 +466,12 @@ func (portal *Portal) UpdateAvatar(user *User, avatar string, updateInfo bool) b
 	if len(portal.MXID) > 0 {
 		_, err = portal.MainIntent().SetRoomAvatar(portal.MXID, resp.ContentURI)
 		if err != nil {
-			portal.log.Warnln("Failed to set room topic:", err)
+			portal.log.Warnln("Failed to set room avatar:", err)
 			return false
 		}
 	}
 	portal.Avatar = avatar
+	portal.AvatarSet = true
 	if updateInfo {
 		portal.UpdateBridgeInfo()
 	}
@@ -551,16 +564,95 @@ func (portal *Portal) ensureUserInvited(user *User) bool {
 	return user.ensureInvited(portal.MainIntent(), portal.MXID, portal.IsPrivateChat())
 }
 
+// ensurePrivatePortalOwner verifies that the current private-chat puppet can
+// act in the existing Matrix room. This catches stale rooms created using an
+// older puppet username template/appservice namespace.
+func (portal *Portal) ensurePrivatePortalOwner() error {
+	if !portal.IsPrivateChat() || len(portal.MXID) == 0 {
+		return nil
+	}
+	intent := portal.MainIntent()
+	if err := intent.EnsureRegistered(); err != nil {
+		return fmt.Errorf("failed to register current portal puppet: %w", err)
+	}
+	if err := intent.EnsureJoined(portal.MXID, appservice.EnsureJoinedParams{IgnoreCache: true}); err != nil {
+		return fmt.Errorf("current portal puppet cannot join room: %w", err)
+	}
+	portal.bridge.StateStore.SetMembership(portal.MXID, intent.UserID, event.MembershipJoin)
+
+	// The bridge bot is the fallback inviter used by mautrix IntentAPI.EnsureJoined.
+	// Private portals therefore need the bot present with enough power to invite
+	// additional ghosts (notably the logged-in user's own GroupMe ghost). Older
+	// rooms created by this bridge omitted the bot when encryption was disabled.
+	if err := intent.EnsureInvited(portal.MXID, portal.bridge.Bot.UserID); err != nil {
+		return fmt.Errorf("failed to invite bridge bot to private portal: %w", err)
+	}
+	if err := portal.bridge.Bot.EnsureJoined(portal.MXID, appservice.EnsureJoinedParams{IgnoreCache: true}); err != nil {
+		return fmt.Errorf("bridge bot cannot join private portal: %w", err)
+	}
+	portal.bridge.StateStore.SetMembership(portal.MXID, portal.bridge.Bot.UserID, event.MembershipJoin)
+
+	levels, err := intent.PowerLevels(portal.MXID)
+	if err != nil {
+		return fmt.Errorf("failed to read private portal power levels: %w", err)
+	}
+	if levels.Users == nil {
+		levels.Users = make(map[id.UserID]int)
+	}
+	if levels.Users[portal.bridge.Bot.UserID] < 50 {
+		levels.Users[portal.bridge.Bot.UserID] = 100
+		if _, err = intent.SetPowerLevels(portal.MXID, levels); err != nil {
+			return fmt.Errorf("failed to grant bridge bot private portal power: %w", err)
+		}
+	}
+	return nil
+}
+
+// resetMXIDForRecreate forgets only the Matrix-room side of a portal. The
+// GroupMe key and metadata remain, so CreateMatrixRoom can safely create a new
+// room using the current appservice namespace. The old Matrix room is left
+// untouched rather than destructively deleting it.
+func (portal *Portal) resetMXIDForRecreate() {
+	oldMXID := portal.MXID
+	if len(oldMXID) == 0 {
+		return
+	}
+	portal.bridge.portalsLock.Lock()
+	delete(portal.bridge.portalsByMXID, oldMXID)
+	portal.bridge.portalsLock.Unlock()
+	portal.MXID = ""
+	portal.Update(nil)
+}
+
 func (portal *Portal) Sync(user *User, group *groupme.Group) {
 	portal.log.Infoln("Syncing portal for", user.MXID)
 
-	sub := user.Conn.SubscribeToGroup
-	if portal.IsPrivateChat() {
-		sub = user.Conn.SubscribeToDM
+	// Private portal rooms are created by the remote user's puppet. If the
+	// puppet username template changes (for example to match a new Beeper
+	// appservice namespace), an existing database mapping can point at a room
+	// owned by the old puppet identity. The new puppet cannot join/invite
+	// itself into that room, so recreate the portal under the current identity.
+	if portal.IsPrivateChat() && len(portal.MXID) > 0 {
+		if err := portal.ensurePrivatePortalOwner(); err != nil {
+			if strings.Contains(err.Error(), "M_FORBIDDEN") || strings.Contains(err.Error(), "insufficient power level") {
+				portal.log.Warnfln("Private portal %s is not usable by the current puppet identity: %v; recreating it", portal.MXID, err)
+				portal.resetMXIDForRecreate()
+			} else {
+				portal.log.Warnfln("Could not verify private portal owner for %s: %v; keeping existing room mapping", portal.MXID, err)
+			}
+		}
 	}
-	err := sub(context.TODO(), groupme.ID(portal.Key.Receiver), user.Token)
-	if err != nil {
-		portal.log.Errorln("Subscribing failed, live metadata updates won't work", err)
+
+	if user.Conn != nil {
+		sub := user.Conn.SubscribeToGroup
+		target := portal.Key.GMID
+		if portal.IsPrivateChat() {
+			sub = user.Conn.SubscribeToDM
+		}
+		err := sub(context.TODO(), groupme.ID(target), user.Token)
+		if err != nil {
+			portal.log.Errorln("Subscribing failed, live metadata updates won't work", err)
+		}
 	}
 
 	if len(portal.MXID) == 0 {
@@ -572,8 +664,20 @@ func (portal *Portal) Sync(user *User, group *groupme.Group) {
 			portal.log.Errorln("Failed to create portal room:", err)
 			return
 		}
-	} else {
-		portal.ensureUserInvited(user)
+	} else if !portal.ensureUserInvited(user) && portal.bridge.Config.Homeserver.Software == bridgeconfig.SoftwareHungry {
+		// Hungryserv may reject legacy post-creation invites for rooms that were
+		// created before Beeper initial-member support was enabled. If the user
+		// is not already joined and the invite cannot be repaired, recreate the
+		// portal so CreateMatrixRoom can add them as a Beeper initial member.
+		portal.log.Warnfln("Beeper user %s is not joined to portal %s and could not be invited; recreating portal with create-time auto-join invite", user.MXID, portal.MXID)
+		portal.resetMXIDForRecreate()
+		if !portal.IsPrivateChat() {
+			portal.Name = group.Name
+		}
+		if err := portal.CreateMatrixRoom(user); err != nil {
+			portal.log.Errorln("Failed to recreate portal room with Beeper initial membership:", err)
+			return
+		}
 	}
 
 	if portal.IsPrivateChat() {
@@ -606,6 +710,7 @@ func (portal *Portal) GetBasePowerLevels() *event.PowerLevelsEventContent {
 		InvitePtr:       &invite,
 		Users: map[id.UserID]int{
 			portal.MainIntent().UserID: 100,
+			portal.bridge.Bot.UserID:   100,
 		},
 		Events: map[string]int{
 			event.StateRoomName.Type:   anyone,
@@ -723,6 +828,41 @@ func (portal *Portal) GetEncryptionEventContent() (evt *event.EncryptionEventCon
 	return
 }
 
+func (portal *Portal) logAndRepairUserMembership(user *User) {
+	if len(portal.MXID) == 0 || user == nil {
+		return
+	}
+	intent := portal.MainIntent()
+	var member struct {
+		Membership string `json:"membership"`
+	}
+	memberURL := intent.BuildClientURL("v3", "rooms", portal.MXID.String(), "state", event.StateMember.Type, user.MXID.String())
+	_, err := intent.MakeRequest("GET", memberURL, nil, &member)
+	if err == nil {
+		portal.log.Infofln("Beeper membership after portal creation: user=%s room=%s membership=%s", user.MXID, portal.MXID, member.Membership)
+		if member.Membership == string(event.MembershipJoin) {
+			portal.bridge.StateStore.SetMembership(portal.MXID, user.MXID, event.MembershipJoin)
+			return
+		}
+		if member.Membership == string(event.MembershipInvite) {
+			portal.bridge.StateStore.SetMembership(portal.MXID, user.MXID, event.MembershipInvite)
+			return
+		}
+	} else {
+		portal.log.Warnfln("Could not read Beeper membership after portal creation: user=%s room=%s err=%v", user.MXID, portal.MXID, err)
+	}
+
+	// If createRoom did not leave the real Beeper user joined or invited, try
+	// the bridge's normal invite path immediately while the room creator still
+	// has full power. This both repairs the room where possible and gives us a
+	// precise log if Hungryserv rejects it.
+	if portal.ensureUserInvited(user) {
+		portal.log.Infofln("Repaired Beeper membership after portal creation: user=%s room=%s", user.MXID, portal.MXID)
+	} else {
+		portal.log.Warnfln("Beeper user remains neither joined nor repairably invited after portal creation: user=%s room=%s", user.MXID, portal.MXID)
+	}
+}
+
 func (portal *Portal) CreateMatrixRoom(user *User) error {
 	portal.roomCreateLock.Lock()
 	defer portal.roomCreateLock.Unlock()
@@ -751,10 +891,11 @@ func (portal *Portal) CreateMatrixRoom(user *User) error {
 	} else {
 		var err error
 		metadata, err = user.Client.ShowGroup(context.TODO(), groupme.ID(portal.Key.GMID))
-		if err == nil {
-			portal.Name = metadata.Name
-			portal.Topic = metadata.Description
+		if err != nil {
+			return fmt.Errorf("failed to load GroupMe group metadata: %w", err)
 		}
+		portal.Name = metadata.Name
+		portal.Topic = metadata.Description
 		portal.UpdateAvatar(user, metadata.ImageURL, false)
 	}
 
@@ -784,7 +925,18 @@ func (portal *Portal) CreateMatrixRoom(user *User) error {
 		})
 	}
 
+	autoJoinInvites := portal.bridge.Config.Homeserver.Software == bridgeconfig.SoftwareHungry
+	// Match the pattern used by Beeper's maintained bridges: put the real
+	// Beeper user in the normal Matrix createRoom invite list, then ask
+	// Hungryserv to auto-join those invites. Using com.beeper.initial_members
+	// here did not make the real user visible in Beeper for this older bridge.
 	invite := []id.UserID{user.MXID}
+	if portal.IsPrivateChat() {
+		// Keep the bridge bot in private portals even without encryption.
+		// mautrix uses the bot as the fallback inviter when another GroupMe
+		// ghost needs to join the room to mirror a message.
+		invite = append(invite, portal.bridge.Bot.UserID)
+	}
 
 	if portal.bridge.Config.Bridge.Encryption.Default {
 		initialState = append(initialState, &event.Event{
@@ -794,20 +946,20 @@ func (portal *Portal) CreateMatrixRoom(user *User) error {
 			},
 		})
 		portal.Encrypted = true
-		if portal.IsPrivateChat() {
-			invite = append(invite, portal.bridge.Bot.UserID)
-		}
 	}
 
-	resp, err := intent.CreateRoom(&mautrix.ReqCreateRoom{
-		Visibility:   "private",
-		Name:         portal.Name,
-		Topic:        portal.Topic,
-		Invite:       invite,
-		Preset:       "private_chat",
-		IsDirect:     portal.IsPrivateChat(),
-		InitialState: initialState,
-	})
+	createReq := map[string]interface{}{
+		"visibility":                   "private",
+		"name":                         portal.Name,
+		"topic":                        portal.Topic,
+		"invite":                       invite,
+		"preset":                       "private_chat",
+		"is_direct":                    portal.IsPrivateChat(),
+		"initial_state":                initialState,
+		"com.beeper.auto_join_invites": autoJoinInvites,
+	}
+	resp := &mautrix.RespCreateRoom{}
+	_, err := intent.MakeRequest("POST", intent.BuildClientURL("v3", "createRoom"), createReq, resp)
 	if err != nil {
 		return err
 	} else if len(resp.RoomID) == 0 {
@@ -815,14 +967,24 @@ func (portal *Portal) CreateMatrixRoom(user *User) error {
 	}
 	portal.MXID = resp.RoomID
 	portal.Update(nil)
+	// The creator/main intent is joined by definition. Record that explicitly
+	// so mautrix doesn't try an unnecessary join/invite before the first send.
+	portal.bridge.StateStore.SetMembership(portal.MXID, intent.UserID, event.MembershipJoin)
 	portal.bridge.portalsLock.Lock()
 	portal.bridge.portalsByMXID[portal.MXID] = portal
 	portal.bridge.portalsLock.Unlock()
 
-	// We set the memberships beforehand to make sure the encryption key exchange in initial backfill knows the users are here.
-	for _, user := range invite {
-		portal.bridge.StateStore.SetMembership(portal.MXID, user, event.MembershipInvite)
+	// Keep the state store aligned with the room creation request. Hungryserv
+	// auto-joins createRoom invites when com.beeper.auto_join_invites is set.
+	for _, invitedUser := range invite {
+		membership := event.MembershipInvite
+		if autoJoinInvites {
+			membership = event.MembershipJoin
+		}
+		portal.bridge.StateStore.SetMembership(portal.MXID, invitedUser, membership)
 	}
+
+	portal.logAndRepairUserMembership(user)
 
 	if metadata != nil {
 		portal.SyncParticipants(metadata)
@@ -1146,7 +1308,7 @@ func (portal *Portal) HandleTextMessage(source *User, message *groupme.Message) 
 		if msg == nil {
 			continue
 		}
-		resp, err := portal.sendMessage(intent, event.EventMessage, msg, nil, message.CreatedAt.ToTime().Unix())
+		resp, err := portal.sendMessage(intent, event.EventMessage, msg, nil, message.CreatedAt.ToTime().UnixMilli())
 		if err != nil {
 			portal.log.Errorfln("Failed to handle message %s: %v", "TODOID", err)
 			portal.sendMediaBridgeFailure(source, intent, *message, err)
@@ -1166,7 +1328,7 @@ func (portal *Portal) HandleTextMessage(source *User, message *groupme.Message) 
 
 	_, _ = intent.UserTyping(portal.MXID, false, 0)
 	if sendText {
-		resp, err := portal.sendMessage(intent, event.EventMessage, content, nil, message.CreatedAt.ToTime().Unix())
+		resp, err := portal.sendMessage(intent, event.EventMessage, content, nil, message.CreatedAt.ToTime().UnixMilli())
 		if err != nil {
 			portal.log.Errorfln("Failed to handle message %s: %v", message.ID, err)
 			return
