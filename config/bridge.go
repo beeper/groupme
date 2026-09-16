@@ -188,10 +188,21 @@ type UsernameTemplateArgs struct {
 
 func (bc BridgeConfig) FormatDisplayname(gmid groupme.ID, member groupme.Member) string {
 	var buf strings.Builder
-	_ = bc.displaynameTemplate.Execute(&buf, map[string]string{
+	args := map[string]interface{}{
+		// Current example-config.yaml uses Nickname and UserID.
+		"Nickname": member.Nickname,
+		"UserID":   gmid,
+		// Keep the names used by older/custom templates for compatibility.
 		"Name": member.Nickname,
 		"GMID": gmid.String(),
-	})
+	}
+	if err := bc.displaynameTemplate.Execute(&buf, args); err != nil {
+		// A broken custom template should not leave the Matrix puppet unnamed.
+		if member.Nickname != "" {
+			return member.Nickname
+		}
+		return gmid.String()
+	}
 	return buf.String()
 }
 
