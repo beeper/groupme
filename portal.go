@@ -664,7 +664,7 @@ func (portal *Portal) Sync(user *User, group *groupme.Group) {
 			portal.log.Errorln("Failed to create portal room:", err)
 			return
 		}
-	} else if !portal.ensureUserInvited(user) && portal.bridge.Config.Homeserver.Software == bridgeconfig.SoftwareHungry {
+	} else if !portal.ensureUserInvited(user) && portal.bridge.supportsBeeperAutoJoinInvites() {
 		// Hungryserv may reject legacy post-creation invites for rooms that were
 		// created before Beeper initial-member support was enabled. If the user
 		// is not already joined and the invite cannot be repaired, recreate the
@@ -863,6 +863,17 @@ func (portal *Portal) logAndRepairUserMembership(user *User) {
 	}
 }
 
+func (br *GMBridge) supportsBeeperAutoJoinInvites() bool {
+	if br.Config.Homeserver.Software == bridgeconfig.SoftwareHungry {
+		return true
+	}
+	// Older configs often leave homeserver.software at "standard" even when
+	// the appservice is connected through Beeper Hungryserv. Detect that from
+	// the configured client API address so create-time auto-join still works.
+	address := strings.ToLower(br.Config.Homeserver.Address)
+	return strings.Contains(address, "/_hungryserv/") || strings.Contains(address, "matrix.beeper.com")
+}
+
 func (portal *Portal) CreateMatrixRoom(user *User) error {
 	portal.roomCreateLock.Lock()
 	defer portal.roomCreateLock.Unlock()
@@ -925,12 +936,15 @@ func (portal *Portal) CreateMatrixRoom(user *User) error {
 		})
 	}
 
-	autoJoinInvites := portal.bridge.Config.Homeserver.Software == bridgeconfig.SoftwareHungry
+	autoJoinInvites := portal.bridge.supportsBeeperAutoJoinInvites()
 	// Match the pattern used by Beeper's maintained bridges: put the real
 	// Beeper user in the normal Matrix createRoom invite list, then ask
 	// Hungryserv to auto-join those invites. Using com.beeper.initial_members
 	// here did not make the real user visible in Beeper for this older bridge.
-	invite := []id.UserID{user.MXID}
+	var invite []id.UserID
+	if autoJoinInvites {
+		invite = append(invite, user.MXID)
+	}
 	if portal.IsPrivateChat() {
 		// Keep the bridge bot in private portals even without encryption.
 		// mautrix uses the bot as the fallback inviter when another GroupMe

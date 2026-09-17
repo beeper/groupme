@@ -236,7 +236,7 @@ func (user *User) ensureInvited(intent *appservice.IntentAPI, roomID id.RoomID, 
 		extraContent["is_direct"] = true
 	}
 	customPuppet := user.bridge.GetPuppetByCustomMXID(user.MXID)
-	autoAcceptInvite := user.bridge.Config.Homeserver.Software == bridgeconfig.SoftwareHungry ||
+	autoAcceptInvite := user.bridge.supportsBeeperAutoJoinInvites() ||
 		(customPuppet != nil && customPuppet.CustomIntent() != nil)
 	if autoAcceptInvite {
 		extraContent["fi.mau.will_auto_accept"] = true
