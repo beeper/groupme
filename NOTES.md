@@ -1402,3 +1402,30 @@ FREE FOOD member events still carrying old nicknames; bridgev2's
 `reconcileProfile` re-pushed them, and all 14 were verified afterwards to
 match their profile in that room. 4 DM room avatars and 1 ghost avatar were
 switched to the account-level picture.
+
+## DM message requests (2026-09-28)
+
+A DM from someone GroupMe doesn't treat as a contact arrives as a "message
+request": the chat has `requires_approval: true`. A reply to Tatum Theobald's
+request, sent from Matrix on 2026-09-26, didn't go through until the request
+was accepted in the GroupMe app. The bridge logs from that night had already
+rotated out, so the exact send response is unknown.
+
+No public or community docs cover accepting a request. It was found in
+web.groupme.com's own client bundle: `POST
+https://api.groupme.com/v3/chats/<conversation_id>/approve` with
+`X-Access-Token`. `GET /v3/chats/<conversation_id>` returns the chat with
+`requires_approval`. The conversation ID is the "smaller+larger" form with
+a literal `+`. `%2B` 404s and the bare other-user ID 400s. Verified live on
+an already-accepted chat: approve returns 200 and changes nothing (a
+made-up action on the same path 500s). Not yet exercised on a genuinely
+pending request, since there wasn't one to test with.
+
+`HandleMatrixMessage` now calls `approveDMRequestIfPending` before every
+outgoing DM. That is one GET, plus an approve only if the chat is pending.
+Replying is treated as accepting, the same as the app, which also requires
+accepting before you can reply. It's best-effort: any failure is logged
+and the send goes ahead anyway.
+
+The web client also has `POST /v3/blocks?user=&otherUser=` for the
+"Block" button next to "Accept". Not wired up.

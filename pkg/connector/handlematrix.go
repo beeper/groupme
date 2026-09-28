@@ -25,6 +25,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/rs/zerolog"
 	"maunium.net/go/mautrix/bridgev2"
 	"maunium.net/go/mautrix/bridgev2/database"
 	"maunium.net/go/mautrix/event"
@@ -141,6 +142,7 @@ func (gc *GMClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.Matri
 		sent, err = gc.Client.CreateMessage(ctx, gmid, out)
 	case PortalTypeDM:
 		out.RecipientID = gmid
+		gc.approveDMRequestIfPending(ctx, gmid)
 		sent, err = gc.Client.CreateDirectMessage(ctx, out)
 	default:
 		return nil, fmt.Errorf("unknown portal type for %s", msg.Portal.ID)
@@ -314,6 +316,31 @@ func matrixLocationToAttachment(content *event.MessageEventContent) (*groupme.At
 		Longitude: strconv.FormatFloat(lng, 'f', -1, 64),
 		Name:      name,
 	}, nil
+}
+
+// approveDMRequestIfPending accepts a pending DM message request before we
+// reply to it. Replying from Matrix is the same intent as tapping "Accept"
+// then replying in the GroupMe app, which requires accepting first -- a
+// reply to Tatum Theobald's request on 2026-09-26 didn't go through until
+// the request was accepted in the app. Best-effort: any failure here is
+// logged and the send proceeds anyway, so this can never block a normal
+// DM. Costs one extra GET per outgoing DM.
+func (gc *GMClient) approveDMRequestIfPending(ctx context.Context, otherUser groupme.ID) {
+	convID := string(DMConversationID(groupme.ID(gc.Meta.GMID), otherUser))
+	log := zerolog.Ctx(ctx).With().Str("conversation_id", convID).Logger()
+	pending, err := groupmeext.ChatRequiresApproval(ctx, gc.Meta.Token, convID)
+	if err != nil {
+		log.Warn().Err(err).Msg("Failed to check whether DM is a pending message request, sending anyway")
+		return
+	}
+	if !pending {
+		return
+	}
+	if err := groupmeext.ApproveChat(ctx, gc.Meta.Token, convID); err != nil {
+		log.Warn().Err(err).Msg("Failed to accept DM message request, sending anyway")
+		return
+	}
+	log.Info().Msg("Accepted GroupMe DM message request before replying")
 }
 
 // HandleMatrixReaction bridges a Matrix reaction to a GroupMe "like".
