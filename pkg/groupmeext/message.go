@@ -46,6 +46,13 @@ func DownloadImage(url string) (data *[]byte, mime string, err error) {
 		return nil, "", fmt.Errorf("failed to download image: %w", err)
 	}
 	defer resp.Body.Close()
+	// Without this, an error response was uploaded to Matrix as if it were
+	// the image: 2,825 S3 "AccessDenied" XML pages (from expired/removed
+	// GroupMe image URLs, mostly old avatars) ended up in the media store
+	// on 2026-09-18..21, showing as broken pictures.
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, "", fmt.Errorf("failed to download image: HTTP %d", resp.StatusCode)
+	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {

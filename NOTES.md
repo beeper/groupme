@@ -1429,3 +1429,37 @@ and the send goes ahead anyway.
 
 The web client also has `POST /v3/blocks?user=&otherUser=` for the
 "Block" button next to "Accept". Not wired up.
+
+## Media store: 16 GB of duplicates, and error pages saved as pictures (2026-09-28)
+
+**Duplicates.** The Synapse media store was 18 GB (14 GB files + 4.4 GB
+thumbnails) after 10 days. Hashing every file showed only 0.86 GB of
+unique content: the Sept 18-20 avatar flicker storm had uploaded the same
+profile pictures tens of thousands of times (33,215 files on Sept 20
+alone). Synapse never modifies a media file after writing it, so duplicates
+were replaced with hard links to one copy (`hardlink -t` from util-linux,
+sha256 content comparison, atomic replace, Synapse left running). No media
+IDs were deleted and no Synapse admin rights were needed. Result: 207,126
+files linked, 15.67 GiB saved; the media store went from 18 GB to 1.7 GB and
+disk use from 69 GB to 53 GB. Verified by downloading 11 random media
+through Synapse, including files with up to 5,186 links: all byte-identical.
+Note: a backup tool that doesn't preserve hard links would copy them out at
+full size.
+
+**Error pages saved as pictures.** `DownloadImage` never checked the HTTP
+status, so when i.groupme.com returned 403 for an old, removed picture, the
+S3 `AccessDenied` XML body was uploaded as the image. There are 2,825 such
+`text/xml` files, all from Sept 18-21. 34 people currently show one as their
+avatar. No chat messages reference one. Fixes:
+- `DownloadImage` errors on non-2xx. Image attachments are then skipped
+  (the message text still bridges), and avatars are left unset.
+- `avatarAlreadyFailed`: bridgev2 records the avatar ID even when the
+  download fails. A URL that already failed isn't retried on every resync,
+  only when GroupMe gives the person a different picture.
+
+**Not done yet (needs the user's permission):** clearing the 34 broken avatars.
+This means setting `avatar_mxc=''` in the bridge's ghost table (with the bridge
+stopped, after a backup) and PUT an empty `avatar_url` on their Matrix
+profiles. The next resync would then fill in a working current picture for
+the 12 who have one; the other 22 have no working GroupMe picture anywhere
+and would be left blank instead of broken.

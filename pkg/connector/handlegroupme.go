@@ -159,7 +159,7 @@ func (gc *GMClient) HandleTextMessage(msg groupme.Message) {
 			if !ghostHasRealName(ghost) {
 				info.Name = ptr.Ptr(name)
 			}
-			if avatarURL != "" && ghost.AvatarMXC == "" {
+			if avatarURL != "" && ghost.AvatarMXC == "" && !avatarAlreadyFailed(ghost, avatarURL) {
 				info.Avatar = avatarFor(avatarURL)
 			}
 			if info.Name == nil && info.Avatar == nil {

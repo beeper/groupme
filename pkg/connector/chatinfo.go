@@ -57,6 +57,15 @@ func avatarIfSet(url string) *bridgev2.Avatar {
 	return avatarFor(url)
 }
 
+// avatarAlreadyFailed reports whether this exact avatar URL was already
+// tried for the ghost and couldn't be downloaded: bridgev2 records the
+// avatar ID even when the reupload fails, leaving no MXC. Without this, a
+// permanently dead GroupMe picture link (i.groupme.com 403s for old,
+// removed pictures) would be re-downloaded and fail on every resync.
+func avatarAlreadyFailed(ghost *bridgev2.Ghost, url string) bool {
+	return ghost != nil && ghost.AvatarMXC == "" && string(ghost.AvatarID) == url
+}
+
 // ghostHasRealName reports whether a ghost already has a proper name, as
 // opposed to none or the raw-numeric-ID fallback.
 func ghostHasRealName(ghost *bridgev2.Ghost) bool {
@@ -111,7 +120,7 @@ func (gc *GMClient) GetChatInfo(ctx context.Context, portal *bridgev2.Portal) (*
 			info := &bridgev2.UserInfo{Name: ptr.Ptr(name)}
 			if m.ImageURL != "" {
 				ghost, err := gc.Main.br.GetExistingGhostByID(ctx, MakeUserID(m.UserID))
-				if err == nil && (ghost == nil || ghost.AvatarMXC == "") {
+				if err == nil && (ghost == nil || ghost.AvatarMXC == "") && !avatarAlreadyFailed(ghost, m.ImageURL) {
 					info.Avatar = avatarFor(m.ImageURL)
 				}
 			}
@@ -187,6 +196,9 @@ func (gc *GMClient) GetChatInfo(ctx context.Context, portal *bridgev2.Portal) (*
 		var otherInfo *bridgev2.UserInfo
 		if found {
 			otherInfo = &bridgev2.UserInfo{Name: ptr.Ptr(name), Avatar: avatarIfSet(avatarURL)}
+			if ghost, err := gc.Main.br.GetExistingGhostByID(ctx, MakeUserID(gmid)); err == nil && avatarAlreadyFailed(ghost, avatarURL) {
+				otherInfo.Avatar = nil
+			}
 		}
 		members := &bridgev2.ChatMemberList{
 			IsFull: true,
