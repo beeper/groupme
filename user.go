@@ -669,7 +669,10 @@ func (user *User) syncPortals(createAll bool) {
 	chats := make(ChatList, 0, len(groups)+len(dms))
 
 	for _, group := range groups {
-		portal := user.bridge.GetPortalByGMID(database.GroupPortalKey(group.ID))
+		// Discovery should not persist placeholder group portals. Load only
+		// an existing mapping here and create a portal later if it is selected
+		// for sync or receives a real message.
+		portal := user.bridge.GetPortalByGMIDIfExists(database.GroupPortalKey(group.ID))
 		chats = append(chats, Chat{
 			Portal:          portal,
 			LastMessageTime: uint64(group.UpdatedAt.ToTime().Unix()),
@@ -693,14 +696,24 @@ func (user *User) syncPortals(createAll bool) {
 	if limit > len(chats) {
 		limit = len(chats)
 	}
+
 	for i, chat := range chats {
-		if chat.Portal == nil {
+		shouldSync := createAll || i < limit
+		if chat.Portal != nil && len(chat.Portal.MXID) > 0 {
+			shouldSync = true
+		}
+		if !shouldSync {
 			continue
 		}
-		if createAll || len(chat.Portal.MXID) > 0 || i < limit {
-			chat.Portal.Sync(user, chat.Group)
+		if chat.Portal == nil {
+			if chat.Group == nil {
+				continue
+			}
+			chat.Portal = user.bridge.GetPortalByGMID(database.GroupPortalKey(chat.Group.ID))
 		}
+		chat.Portal.Sync(user, chat.Group)
 	}
+
 	user.UpdateDirectChats(nil)
 	user.log.Infoln("Finished syncing portals")
 	select {
@@ -708,6 +721,7 @@ func (user *User) syncPortals(createAll bool) {
 	default:
 	}
 }
+
 
 const restPollInterval = 10 * time.Second
 const restChatRefreshInterval = 1 * time.Minute
@@ -737,58 +751,256 @@ func (user *User) markPollConversationInitialized(conversation string) {
 	user.pollSeenLock.Unlock()
 }
 
-func (user *User) pollGroupMessages(group groupme.Group) {
-	resp, err := user.Client.IndexMessages(context.TODO(), group.ID, &groupme.IndexMessagesQuery{Limit: 20})
-	if err != nil {
-		user.log.Warnfln("REST poll failed for group %s: %v", group.ID, err)
-		return
-	}
-	conversation := "group:" + group.ID.String()
-	for i := len(resp.Messages) - 1; i >= 0; i-- {
-		msg := resp.Messages[i]
-		if msg == nil || len(msg.ID) == 0 {
-			continue
-		}
-		seen, initialized := user.rememberPolledMessage(conversation, msg.ID)
-		if initialized && !seen {
-			key := database.GroupPortalKey(group.ID)
-			portal := user.bridge.GetPortalByGMID(key)
-			if portal != nil && len(portal.MXID) == 0 {
-				portal.Sync(user, &group)
-			}
-			user.messageInput <- PortalMessage{key, user, msg, uint64(msg.CreatedAt.ToTime().Unix())}
-		}
-	}
-	user.markPollConversationInitialized(conversation)
+func (user *User) isPollConversationInitialized(conversation string) bool {
+	user.pollSeenLock.Lock()
+	defer user.pollSeenLock.Unlock()
+	return user.pollInitialized[conversation]
 }
 
-func (user *User) pollDMMessages(chat groupme.Chat) {
-	conversation := "dm:" + chat.OtherUser.ID.String()
-	key := database.NewPortalKey(chat.OtherUser.ID, user.GMID)
+func (user *User) hasSeenPolledMessage(conversation string, messageID groupme.ID) bool {
+	if len(messageID) == 0 {
+		return false
+	}
+	key := conversation + ":" + messageID.String()
+	user.pollSeenLock.Lock()
+	defer user.pollSeenLock.Unlock()
+	_, ok := user.pollSeen[key]
+	return ok
+}
 
-	// The /chats response already contains the complete latest DM message.
-	// Prefer that over a second /direct_messages request: it is cheaper and,
-	// more importantly, avoids relying on another legacy endpoint just to get
-	// the message we already have in hand.
-	msg := chat.LastMessage
-	if msg == nil || len(msg.ID) == 0 {
-		user.log.Debugfln("REST poll DM %s has no last_message payload", chat.OtherUser.ID)
+func (user *User) pollConversationHasSeenMessages(conversation string) bool {
+	prefix := conversation + ":"
+	user.pollSeenLock.Lock()
+	defer user.pollSeenLock.Unlock()
+	for key := range user.pollSeen {
+		if strings.HasPrefix(key, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func (user *User) pollGroupMessages(group groupme.Group) {
+	const pageSize = 100
+
+	conversation := "group:" + group.ID.String()
+	key := database.GroupPortalKey(group.ID)
+	latestID := group.Messages.LastMessageID
+
+	if len(latestID) > 0 && user.bridge.DB.Message.GetByGMID(key, latestID) != nil {
+		_, _ = user.rememberPolledMessage(conversation, latestID)
 		user.markPollConversationInitialized(conversation)
 		return
 	}
 
-	seen, initialized := user.rememberPolledMessage(conversation, msg.ID)
-	user.log.Debugfln("REST poll DM %s latest=%s initialized=%t seen=%t", chat.OtherUser.ID, msg.ID, initialized, seen)
-	if initialized && !seen {
-		portal := user.bridge.GetPortalByGMID(key)
-		if portal != nil && len(portal.MXID) == 0 {
-			portal.Sync(user, nil)
+	conversationInitialized := user.isPollConversationInitialized(conversation)
+	hasSeenAnchor := user.pollConversationHasSeenMessages(conversation)
+	durableAnchor := user.bridge.DB.Message.GetLastInChat(key)
+
+	if !conversationInitialized && durableAnchor == nil {
+		resp, err := user.Client.IndexMessages(context.TODO(), group.ID, &groupme.IndexMessagesQuery{Limit: pageSize})
+		if err != nil {
+			user.log.Warnfln("REST poll failed to establish startup baseline for group %s: %v", group.ID, err)
+			return
 		}
-		user.log.Infofln("REST poll detected new DM message %s from %s; queueing for Matrix", msg.ID, msg.UserID)
-		user.messageInput <- PortalMessage{key, user, msg, uint64(msg.CreatedAt.ToTime().Unix())}
+		for _, msg := range resp.Messages {
+			if msg != nil && len(msg.ID) > 0 {
+				_, _ = user.rememberPolledMessage(conversation, msg.ID)
+			}
+		}
+		user.markPollConversationInitialized(conversation)
+		return
+	}
+
+	// A conversation discovered after the initial baseline has no historical
+	// anchor yet. Preserve the existing behavior by delivering only the latest
+	// API page rather than replaying the entire remote room.
+	allowUnanchoredRecent := conversationInitialized && durableAnchor == nil && !hasSeenAnchor
+
+	var beforeID groupme.ID
+	var missing []*groupme.Message
+	var scanned []*groupme.Message
+	reachedAnchor := false
+
+	for {
+		query := &groupme.IndexMessagesQuery{Limit: pageSize}
+		if len(beforeID) > 0 {
+			query.BeforeID = beforeID
+		}
+		resp, err := user.Client.IndexMessages(context.TODO(), group.ID, query)
+		if err != nil {
+			user.log.Warnfln("REST reconcile failed for group %s (%s) before %s: %v", group.ID, group.Name, beforeID, err)
+			return
+		}
+		if len(resp.Messages) == 0 {
+			break
+		}
+
+		for _, msg := range resp.Messages {
+			if msg == nil || len(msg.ID) == 0 {
+				continue
+			}
+			if user.bridge.DB.Message.GetByGMID(key, msg.ID) != nil || user.hasSeenPolledMessage(conversation, msg.ID) {
+				reachedAnchor = true
+				break
+			}
+			if durableAnchor != nil && !msg.CreatedAt.ToTime().After(durableAnchor.Timestamp) {
+				reachedAnchor = true
+				break
+			}
+			scanned = append(scanned, msg)
+			if !msg.System {
+				missing = append(missing, msg)
+			}
+		}
+
+		if reachedAnchor || allowUnanchoredRecent {
+			break
+		}
+		oldest := resp.Messages[len(resp.Messages)-1]
+		if oldest == nil || len(oldest.ID) == 0 || oldest.ID == beforeID || len(resp.Messages) < pageSize {
+			break
+		}
+		beforeID = oldest.ID
+	}
+
+	for _, msg := range scanned {
+		_, _ = user.rememberPolledMessage(conversation, msg.ID)
 	}
 	user.markPollConversationInitialized(conversation)
+
+	if len(missing) == 0 {
+		return
+	}
+
+	user.log.Infofln("REST reconcile group %s (%s): bridging %d missing messages", group.ID, group.Name, len(missing))
+	portal := user.bridge.GetPortalByGMID(key)
+	if portal != nil && len(portal.MXID) == 0 {
+		portal.Sync(user, &group)
+	}
+
+	for i := len(missing) - 1; i >= 0; i-- {
+		msg := missing[i]
+		user.messageInput <- PortalMessage{
+			chat:      key,
+			source:    user,
+			data:      msg,
+			timestamp: uint64(msg.CreatedAt.ToTime().Unix()),
+		}
+	}
 }
+
+
+func (user *User) pollDMMessages(chat groupme.Chat) {
+	const pageSize = 100
+
+	conversation := "dm:" + chat.OtherUser.ID.String()
+	key := database.NewPortalKey(chat.OtherUser.ID, user.GMID)
+	latestID := groupme.ID("")
+	if chat.LastMessage != nil {
+		latestID = chat.LastMessage.ID
+	}
+
+	if len(latestID) > 0 && user.bridge.DB.Message.GetByGMID(key, latestID) != nil {
+		_, _ = user.rememberPolledMessage(conversation, latestID)
+		user.markPollConversationInitialized(conversation)
+		return
+	}
+
+	conversationInitialized := user.isPollConversationInitialized(conversation)
+	hasSeenAnchor := user.pollConversationHasSeenMessages(conversation)
+	durableAnchor := user.bridge.DB.Message.GetLastInChat(key)
+
+	if !conversationInitialized && durableAnchor == nil {
+		resp, err := user.Client.IndexDirectMessages(context.TODO(), chat.OtherUser.ID.String(), &groupme.IndexDirectMessagesQuery{Limit: pageSize})
+		if err != nil {
+			user.log.Warnfln("REST poll failed to establish startup baseline for DM with %s: %v", chat.OtherUser.ID, err)
+			return
+		}
+		for _, msg := range resp.Messages {
+			if msg != nil && len(msg.ID) > 0 {
+				_, _ = user.rememberPolledMessage(conversation, msg.ID)
+			}
+		}
+		user.markPollConversationInitialized(conversation)
+		return
+	}
+
+	allowUnanchoredRecent := conversationInitialized && durableAnchor == nil && !hasSeenAnchor
+
+	var beforeID groupme.ID
+	var missing []*groupme.Message
+	var scanned []*groupme.Message
+	reachedAnchor := false
+
+	for {
+		query := &groupme.IndexDirectMessagesQuery{Limit: pageSize}
+		if len(beforeID) > 0 {
+			query.BeforeID = beforeID
+		}
+		resp, err := user.Client.IndexDirectMessages(context.TODO(), chat.OtherUser.ID.String(), query)
+		if err != nil {
+			user.log.Warnfln("REST reconcile failed for DM with %s before %s: %v", chat.OtherUser.ID, beforeID, err)
+			return
+		}
+		if len(resp.Messages) == 0 {
+			break
+		}
+
+		for _, msg := range resp.Messages {
+			if msg == nil || len(msg.ID) == 0 {
+				continue
+			}
+			if user.bridge.DB.Message.GetByGMID(key, msg.ID) != nil || user.hasSeenPolledMessage(conversation, msg.ID) {
+				reachedAnchor = true
+				break
+			}
+			if durableAnchor != nil && !msg.CreatedAt.ToTime().After(durableAnchor.Timestamp) {
+				reachedAnchor = true
+				break
+			}
+			scanned = append(scanned, msg)
+			if !msg.System {
+				missing = append(missing, msg)
+			}
+		}
+
+		if reachedAnchor || allowUnanchoredRecent {
+			break
+		}
+		oldest := resp.Messages[len(resp.Messages)-1]
+		if oldest == nil || len(oldest.ID) == 0 || oldest.ID == beforeID || len(resp.Messages) < pageSize {
+			break
+		}
+		beforeID = oldest.ID
+	}
+
+	for _, msg := range scanned {
+		_, _ = user.rememberPolledMessage(conversation, msg.ID)
+	}
+	user.markPollConversationInitialized(conversation)
+
+	if len(missing) == 0 {
+		return
+	}
+
+	user.log.Infofln("REST reconcile DM with %s: bridging %d missing messages", chat.OtherUser.ID, len(missing))
+	portal := user.bridge.GetPortalByGMID(key)
+	if portal != nil && len(portal.MXID) == 0 {
+		portal.Sync(user, nil)
+	}
+
+	for i := len(missing) - 1; i >= 0; i-- {
+		msg := missing[i]
+		user.messageInput <- PortalMessage{
+			chat:      key,
+			source:    user,
+			data:      msg,
+			timestamp: uint64(msg.CreatedAt.ToTime().Unix()),
+		}
+	}
+}
+
 
 func (user *User) conversationNeedsPoll(conversation, cursor string) (needsPoll, knownConversation bool) {
 	user.pollSeenLock.Lock()
@@ -996,17 +1208,24 @@ func (user *User) GetPortalByGMID(gmid groupme.ID) *Portal {
 }
 
 func (user *User) runMessageRingBuffer() {
+	backpressureLogged := false
 	for msg := range user.messageInput {
 		select {
 		case user.messageOutput <- msg:
-			user.bridge.Metrics.TrackBufferLength(user.MXID, len(user.messageOutput))
 		default:
-			dropped := <-user.messageOutput
-			user.log.Warnln("Buffer is full, dropping message in", dropped.chat)
+			if !backpressureLogged {
+				user.log.Infoln("Message buffer is full; applying lossless backpressure instead of dropping messages")
+				backpressureLogged = true
+			}
 			user.messageOutput <- msg
+		}
+		user.bridge.Metrics.TrackBufferLength(user.MXID, len(user.messageOutput))
+		if len(user.messageOutput) < cap(user.messageOutput) {
+			backpressureLogged = false
 		}
 	}
 }
+
 
 func (user *User) handleMessageLoop() {
 	for {

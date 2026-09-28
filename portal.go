@@ -93,6 +93,20 @@ func (bridge *GMBridge) GetPortalByGMID(key database.PortalKey) *Portal {
 	return portal
 }
 
+
+// GetPortalByGMIDIfExists looks up an already-persisted portal without
+// creating a placeholder database row when the portal does not exist.
+// Use this for discovery paths that only need to inspect existing mappings.
+func (bridge *GMBridge) GetPortalByGMIDIfExists(key database.PortalKey) *Portal {
+	bridge.portalsLock.Lock()
+	defer bridge.portalsLock.Unlock()
+	portal, ok := bridge.portalsByGMID[key]
+	if !ok {
+		return bridge.loadDBPortal(bridge.DB.Portal.GetByGMID(key), nil)
+	}
+	return portal
+}
+
 func (br *GMBridge) GetAllPortals() []*Portal {
 	return br.dbPortalsToPortals(br.DB.Portal.GetAll())
 }
@@ -400,69 +414,59 @@ func (user *User) updateAvatar(gmdi groupme.ID, avatarID *string, avatarURL *id.
 	return false
 }
 
+func normalizeGroupMeAvatarURL(raw string) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return raw
+	}
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+	return parsed.String()
+}
+
 func (portal *Portal) UpdateAvatar(user *User, avatar string, updateInfo bool) bool {
-	//	if len(avatar) == 0 {
-	//		var err error
-	//		avatar, err = user.Conn.GetProfilePicThumb(portal.Key.JID)
-	//		if err != nil {
-	//			portal.log.Errorln(err)
-	//			return false
-	//		}
-	//	}
-	//TODO: duplicated code from puppet.UpdateAvatar
-	if len(avatar) == 0 {
-		// Group avatars belong to the Matrix room, not to the bridge/puppet
-		// account. The old code called SetAvatarURL here, which changes the
-		// intent user's profile avatar and leaves any stale room avatar in
-		// place. Explicitly clear the room avatar instead.
-		if len(portal.Avatar) == 0 && portal.AvatarURL.IsEmpty() {
+	normalizedAvatar := normalizeGroupMeAvatarURL(avatar)
+	normalizedCurrent := normalizeGroupMeAvatarURL(portal.Avatar)
+
+	if len(normalizedAvatar) == 0 {
+		changed := len(normalizedCurrent) > 0 || !portal.AvatarURL.IsEmpty()
+		if !changed && portal.AvatarSet {
 			return false
 		}
-		if len(portal.MXID) > 0 {
+		if len(portal.MXID) > 0 && changed {
 			_, err := portal.MainIntent().SetRoomAvatar(portal.MXID, id.ContentURI{})
 			if err != nil {
 				portal.log.Warnln("Failed to clear room avatar:", err)
 				return false
 			}
 		}
-		portal.AvatarURL = id.ContentURI{}
 		portal.Avatar = ""
+		portal.AvatarURL = id.ContentURI{}
 		portal.AvatarSet = true
-		if updateInfo {
+		if updateInfo && changed {
 			portal.UpdateBridgeInfo()
 		}
-		return true
+		return changed
 	}
 
-	if portal.Avatar == avatar {
+	if normalizedCurrent == normalizedAvatar && !portal.AvatarURL.IsEmpty() && portal.AvatarSet {
 		return false
 	}
 
-	//TODO check its actually groupme?
-	response, err := http.Get(avatar + ".large")
+	imageData, mime, err := groupmeext.DownloadImage(normalizedAvatar)
 	if err != nil {
-		portal.log.Warnln("Failed to download avatar:", err)
+		portal.log.Warnln("Failed to download GroupMe room avatar:", err)
 		return false
 	}
-	defer response.Body.Close()
-
-	image, err := ioutil.ReadAll(response.Body)
+	resp, err := portal.MainIntent().UploadBytes(*imageData, mime)
 	if err != nil {
-		portal.log.Warnln("Failed to read downloaded avatar:", err)
+		portal.log.Warnln("Failed to upload room avatar to Matrix:", err)
 		return false
 	}
 
-	mime := response.Header.Get("Content-Type")
-	if len(mime) == 0 {
-		mime = http.DetectContentType(image)
-	}
-	resp, err := portal.MainIntent().UploadBytes(image, mime)
-	if err != nil {
-		portal.log.Warnln("Failed to upload avatar:", err)
-		return false
-	}
-
-	portal.AvatarURL = resp.ContentURI
 	if len(portal.MXID) > 0 {
 		_, err = portal.MainIntent().SetRoomAvatar(portal.MXID, resp.ContentURI)
 		if err != nil {
@@ -470,13 +474,15 @@ func (portal *Portal) UpdateAvatar(user *User, avatar string, updateInfo bool) b
 			return false
 		}
 	}
-	portal.Avatar = avatar
+	portal.Avatar = normalizedAvatar
+	portal.AvatarURL = resp.ContentURI
 	portal.AvatarSet = true
 	if updateInfo {
 		portal.UpdateBridgeInfo()
 	}
 	return true
 }
+
 
 func (portal *Portal) UpdateName(name string, setBy groupme.ID, updateInfo bool) bool {
 	if portal.Name != name {
