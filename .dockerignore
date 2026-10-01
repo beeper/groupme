@@ -1,0 +1,15 @@
+.git
+.agents
+.codex
+.aws
+.local
+*.db
+*.db-*
+*.log
+*.session
+*.json
+*.yaml
+!example-config.yaml
+!pkg/connector/example-config.yaml
+mautrix-groupme
+logs

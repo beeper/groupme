@@ -2,16 +2,44 @@
 
 A Matrix–GroupMe puppeting bridge, built on [mautrix-go bridgev2](https://github.com/mautrix/go).
 
-**Status (2026-09-19): revived, deployed, and verified against a real GroupMe
-account and a real Matrix homeserver.** The upstream project
-(`karmanyaahm/matrix-groupme-go`, forked here as `beeper/groupme`) went
-unmaintained after March 2023 — the `revival-2026` branch (now `master`)
-ports it to the current bridgev2 framework and fixes several real bugs found
-by running it live. If you're picking this up cold, read this file first,
-then [NOTES.md](./NOTES.md) for the full technical history and reasoning
-behind each fix.
+**Development status (2026-10-01):** imported from
+[realtofuine/groupme revival-2026](https://github.com/realtofuine/groupme/tree/56998b82223b7a4850bf2f5bf9cea607fe713230),
+which continues the original Beeper bridge's Git history. This branch adds
+Beeper webview login, account-scoped push authentication, cancellable connection
+workers, and paginated conversation discovery. These changes have source-level
+regression coverage; current-branch GroupMe/Beeper login and delivery still need
+live verification. The upstream author's earlier observations below are useful
+background, not validation of this candidate.
 
-## What's confirmed working (verified live, not just "should work")
+## Login and local development
+
+In Beeper, choose the **GroupMe** login flow and sign in at `web.groupme.com`.
+The client collects the GroupMe session token using bridgev2's webview login
+contract. Google sign-in is handled by the GroupMe website; compatibility with
+Beeper's embedded browser still needs a live test. **GroupMe access token** is
+also available for clients without webview support.
+
+Build with `BUILD_TAGS=goolm ./build.sh`, or `docker build --build-arg
+COMMIT_HASH=$(git rev-parse HEAD) -t groupme-dev .`. Run source checks with
+`go test -race -tags goolm ./...` and `go vet -tags goolm ./...`.
+
+For Beeper, use a separate runtime directory and registration:
+
+```sh
+mkdir -m 700 /absolute/path/to/groupme-runtime
+bbctl config --type bridgev2 --param pickle_key=generate \
+  --output /absolute/path/to/groupme-runtime/config.yaml sh-groupme-dev
+chmod 600 /absolute/path/to/groupme-runtime/config.yaml
+```
+
+Run the container with that directory mounted at `/data` and numeric `UID`/`GID`
+for its owner. A bbctl-generated config already contains registered appservice
+credentials; the launcher preserves them and doesn't generate another
+registration. Keep the registration and runtime across source rebuilds.
+The legacy bridge's database/config migration has not been implemented or
+rehearsed; use a dedicated new runtime for development.
+
+## Upstream validation reported by the fork author
 
 - **Login** via GroupMe access token (`dev.groupme.com` → Access Token).
 - **Initial sync**: on login, every existing group and DM gets a Matrix
@@ -31,8 +59,9 @@ behind each fix.
     unhandled push message type."
   - A **REST polling fallback** (60s interval, configurable) that works
     independently of the WebSocket, so message delivery doesn't depend on
-    push being healthy at all. If the WebSocket probe fails outright at
-    connect time, the bridge falls back to HTTP long-polling instead.
+    push being healthy at all. This branch retries the WebSocket while REST
+    polling remains available; it no longer starts the uncancellable HTTP
+    long-polling transport.
     Requests are staggered across the interval with per-chat backoff on
     rate-limit responses — a naive tight-interval/burst version of this
     got the account 429'd in production; see NOTES.md "Health-check/
@@ -174,6 +203,8 @@ behind each fix.
 
 ## Known gaps
 
+- **Missed-message recovery is incomplete.** Polling still fetches only the
+  latest 20 messages per chat, so larger gaps can lose messages.
 - **No message history backfill.** New portals only show new activity
   going forward, plus an incidental one-page (~20 messages) dump from
   whatever the first poll happens to return — not a real backfill.
@@ -188,8 +219,8 @@ behind each fix.
   default like icon for something outside GroupMe's standard 15-emoji set,
   reactions in that specific group will fall back to ❤️ instead of the
   real custom icon.
-- No provisioning API, no space-room support tested, no
-  metrics/analytics — all low priority for a personal bridge.
+- bridgev2 supplies provisioning endpoints. Provisioning through the Beeper
+  client, space-room support, and the full feature set still need live testing.
 
 ## Architecture quick reference
 
@@ -201,7 +232,8 @@ behind each fix.
 - **Two local vendor patches**, both via `go.mod` `replace` directives
   (real upstream forks weren't possible to publish from the environment
   that wrote them — consider upstreaming for real if these prove out):
-  - `thirdparty/wray/` — patches `github.com/karmanyaahm/wray` (the HTTP
+  - `thirdparty/wray/` — retained from the imported fork, currently unused by
+    the bridge. It patches `github.com/karmanyaahm/wray` (the HTTP
     long-polling Bayeux client) to force HTTP/1.1, working around a
     hang/504 against `push.groupme.com` over HTTP/2.
   - `thirdparty/groupme-lib/` — patches `github.com/beeper/groupme-lib`

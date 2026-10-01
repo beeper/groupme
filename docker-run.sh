@@ -1,31 +1,28 @@
 #!/bin/sh
+set -eu
+umask 077
 
-if [[ -z "$GID" ]]; then
-	GID="$UID"
-fi
-
-# Define functions.
-function fixperms {
-	chown -R $UID:$GID /data
-}
-
-if [[ ! -f /data/config.yaml ]]; then
-	/usr/bin/mautrix-groupme -c /data/config.yaml -e
-	echo "Didn't find a config file."
-	echo "Copied default config file to /data/config.yaml"
-	echo "Modify that config file to your liking."
-	echo "Start the container again after that to generate the registration file."
-	exit
-fi
-
-if [[ ! -f /data/registration.yaml ]]; then
-	/usr/bin/mautrix-groupme -g -c /data/config.yaml -r /data/registration.yaml || exit $?
-	echo "Didn't find a registration file."
-	echo "Generated one for you."
-	echo "See https://docs.mau.fi/bridges/general/registering-appservices.html on how to use it."
-	exit
-fi
-
+UID=${UID:-1337}
+GID=${GID:-$UID}
+mkdir -p /data
 cd /data
-fixperms
-exec su-exec $UID:$GID /usr/bin/mautrix-groupme
+chmod 700 /data
+
+if [ ! -f config.yaml ]; then
+    /usr/bin/mautrix-groupme -c /data/config.yaml -e
+    chown -R "$UID:$GID" /data
+    echo "Created /data/config.yaml. Configure the bridge and restart the container."
+    exit 0
+fi
+
+if [ ! -f registration.yaml ] && ! yq -e '.appservice.as_token != null and .appservice.as_token != "" and .appservice.as_token != "This value is generated when generating the registration"' config.yaml >/dev/null; then
+    /usr/bin/mautrix-groupme -g -c /data/config.yaml -r /data/registration.yaml
+    chown -R "$UID:$GID" /data
+    echo "Created /data/registration.yaml. Register it with your homeserver and restart the container."
+    exit 0
+fi
+
+chmod 600 config.yaml
+if [ -f registration.yaml ]; then chmod 600 registration.yaml; fi
+chown -R "$UID:$GID" /data
+exec su-exec "$UID:$GID" /usr/bin/mautrix-groupme "$@"

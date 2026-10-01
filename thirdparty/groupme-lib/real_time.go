@@ -6,9 +6,8 @@ import (
 	"log"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
-
-	"github.com/karmanyaahm/wray"
 )
 
 const (
@@ -23,13 +22,6 @@ var (
 	ErrHandlerNotFound    = errors.New("Handler not found")
 	ErrListenerNotStarted = errors.New("GroupMe listener not started")
 )
-
-var concur = sync.Mutex{}
-var token string
-
-func init() {
-	wray.RegisterTransports([]wray.Transport{&wray.HTTPTransport{}})
-}
 
 type HandlerAll interface {
 	Handler
@@ -63,7 +55,7 @@ type HandlerMembership interface {
 	HandleJoin(ID)
 }
 
-//Group Handlers
+// Group Handlers
 type HandleGroupTopic interface {
 	HandleGroupTopic(group ID, newTopic string)
 }
@@ -78,7 +70,7 @@ type HandleGroupLikeIcon interface {
 	HandleLikeIcon(group ID, PackID, PackIndex int, Type string)
 }
 
-//Group member handlers
+// Group member handlers
 type HandleMemberNewNickname interface {
 	HandleNewNickname(group ID, user ID, newName string)
 }
@@ -99,35 +91,33 @@ type PushMessage interface {
 }
 
 type FayeClient interface {
-	//Listen starts a blocking listen loop
-	Listen()
-	//WaitSubscribe is a blocking/synchronous subscribe method
-	WaitSubscribe(channel string, msgChannel chan PushMessage)
+	Listen(ctx context.Context)
+	WaitSubscribe(ctx context.Context, channel, token string, msgChannel chan PushMessage) error
 }
 
-//PushSubscription manages real time subscription
 type PushSubscription struct {
 	channel       chan PushMessage
 	fayeClient    FayeClient
 	handlers      []Handler
-	LastConnected int64
+	lastConnected atomic.Int64
+	workers       sync.WaitGroup
 }
 
-//NewPushSubscription creates and returns a push subscription object
-func NewPushSubscription(context context.Context) PushSubscription {
+// NewPushSubscription creates and returns a push subscription object
+func NewPushSubscription(context context.Context) *PushSubscription {
 
 	r := PushSubscription{
-		channel: make(chan PushMessage),
+		channel: make(chan PushMessage, 256),
 	}
 
-	return r
+	return &r
 }
 
 func (r *PushSubscription) AddHandler(h Handler) {
 	r.handlers = append(r.handlers, h)
 }
 
-//AddFullHandler is the same as AddHandler except it ensures the interface implements everything
+// AddFullHandler is the same as AddHandler except it ensures the interface implements everything
 func (r *PushSubscription) AddFullHandler(h HandlerAll) {
 	r.handlers = append(r.handlers, h)
 }
@@ -135,88 +125,61 @@ func (r *PushSubscription) AddFullHandler(h HandlerAll) {
 var RealTimeHandlers map[string]func(r *PushSubscription, channel string, data ...interface{})
 var RealTimeSystemHandlers map[string]func(r *PushSubscription, channel string, id ID, rawData []byte)
 
-//Listen connects to GroupMe. Runs in Goroutine.
-func (r *PushSubscription) StartListening(context context.Context, client FayeClient) {
+func (r *PushSubscription) StartListening(ctx context.Context, client FayeClient) {
 	r.fayeClient = client
-
-	go r.fayeClient.Listen()
-
+	r.workers.Add(2)
 	go func() {
-		for msg := range r.channel {
-			r.LastConnected = time.Now().Unix()
-			data := msg.Data()
-			content := data["subject"]
-			contentType := data["type"].(string)
-			channel := msg.Channel()
-
-			handler, ok := RealTimeHandlers[contentType]
-			if !ok {
-				// Confirmed live as a real, crash-causing bug (not a local
-				// change -- this is exactly how the pinned upstream
-				// library reads): falling through to call handler(...)
-				// below when the lookup missed left handler as its zero
-				// value (nil), so any push message type without a
-				// registered RealTimeHandlers entry -- only
-				// "direct_message.create"/"line.create"/"like.create"/
-				// "membership.create"/"favorite" are registered, see
-				// real_time_handler.go -- immediately panics with a nil
-				// pointer dereference. GroupMe pushes plenty of other
-				// message types over this same channel (typing
-				// indicators being the most frequent in practice), so
-				// this wasn't a rare edge case: it crash-looped the
-				// entire bridge process every time one arrived, observed
-				// live tearing down message delivery for real. Now
-				// just skips instead of calling a nil handler.
-				if contentType != "ping" && len(contentType) != 0 && content != nil {
+		defer r.workers.Done()
+		client.Listen(ctx)
+	}()
+	go func() {
+		defer r.workers.Done()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case msg := <-r.channel:
+				if ctx.Err() != nil {
+					return
+				}
+				r.lastConnected.Store(time.Now().Unix())
+				data := msg.Data()
+				contentType, _ := data["type"].(string)
+				if handler := RealTimeHandlers[contentType]; handler != nil && data["subject"] != nil {
+					handler(r, msg.Channel(), data["subject"])
+				} else if contentType != "" && contentType != "ping" {
 					log.Println("Unable to handle GroupMe message type", contentType)
 				}
-				continue
 			}
-
-			handler(r, channel, content)
 		}
 	}()
 }
 
-//SubscribeToUser to users
+func (r *PushSubscription) Wait() { r.workers.Wait() }
+
+// SubscribeToUser to users
 func (r *PushSubscription) SubscribeToUser(context context.Context, id ID, authToken string) error {
 	return r.subscribeWithPrefix(userChannel, context, id, authToken)
 }
 
-//SubscribeToGroup to groups for typing notification
+// SubscribeToGroup to groups for typing notification
 func (r *PushSubscription) SubscribeToGroup(context context.Context, id ID, authToken string) error {
 	return r.subscribeWithPrefix(groupChannel, context, id, authToken)
 }
 
-//SubscribeToDM to users
+// SubscribeToDM to users
 func (r *PushSubscription) SubscribeToDM(context context.Context, id ID, authToken string) error {
 	id = ID(strings.Replace(id.String(), "+", "_", 1))
 	return r.subscribeWithPrefix(dmChannel, context, id, authToken)
 }
 
-func (r *PushSubscription) subscribeWithPrefix(prefix string, context context.Context, groupID ID, authToken string) error {
-	concur.Lock()
-	defer concur.Unlock()
+func (r *PushSubscription) subscribeWithPrefix(prefix string, ctx context.Context, groupID ID, authToken string) error {
 	if r.fayeClient == nil {
 		return ErrListenerNotStarted
 	}
-
-	token = authToken
-	r.fayeClient.WaitSubscribe(prefix+groupID.String(), r.channel)
-
-	return nil
+	return r.fayeClient.WaitSubscribe(ctx, prefix+groupID.String(), authToken, r.channel)
 }
 
-//Connected check if connected
 func (r *PushSubscription) Connected() bool {
-	return r.LastConnected+30 >= time.Now().Unix()
-}
-
-// Out adds the authentication token to the messages ext field
-func OutMsgProc(msg PushMessage) {
-	if msg.Channel() == subscribeChannel {
-		ext := msg.Ext()
-		ext["access_token"] = token
-		ext["timestamp"] = time.Now().Unix()
-	}
+	return r.lastConnected.Load()+30 >= time.Now().Unix()
 }

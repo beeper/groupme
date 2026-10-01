@@ -49,7 +49,7 @@ import (
 func (gc *GMClient) syncChats(ctx context.Context) {
 	log := gc.UserLogin.Log.With().Str("action", "initial chat sync").Logger()
 
-	groups, err := gc.Client.IndexAllGroups()
+	groups, err := gc.Client.IndexAllGroups(ctx)
 	if err != nil {
 		log.Err(err).Msg("Failed to list GroupMe groups for initial sync")
 	} else {
@@ -62,7 +62,7 @@ func (gc *GMClient) syncChats(ctx context.Context) {
 		}
 	}
 
-	chats, err := gc.Client.IndexAllChats()
+	chats, err := gc.Client.IndexAllChats(ctx)
 	if err != nil {
 		log.Err(err).Msg("Failed to list GroupMe DM chats for initial sync")
 	} else {

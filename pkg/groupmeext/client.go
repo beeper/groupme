@@ -17,21 +17,36 @@ func NewClient(authToken string) *Client {
 	}
 	return &n
 }
-func (c Client) IndexAllGroups() ([]*groupme.Group, error) {
-	return c.IndexGroups(context.TODO(), &groupme.GroupsQuery{
-		//	Omit:    "memberships",
-		PerPage: 100, //TODO: Configurable and add multipage support
-	})
+func (c Client) IndexAllGroups(ctx context.Context) ([]*groupme.Group, error) {
+	var groups []*groupme.Group
+	for page := 1; ; page++ {
+		batch, err := c.IndexGroups(ctx, &groupme.GroupsQuery{Page: page, PerPage: 100})
+		if err != nil {
+			return nil, err
+		}
+		groups = append(groups, batch...)
+		if len(batch) < 100 {
+			return groups, nil
+		}
+	}
 }
 
 func (c Client) IndexAllRelations() ([]*groupme.User, error) {
 	return c.IndexRelations(context.TODO())
 }
 
-func (c Client) IndexAllChats() ([]*groupme.Chat, error) {
-	return c.IndexChats(context.TODO(), &groupme.IndexChatsQuery{
-		PerPage: 100, //TODO?
-	})
+func (c Client) IndexAllChats(ctx context.Context) ([]*groupme.Chat, error) {
+	var chats []*groupme.Chat
+	for page := 1; ; page++ {
+		batch, err := c.IndexChats(ctx, &groupme.IndexChatsQuery{Page: page, PerPage: 100})
+		if err != nil {
+			return nil, err
+		}
+		chats = append(chats, batch...)
+		if len(batch) < 100 {
+			return chats, nil
+		}
+	}
 }
 
 func (c Client) LoadMessagesAfter(groupID groupme.ID, lastMessageID string, lastMessageFromMe bool, private bool) ([]*groupme.Message, error) {

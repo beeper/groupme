@@ -18,10 +18,9 @@ package connector
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
-
-	"github.com/rs/zerolog"
 
 	"maunium.net/go/mautrix/bridgev2"
 	"maunium.net/go/mautrix/bridgev2/networkid"
@@ -41,14 +40,9 @@ type GMClient struct {
 	Meta      *UserLoginMetadata
 	Client    *groupmeext.Client
 
-	conn      *groupme.PushSubscription
-	connected bool
-
-	// pollCancel stops the REST polling loop started by Connect (see
-	// poll.go). Guarded by pollMu since Connect/Disconnect can race with
-	// bridgev2's own reconnect logic.
-	pollMu     sync.Mutex
-	pollCancel context.CancelFunc
+	sessionMu     sync.Mutex
+	sessionCancel context.CancelFunc
+	sessionDone   chan struct{}
 
 	// pollBackoff tracks, per chat ID, when polling may resume after that
 	// chat got a 429 (rate limited) from GroupMe. See poll.go. Guarded by
@@ -103,7 +97,12 @@ func (gc *GMConnector) LoadUserLogin(ctx context.Context, login *bridgev2.UserLo
 }
 
 func (gc *GMClient) Connect(ctx context.Context) {
-	log := gc.UserLogin.Log
+	gc.sessionMu.Lock()
+	defer gc.sessionMu.Unlock()
+	gc.disconnectLocked()
+	if ctx.Err() != nil {
+		return
+	}
 	if gc.Client == nil || gc.Meta.Token == "" {
 		gc.UserLogin.BridgeState.Send(status.BridgeState{
 			StateEvent: status.StateBadCredentials,
@@ -111,103 +110,69 @@ func (gc *GMClient) Connect(ctx context.Context) {
 		})
 		return
 	}
-
-	sub := groupme.NewPushSubscription(ctx)
-	gc.conn = &sub
-	fayeClient := gc.selectFayeClient(ctx, log)
-	gc.conn.StartListening(ctx, fayeClient)
-	gc.conn.AddFullHandler(gc)
-
-	// gc.conn.SubscribeToUser blocks on wray's Bayeux handshake, which
-	// retries internally with its own backoff and only returns once it
-	// succeeds -- there is no timeout. Against a degraded/blocked
-	// push.groupme.com this has been observed to block for over an hour
-	// straight (see NOTES.md "Faye/Bayeux push connection reliability").
-	// Previously this call sat directly in Connect before chat sync was
-	// kicked off, which meant a dead Faye server silently prevented
-	// *everything* below it -- including the initial chat sync and, now,
-	// REST polling (poll.go) -- from ever starting, even though neither
-	// actually depends on Faye. Run it in the background instead so Faye
-	// is purely an optional low-latency accelerator: when it's up, push
-	// events still get delivered near-instantly via HandleTextMessage
-	// etc; when it's down (as observed live), REST polling is the actual
-	// delivery mechanism and no longer waits on it.
+	runCtx, cancel := context.WithCancel(gc.UserLogin.Log.WithContext(gc.Main.br.BackgroundCtx))
+	gc.sessionCancel = cancel
+	done := make(chan struct{})
+	gc.sessionDone = done
+	gc.UserLogin.BridgeState.Send(status.BridgeState{StateEvent: status.StateConnecting})
 	go func() {
-		if err := gc.conn.SubscribeToUser(ctx, groupme.ID(gc.Meta.GMID), gc.Meta.Token); err != nil {
-			log.Err(err).Msg("Failed to subscribe to GroupMe push channel")
-		}
+		defer close(done)
+		defer cancel()
+		gc.runSession(runCtx)
 	}()
-
-	gc.connected = true
-	gc.UserLogin.BridgeState.Send(status.BridgeState{StateEvent: status.StateConnected})
-
-	// Portals are otherwise only ever created reactively from live push
-	// events (see handlegroupme.go); without this, a freshly logged-in user
-	// gets zero portals until something happens to trigger a push. Run
-	// asynchronously (and with a context detached from the one passed to
-	// Connect) so a slow/large sync doesn't hold up Connect's caller -- some
-	// callers (e.g. the unknown-error reconnect path) invoke Connect
-	// synchronously. See sync.go.
-	go gc.syncChats(context.WithoutCancel(ctx))
-
-	// REST polling fallback (poll.go): periodically re-lists chats and
-	// fetches new messages via the REST API, independent of whether Faye
-	// ever connects. This is what actually keeps messages flowing while
-	// Faye is degraded/down, and is harmless to run alongside a working
-	// Faye connection since bridgev2 dedupes incoming messages by ID
-	// (see poll.go for details). Its lifetime is tied to this Connect
-	// call via pollCancel, stopped in Disconnect.
-	gc.pollMu.Lock()
-	if gc.pollCancel != nil {
-		// Guard against a stray second Connect without an intervening
-		// Disconnect (shouldn't normally happen, but would otherwise leak
-		// a duplicate poll loop hitting the REST API twice as often).
-		gc.pollCancel()
-	}
-	pollCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
-	gc.pollCancel = cancel
-	gc.pollMu.Unlock()
-	go gc.pollMessages(pollCtx)
 }
 
-// selectFayeClient picks the real-time push transport to use for this
-// connection: GroupMe's push server (push.groupme.com/faye) is a Bayeux
-// service that historically supported HTTP long-polling
-// (github.com/karmanyaahm/wray, vendored at thirdparty/wray/), but current
-// GroupMe docs recommend websockets and long-polling handshakes have been
-// observed to hang/504 indefinitely in production (see NOTES.md). Websocket
-// is tried first via a one-shot reachability probe (dial + handshake, then
-// discarded); on any failure this falls back to the long-polling client
-// so a websocket-specific outage (or a network that blocks upgrades) doesn't
-// take down push entirely. If the probe succeeds, the same websocket client
-// is reused for the real connection instead of re-probing.
-func (gc *GMClient) selectFayeClient(ctx context.Context, log zerolog.Logger) groupme.FayeClient {
-	wsClient := groupmeext.NewWSFayeClient(log)
-
-	probeCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
-	defer cancel()
-	if err := wsClient.Probe(probeCtx); err != nil {
-		log.Warn().Err(err).Msg("GroupMe push websocket handshake failed, falling back to HTTP long-polling transport")
-		return groupmeext.NewFayeClient(log)
+func (gc *GMClient) runSession(ctx context.Context) {
+	me, err := gc.Client.MyUser(ctx)
+	if ctx.Err() != nil {
+		return
 	}
+	if err != nil {
+		state := status.BridgeState{StateEvent: status.StateUnknownError, Error: "groupme-connect-failed"}
+		var meta *groupme.Meta
+		if errors.As(err, &meta) && (meta.Code == 401 || meta.Code == 403) {
+			state.StateEvent = status.StateBadCredentials
+			state.Error = "groupme-session-expired"
+		}
+		gc.UserLogin.BridgeState.Send(state)
+		return
+	}
+	if me == nil || string(me.ID) != gc.Meta.GMID || string(me.ID) != string(gc.UserLogin.ID) {
+		gc.UserLogin.BridgeState.Send(status.BridgeState{StateEvent: status.StateBadCredentials, Error: "groupme-account-mismatch"})
+		return
+	}
+	sub := groupme.NewPushSubscription(ctx)
+	sub.AddFullHandler(gc)
+	sub.StartListening(ctx, groupmeext.NewWSFayeClient(gc.UserLogin.Log))
+	var workers sync.WaitGroup
+	workers.Add(3)
+	go func() {
+		defer workers.Done()
+		if err := sub.SubscribeToUser(ctx, groupme.ID(gc.Meta.GMID), gc.Meta.Token); err != nil && ctx.Err() == nil {
+			gc.UserLogin.Log.Err(err).Msg("Failed to subscribe to GroupMe push channel")
+		}
+	}()
+	go func() { defer workers.Done(); gc.syncChats(ctx) }()
+	go func() { defer workers.Done(); gc.pollMessages(ctx) }()
+	gc.UserLogin.BridgeState.Send(status.BridgeState{StateEvent: status.StateConnected})
+	<-ctx.Done()
+	sub.Wait()
+	workers.Wait()
+}
 
-	log.Info().Msg("Using GroupMe push websocket transport")
-	return wsClient
+func (gc *GMClient) disconnectLocked() {
+	if gc.sessionCancel != nil {
+		gc.sessionCancel()
+		<-gc.sessionDone
+		gc.sessionCancel = nil
+		gc.sessionDone = nil
+	}
 }
 
 func (gc *GMClient) Disconnect() {
-	// The wray Faye client doesn't currently expose an explicit disconnect;
-	// dropping the reference lets the listener goroutines exit once the
-	// underlying HTTP long-poll requests fail. See NOTES.md.
-	gc.conn = nil
-	gc.connected = false
-
-	gc.pollMu.Lock()
-	if gc.pollCancel != nil {
-		gc.pollCancel()
-		gc.pollCancel = nil
-	}
-	gc.pollMu.Unlock()
+	gc.sessionMu.Lock()
+	defer gc.sessionMu.Unlock()
+	gc.disconnectLocked()
 }
 
 func (gc *GMClient) IsLoggedIn() bool {

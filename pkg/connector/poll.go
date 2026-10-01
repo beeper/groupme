@@ -151,7 +151,7 @@ type pollTarget struct {
 func (gc *GMClient) pollOnce(ctx context.Context, log zerolog.Logger) {
 	var targets []pollTarget
 
-	groups, err := gc.Client.IndexAllGroups()
+	groups, err := gc.Client.IndexAllGroups(ctx)
 	if err != nil {
 		log.Err(err).Msg("Failed to list groups while polling for new messages")
 	} else {
@@ -167,7 +167,7 @@ func (gc *GMClient) pollOnce(ctx context.Context, log zerolog.Logger) {
 		return
 	}
 
-	chats, err := gc.Client.IndexAllChats()
+	chats, err := gc.Client.IndexAllChats(ctx)
 	if err != nil {
 		log.Err(err).Msg("Failed to list DM chats while polling for new messages")
 	} else {

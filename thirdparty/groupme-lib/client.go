@@ -9,6 +9,7 @@ import (
 	"io/ioutil"
 	"net/http"
 	"net/url"
+	"time"
 )
 
 // GroupMeAPIBase - Endpoints are added on to this to get the full URI.
@@ -27,7 +28,7 @@ type Client struct {
 func NewClient(authToken string) *Client {
 	return &Client{
 		// TODO: enable transport information passing in
-		httpClient:         &http.Client{},
+		httpClient:         &http.Client{Timeout: 30 * time.Second},
 		endpointBase:       GroupMeAPIBase,
 		authorizationToken: authToken,
 	}
@@ -126,10 +127,7 @@ func (c Client) do(ctx context.Context, req *http.Request, i interface{}) error 
 }
 
 func (c Client) doWithAuthToken(ctx context.Context, req *http.Request, i interface{}) error {
-	URL := req.URL
-	query := URL.Query()
-	query.Set("token", c.authorizationToken)
-	URL.RawQuery = query.Encode()
+	req.Header.Set("X-Access-Token", c.authorizationToken)
 
 	return c.do(ctx, req, i)
 }

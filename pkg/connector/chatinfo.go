@@ -153,7 +153,7 @@ func (gc *GMClient) GetChatInfo(ctx context.Context, portal *bridgev2.Portal) (*
 		// see NOTES.md -- does NOT necessarily include everyone there's an
 		// active DM thread with, causing DM room names to fall back to a raw
 		// numeric ID for such people.
-		if chats, err := gc.Client.IndexAllChats(); err == nil {
+		if chats, err := gc.Client.IndexAllChats(ctx); err == nil {
 			for _, c := range chats {
 				if c.OtherUser.ID == gmid {
 					name = c.OtherUser.Name

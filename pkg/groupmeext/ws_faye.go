@@ -103,7 +103,7 @@ type bayeuxAdvice struct {
 
 // Channel, Data, Ext, and Error implement groupme.PushMessage, which lets a
 // *bayeuxMessage be handed directly to GroupMe's HandlerAll dispatch
-// (via PushSubscription.channel) and to groupme.OutMsgProc for auth, exactly
+// (via PushSubscription.channel), exactly
 // like the wray-backed long-polling messages already do.
 func (m *bayeuxMessage) Channel() string { return m.Chan }
 func (m *bayeuxMessage) Data() map[string]interface{} {
@@ -135,7 +135,7 @@ type WSFayeClient struct {
 	mu       sync.Mutex
 	conn     *websocket.Conn
 	clientID string
-	subs     map[string]chan groupme.PushMessage
+	subs     map[string]pushSubscription
 
 	pendingMu sync.Mutex
 	pending   map[string]chan *bayeuxMessage
@@ -153,6 +153,11 @@ type WSFayeClient struct {
 	nextDegradedAt time.Time
 }
 
+type pushSubscription struct {
+	messages chan groupme.PushMessage
+	token    string
+}
+
 var _ groupme.FayeClient = (*WSFayeClient)(nil)
 
 // NewWSFayeClient creates a websocket-based Faye/Bayeux client for GroupMe's
@@ -162,7 +167,7 @@ func NewWSFayeClient(logger zerolog.Logger) *WSFayeClient {
 	return &WSFayeClient{
 		url:  wsPushServer,
 		log:  logger.With().Str("component", "WSFayeClient").Logger(),
-		subs: map[string]chan groupme.PushMessage{},
+		subs: map[string]pushSubscription{},
 		// Starts the "how long has this been down" clock at construction,
 		// not the zero value -- otherwise a connection that fails on its
 		// very first attempt would immediately look like it's been down
@@ -250,7 +255,7 @@ func decodeBayeuxFrame(raw []byte) ([]*bayeuxMessage, error) {
 // PushSubscription.StartListening reads from and dispatches into
 // RealTimeHandlers/HandlerAll -- the same path the long-polling transport
 // uses.
-func (c *WSFayeClient) handleIncoming(m *bayeuxMessage) {
+func (c *WSFayeClient) handleIncoming(ctx context.Context, m *bayeuxMessage) {
 	if m.ReqID != "" {
 		if ch, ok := c.takePending(m.ReqID); ok {
 			ch <- m
@@ -268,12 +273,10 @@ func (c *WSFayeClient) handleIncoming(m *bayeuxMessage) {
 		return
 	}
 	select {
-	case sub <- m:
-	default:
-		// Don't block the read loop if the consumer is momentarily slow;
-		// PushSubscription's dispatch goroutine normally drains this fast.
-		go func() { sub <- m }()
+	case sub.messages <- m:
+	case <-ctx.Done():
 	}
+
 }
 
 func (c *WSFayeClient) readLoop(ctx context.Context, conn *websocket.Conn) error {
@@ -288,7 +291,7 @@ func (c *WSFayeClient) readLoop(ctx context.Context, conn *websocket.Conn) error
 			continue
 		}
 		for _, m := range msgs {
-			c.handleIncoming(m)
+			c.handleIncoming(ctx, m)
 		}
 	}
 }
@@ -331,11 +334,6 @@ func (c *WSFayeClient) handshake(ctx context.Context, conn *websocket.Conn) erro
 	}
 }
 
-// subscribeOnce sends a single /meta/subscribe request and waits for the
-// server's acknowledgement. The auth ext field is populated by
-// groupme.OutMsgProc, reusing the exact logic/pattern already verified for
-// the long-polling path (see groupme-lib's real_time.go) instead of
-// reimplementing the access_token/timestamp handling here.
 func (c *WSFayeClient) subscribeOnce(ctx context.Context, channel string) error {
 	conn := c.getConn()
 	if conn == nil {
@@ -349,7 +347,14 @@ func (c *WSFayeClient) subscribeOnce(ctx context.Context, channel string) error 
 		ClientID:     c.getClientID(),
 		Subscription: channel,
 	}
-	groupme.OutMsgProc(msg) // injects ext.access_token / ext.timestamp
+	c.mu.Lock()
+	subscription, ok := c.subs[channel]
+	c.mu.Unlock()
+	if !ok {
+		return fmt.Errorf("unknown subscription")
+	}
+	msg.Ext()["access_token"] = subscription.token
+	msg.Ext()["timestamp"] = time.Now().Unix()
 
 	respCh := c.registerPending(id)
 
@@ -377,7 +382,7 @@ func (c *WSFayeClient) subscribeOnce(ctx context.Context, channel string) error 
 // has ever been called for, after a fresh handshake (e.g. following a
 // reconnect). Each subscription is retried independently and indefinitely,
 // mirroring wray's resubscribeAll behavior for the long-polling transport.
-func (c *WSFayeClient) resubscribeAll(ctx context.Context) {
+func (c *WSFayeClient) resubscribeAll(ctx context.Context, workers *sync.WaitGroup) {
 	c.mu.Lock()
 	channels := make([]string, 0, len(c.subs))
 	for ch := range c.subs {
@@ -387,7 +392,9 @@ func (c *WSFayeClient) resubscribeAll(ctx context.Context) {
 
 	for _, channel := range channels {
 		channel := channel
+		workers.Add(1)
 		go func() {
+			defer workers.Done()
 			for {
 				if ctx.Err() != nil {
 					return
@@ -567,14 +574,16 @@ func (c *WSFayeClient) connectAndRun(ctx context.Context) (handshook bool, err e
 	conn.SetReadLimit(1 << 20) // 1MiB; Bayeux/GroupMe push frames are small JSON
 
 	runCtx, cancelRun := context.WithCancel(ctx)
-	defer cancelRun()
-	defer conn.CloseNow()
+	var workers sync.WaitGroup
 
 	c.mu.Lock()
 	c.conn = conn
 	c.clientID = ""
 	c.mu.Unlock()
 	defer func() {
+		cancelRun()
+		conn.CloseNow()
+		workers.Wait()
 		c.mu.Lock()
 		c.conn = nil
 		c.clientID = ""
@@ -582,7 +591,8 @@ func (c *WSFayeClient) connectAndRun(ctx context.Context) (handshook bool, err e
 	}()
 
 	readErrCh := make(chan error, 1)
-	go func() { readErrCh <- c.readLoop(runCtx, conn) }()
+	workers.Add(1)
+	go func() { defer workers.Done(); readErrCh <- c.readLoop(runCtx, conn) }()
 
 	if err := c.handshake(runCtx, conn); err != nil {
 		return false, fmt.Errorf("handshake: %w", err)
@@ -597,15 +607,19 @@ func (c *WSFayeClient) connectAndRun(ctx context.Context) (handshook bool, err e
 	// the same millisecond as the disconnect itself).
 	defer c.markConnected()
 
-	c.resubscribeAll(runCtx)
+	c.resubscribeAll(runCtx, &workers)
 
 	connectErrCh := make(chan error, 1)
-	go func() { connectErrCh <- c.connectLoop(runCtx, conn) }()
+	workers.Add(1)
+	go func() { defer workers.Done(); connectErrCh <- c.connectLoop(runCtx, conn) }()
 
 	pingErrCh := make(chan error, 1)
-	go func() { pingErrCh <- c.pingLoop(runCtx, conn) }()
+	workers.Add(1)
+	go func() { defer workers.Done(); pingErrCh <- c.pingLoop(runCtx, conn) }()
 
 	select {
+	case <-ctx.Done():
+		return true, ctx.Err()
 	case err := <-readErrCh:
 		return true, fmt.Errorf("read loop: %w", err)
 	case err := <-connectErrCh:
@@ -615,67 +629,17 @@ func (c *WSFayeClient) connectAndRun(ctx context.Context) (handshook bool, err e
 	}
 }
 
-// Probe performs a one-shot dial + Bayeux handshake against the push
-// server to check reachability/protocol support, without registering any
-// subscriptions or starting the long-running Listen loop. It's used by
-// pkg/connector/client.go (selectFayeClient) to decide whether to use this
-// websocket transport or fall back to the HTTP long-polling client
-// (thirdparty/wray/). The probed connection is closed before returning;
-// Listen() dials its own connection independently of anything done here.
-func (c *WSFayeClient) Probe(ctx context.Context) error {
-	dialCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	conn, _, err := websocket.Dial(dialCtx, c.url, &websocket.DialOptions{
-		HTTPClient: wsDialHTTPClient,
-	})
-	cancel()
-	if err != nil {
-		return fmt.Errorf("dialing %s: %w", c.url, err)
-	}
-	defer conn.CloseNow()
-	conn.SetReadLimit(1 << 20)
-
-	runCtx, cancelRun := context.WithCancel(ctx)
-	defer cancelRun()
-
-	c.mu.Lock()
-	c.conn = conn
-	c.clientID = ""
-	c.mu.Unlock()
-	defer func() {
-		c.mu.Lock()
-		c.conn = nil
-		c.clientID = ""
-		c.mu.Unlock()
-	}()
-
-	readErrCh := make(chan error, 1)
-	go func() { readErrCh <- c.readLoop(runCtx, conn) }()
-
-	hsErrCh := make(chan error, 1)
-	go func() { hsErrCh <- c.handshake(runCtx, conn) }()
-
-	select {
-	case err := <-hsErrCh:
-		return err
-	case err := <-readErrCh:
-		return fmt.Errorf("read loop ended before handshake completed: %w", err)
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-}
-
-// Listen implements groupme.FayeClient. It's blocking and reconnects
-// (dial + handshake + resubscribe) with exponential backoff whenever the
-// connection fails or drops, since GroupMe's push websocket has no
-// documented "you're done" signal and callers of this package (see
-// GMClient.Disconnect in pkg/connector/client.go) currently just drop their
-// reference to the client rather than signaling shutdown -- matching the
-// pre-existing wray-based long-polling client's contract.
-func (c *WSFayeClient) Listen() {
+func (c *WSFayeClient) Listen(ctx context.Context) {
 	backoff := time.Second
 	const maxBackoff = 60 * time.Second
 	for {
-		handshook, err := c.connectAndRun(context.Background())
+		if ctx.Err() != nil {
+			return
+		}
+		handshook, err := c.connectAndRun(ctx)
+		if ctx.Err() != nil {
+			return
+		}
 		if handshook {
 			// A connection that actually came up resets the backoff, so a
 			// routine drop after hours of uptime reconnects in ~1s rather
@@ -684,7 +648,11 @@ func (c *WSFayeClient) Listen() {
 		}
 		c.maybeLogSustainedDegradation()
 		c.log.Warn().Err(err).Dur("retry_in", backoff).Msg("GroupMe push websocket disconnected, reconnecting")
-		time.Sleep(backoff)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(backoff):
+		}
 		backoff *= 2
 		if backoff > maxBackoff {
 			backoff = maxBackoff
@@ -692,25 +660,26 @@ func (c *WSFayeClient) Listen() {
 	}
 }
 
-// WaitSubscribe implements groupme.FayeClient. It registers channel-level
-// interest immediately (so a concurrent/future reconnect's resubscribeAll
-// picks it up) and blocks, retrying, until an active connection actually
-// confirms the subscription -- matching wray's WaitSubscribe semantics for
-// the long-polling transport.
-func (c *WSFayeClient) WaitSubscribe(channel string, msgChannel chan groupme.PushMessage) {
+func (c *WSFayeClient) WaitSubscribe(ctx context.Context, channel, token string, msgChannel chan groupme.PushMessage) error {
 	c.mu.Lock()
-	c.subs[channel] = msgChannel
+	c.subs[channel] = pushSubscription{messages: msgChannel, token: token}
 	c.mu.Unlock()
-
 	for {
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-		err := c.waitConnectedAndSubscribe(ctx, channel)
+		attemptCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+		err := c.waitConnectedAndSubscribe(attemptCtx, channel)
 		cancel()
 		if err == nil {
-			return
+			return nil
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
 		}
 		c.log.Warn().Err(err).Str("channel", channel).Msg("Failed to subscribe to GroupMe push channel, retrying")
-		time.Sleep(time.Second)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Second):
+		}
 	}
 }
 
