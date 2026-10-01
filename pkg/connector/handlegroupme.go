@@ -72,6 +72,10 @@ func (gc *GMClient) shouldRefreshGhost(gmid groupme.ID) bool {
 }
 
 func (gc *GMClient) HandleTextMessage(msg groupme.Message) {
+	gc.Main.br.QueueRemoteEvent(gc.UserLogin, gc.makeRemoteMessage(msg))
+}
+
+func (gc *GMClient) makeRemoteMessage(msg groupme.Message) *simplevent.Message[*groupme.Message] {
 	portalKey := gc.portalKeyForMessage(&msg)
 	sender := bridgev2.EventSender{
 		IsFromMe: msg.UserID == groupme.ID(gc.Meta.GMID),
@@ -169,7 +173,7 @@ func (gc *GMClient) HandleTextMessage(msg groupme.Message) {
 		}(msg.UserID, msg.Name, msg.AvatarURL, MakeMessageID(msg.ID))
 	}
 
-	gc.Main.br.QueueRemoteEvent(gc.UserLogin, &simplevent.Message[*groupme.Message]{
+	return &simplevent.Message[*groupme.Message]{
 		EventMeta: simplevent.EventMeta{
 			Type:         bridgev2.RemoteEventMessage,
 			PortalKey:    portalKey,
@@ -182,7 +186,7 @@ func (gc *GMClient) HandleTextMessage(msg groupme.Message) {
 		ConvertMessageFunc: func(ctx context.Context, portal *bridgev2.Portal, intent bridgev2.MatrixAPI, data *groupme.Message) (*bridgev2.ConvertedMessage, error) {
 			return convertGroupMeMessage(ctx, portal, intent, data, gc.Client, gc.Meta.Token)
 		},
-	})
+	}
 }
 
 // convertGroupMeMessage builds the Matrix message parts for an incoming

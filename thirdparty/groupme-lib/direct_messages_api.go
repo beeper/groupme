@@ -76,7 +76,7 @@ func (c *Client) IndexDirectMessages(ctx context.Context, otherUserID string, re
 	query.Set("other_user_id", otherUserID)
 	if req != nil {
 		if req.BeforeID != "" {
-			query.Add("before_ID", req.BeforeID.String())
+			query.Add("before_id", req.BeforeID.String())
 		}
 		if req.SinceID != "" {
 			query.Add("since_id", req.SinceID.String())

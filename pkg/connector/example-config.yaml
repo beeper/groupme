@@ -11,5 +11,5 @@ poll:
     # delivered by both are only bridged once (deduplicated by message ID).
     enabled: true
     # How often, in seconds, to poll each known chat for new messages.
-    # Values below 10 are clamped up to 10.
-    interval_seconds: 20
+    # Values below 30 are clamped up to 30.
+    interval_seconds: 60

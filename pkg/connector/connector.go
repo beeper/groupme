@@ -31,16 +31,18 @@ import (
 type GMConnector struct {
 	br     *bridgev2.Bridge
 	Config Config
+	pollDB *pollStore
 }
 
 var _ bridgev2.NetworkConnector = (*GMConnector)(nil)
 
 func (gc *GMConnector) Init(bridge *bridgev2.Bridge) {
 	gc.br = bridge
+	gc.pollDB = newPollStore(bridge.DB.Database, bridge.ID, bridge.Log)
 }
 
 func (gc *GMConnector) Start(ctx context.Context) error {
-	return nil
+	return gc.pollDB.Upgrade(ctx)
 }
 
 func (gc *GMConnector) GetName() bridgev2.BridgeName {

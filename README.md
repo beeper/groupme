@@ -14,8 +14,9 @@ when sending bold text; the bridge now converts Matrix HTML to plain text
 without introducing Markdown markers. Reaction conversion normalizes emoji
 presentation variants and rejects unsupported emoji instead of substituting a
 heart. Both fixes have regression coverage using the observed Beeper payloads.
-Media, reactions, DMs, and history recovery still need
-validation on this branch. The upstream author's earlier observations below
+Live testing also verified image/PDF uploads byte for byte, PDF filenames,
+thumbs-up creation/removal, and incoming media visibility in both clients.
+DMs and broader feature coverage still need validation. The upstream author's earlier observations below
 are useful background, not validation of this candidate.
 
 ## Login and local development
@@ -56,6 +57,24 @@ credentials; the launcher preserves them and doesn't generate another
 registration. Keep the registration and runtime across source rebuilds.
 The legacy bridge's database/config migration has not been implemented or
 rehearsed; use a dedicated new runtime for development.
+
+## Missed-message recovery
+
+REST polling now checkpoints each account and conversation in SQLite. It
+fetches older pages until it reaches the previous checkpoint, saves the gap,
+and sends pending messages oldest first. The checkpoint advances after the
+gap has Matrix mappings; live push messages cannot move it past missing ones.
+Fetched pages and pending deliveries survive restarts. Recovery fetches at
+most three extra pages and processes at most 100 pending messages per chat
+per poll, with rate-limit backoff and pauses between extra API requests.
+
+New conversations start with the latest 20 messages. Existing conversations
+without a checkpoint are scanned back to their oldest known message to recover
+gaps from the previous poller. This is catch-up for missed messages; loading
+older history on demand is still unimplemented. Polling must stay enabled for
+recovery. Reactions are refreshed on the latest page; older reaction changes
+still depend on push events. Recovery does not yet repair partially delivered
+multi-part messages or media failures swallowed by the existing converter.
 
 ## Upstream validation reported by the fork author
 

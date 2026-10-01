@@ -41,8 +41,8 @@ type PollConfig struct {
 	// working, since bridgev2 dedupes incoming messages by ID.
 	Enabled bool `yaml:"enabled"`
 	// IntervalSeconds is how often, in seconds, each known chat is polled
-	// for new messages. Values below 10 are clamped up to 10 to avoid
-	// hammering GroupMe's API; unset or <= 0 defaults to 20.
+	// for new messages. Values below 30 are clamped up to 30 to avoid
+	// hammering GroupMe's API; unset or <= 0 defaults to 60.
 	IntervalSeconds int `yaml:"interval_seconds"`
 }
 
