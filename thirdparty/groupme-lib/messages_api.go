@@ -128,7 +128,9 @@ The placeholder should be a high-point/invisible UTF-8 character.
 func (c *Client) CreateMessage(ctx context.Context, groupID ID, m *Message) (*Message, error) {
 	URL := fmt.Sprintf(c.endpointBase+createMessagesEndpoint, groupID)
 
-	m.SourceGUID = uuid.New().String()
+	if m.SourceGUID == "" {
+		m.SourceGUID = uuid.New().String()
+	}
 	var data = struct {
 		Message *Message `json:"message"`
 	}{

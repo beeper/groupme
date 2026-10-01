@@ -54,7 +54,7 @@ var fileMimes = map[string]event.CapabilitySupportLevel{
 }
 
 var roomCaps = &event.RoomFeatures{
-	ID: "fi.mau.groupme.capabilities.2026_10_01",
+	ID: "fi.mau.groupme.capabilities.2026_10_01.2",
 	File: event.FileFeatureMap{
 		event.MsgImage: {
 			MimeTypes: imageMimes,
@@ -72,7 +72,6 @@ var roomCaps = &event.RoomFeatures{
 			MaxSize:   MaxFileSize,
 		},
 	},
-	// Outgoing (Matrix -> GroupMe) support is currently text-only; see NOTES.md.
 	Reply:            event.CapLevelPartialSupport,
 	Reaction:         event.CapLevelFullySupported,
 	ReactionCount:    1,
@@ -80,6 +79,18 @@ var roomCaps = &event.RoomFeatures{
 	LocationMessage:  event.CapLevelPartialSupport,
 }
 
+var dmRoomCaps = func() *event.RoomFeatures {
+	caps := roomCaps.Clone()
+	caps.ID += ".dm"
+	delete(caps.File, event.MsgFile)
+	return caps
+}()
+
 func (gc *GMClient) GetCapabilities(ctx context.Context, portal *bridgev2.Portal) *event.RoomFeatures {
+	if portal != nil {
+		if portalType, _ := ParsePortalID(portal.ID); portalType == PortalTypeDM {
+			return dmRoomCaps
+		}
+	}
 	return roomCaps
 }

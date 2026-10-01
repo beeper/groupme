@@ -110,7 +110,9 @@ The character map is an array of arrays containing rune data
 func (c *Client) CreateDirectMessage(ctx context.Context, m *Message) (*Message, error) {
 	URL := fmt.Sprintf(c.endpointBase + createDirectMessageEndpoint)
 
-	m.SourceGUID = uuid.New().String()
+	if m.SourceGUID == "" {
+		m.SourceGUID = uuid.New().String()
+	}
 	var data = struct {
 		DirectMessage *Message `json:"direct_message,omitempty"`
 	}{

@@ -7,6 +7,7 @@ toolchain go1.27.1
 require (
 	github.com/beeper/groupme-lib v0.2.1-0.20221021205945-8f23e04eea71
 	github.com/coder/websocket v1.8.15
+	github.com/google/uuid v1.2.0
 	github.com/karmanyaahm/wray v0.0.0-20210303233435-756d58657c14
 	github.com/rs/zerolog v1.35.1
 	go.mau.fi/util v0.10.1
@@ -16,7 +17,6 @@ require (
 require (
 	filippo.io/edwards25519 v1.2.0 // indirect
 	github.com/coreos/go-systemd/v22 v22.7.0 // indirect
-	github.com/google/uuid v1.2.0 // indirect
 	github.com/gorilla/mux v1.8.1 // indirect
 	github.com/lib/pq v1.12.3 // indirect
 	github.com/mattn/go-colorable v0.1.14 // indirect

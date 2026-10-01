@@ -36,16 +36,15 @@ func ChatRequiresApproval(ctx context.Context, token, conversationID string) (bo
 		return false, fmt.Errorf("fetching chat: %w", err)
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		return false, fmt.Errorf("fetching chat: HTTP %d: %.200s", resp.StatusCode, body)
+		return false, fmt.Errorf("fetching chat: HTTP %d", resp.StatusCode)
 	}
 	var parsed struct {
 		Response struct {
 			RequiresApproval bool `json:"requires_approval"`
 		} `json:"response"`
 	}
-	if err := json.Unmarshal(body, &parsed); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1024*1024)).Decode(&parsed); err != nil {
 		return false, fmt.Errorf("decoding chat: %w", err)
 	}
 	return parsed.Response.RequiresApproval, nil
@@ -64,8 +63,7 @@ func ApproveChat(ctx context.Context, token, conversationID string) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("approving chat: HTTP %d: %.200s", resp.StatusCode, body)
+		return fmt.Errorf("approving chat: HTTP %d", resp.StatusCode)
 	}
 	return nil
 }

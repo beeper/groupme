@@ -19,6 +19,13 @@ thumbs-up creation/removal, and incoming media visibility in both clients.
 DMs and broader feature coverage still need validation. The upstream author's earlier observations below
 are useful background, not validation of this candidate.
 
+Automated DM tests cover incoming/echo routing, account-scoped portals,
+request approval, text sends, reaction creation/removal, cancellation, and
+provider failures. DM capabilities omit unsupported generic file uploads.
+Both groups and DMs retain the same native request ID when retrying a Matrix
+event and reject malformed send responses without creating an empty mapping.
+These tests use simulated responses; live two-account DM testing is still pending.
+
 ## Login and local development
 
 In Beeper, choose the **GroupMe** login flow and sign in at `web.groupme.com`.
