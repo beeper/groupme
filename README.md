@@ -15,9 +15,20 @@ background, not validation of this candidate.
 
 In Beeper, choose the **GroupMe** login flow and sign in at `web.groupme.com`.
 The client collects the GroupMe session token using bridgev2's webview login
-contract. Google sign-in is handled by the GroupMe website; compatibility with
-Beeper's embedded browser still needs a live test. **GroupMe access token** is
-also available for clients without webview support.
+contract. **Google sign-in was rejected by the embedded browser in live testing**
+with "This browser or app may not be secure". Use **GroupMe access token** for
+Google accounts:
+
+1. Sign in with Google at <https://web.groupme.com/> in regular Chrome.
+2. Open DevTools → Application → Local Storage → `https://web.groupme.com`.
+3. Copy the `access_token` value.
+4. In Beeper's Login options, choose **GroupMe access token** and paste it there.
+
+This imports the GroupMe session without collecting Google credentials. Keep
+the token out of logs, issue reports, and chat messages. Developer tokens from
+`dev.groupme.com` also work, but its current login form asks for a GroupMe
+password. A seamless Google login will require a supported external-browser
+handoff; the embedded flow is not sufficient.
 
 Build with `BUILD_TAGS=goolm ./build.sh`, or `docker build --build-arg
 COMMIT_HASH=$(git rev-parse HEAD) -t groupme-dev .`. Run source checks with

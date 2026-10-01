@@ -41,7 +41,7 @@ func (gc *GMConnector) GetLoginFlows() []bridgev2.LoginFlow {
 		ID:          LoginFlowIDWeb,
 	}, {
 		Name:        "GroupMe access token",
-		Description: "Log in with a GroupMe developer access token",
+		Description: "Use a session from your browser, including Google sign-in",
 		ID:          LoginFlowIDToken,
 	}}
 }
@@ -77,7 +77,7 @@ func (gl *GMLogin) Start(ctx context.Context) (*bridgev2.LoginStep, error) {
 		return &bridgev2.LoginStep{
 			Type:         bridgev2.LoginStepTypeCookies,
 			StepID:       "fi.mau.groupme.login.web",
-			Instructions: "Sign in to your GroupMe account.",
+			Instructions: "Sign in to your GroupMe account. If Google blocks this browser, close this window and choose GroupMe access token from Login options to use your normal browser instead.",
 			CookiesParams: &bridgev2.LoginCookiesParams{
 				URL:               "https://web.groupme.com/",
 				WaitForURLPattern: `^https://web\.groupme\.com/(?:[^?#]*)(?:[?#].*)?$`,
@@ -96,13 +96,13 @@ func (gl *GMLogin) Start(ctx context.Context) (*bridgev2.LoginStep, error) {
 	return &bridgev2.LoginStep{
 		Type:         bridgev2.LoginStepTypeUserInput,
 		StepID:       "fi.mau.groupme.login.enter_token",
-		Instructions: "Enter your GroupMe access token from the Access Token page at dev.groupme.com.",
+		Instructions: "Sign in at https://web.groupme.com/ in your normal browser. For Google sign-in, use this browser rather than the embedded login window. In Chrome, open DevTools, then Application, Local Storage, and https://web.groupme.com. Copy the access_token value and paste it below. You can also use a developer token from dev.groupme.com.",
 		UserInputParams: &bridgev2.LoginUserInputParams{
 			Fields: []bridgev2.LoginInputDataField{{
 				Type:        bridgev2.LoginInputFieldTypeToken,
 				ID:          "token",
 				Name:        "Access token",
-				Description: "GroupMe API access token",
+				Description: "GroupMe session token (access_token)",
 			}},
 		},
 	}, nil
