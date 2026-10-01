@@ -54,7 +54,7 @@ var fileMimes = map[string]event.CapabilitySupportLevel{
 }
 
 var roomCaps = &event.RoomFeatures{
-	ID: "fi.mau.groupme.capabilities.2026_10_01.2",
+	ID: "fi.mau.groupme.capabilities.2026_10_01.3",
 	File: event.FileFeatureMap{
 		event.MsgImage: {
 			MimeTypes: imageMimes,
@@ -72,7 +72,7 @@ var roomCaps = &event.RoomFeatures{
 			MaxSize:   MaxFileSize,
 		},
 	},
-	Reply:            event.CapLevelPartialSupport,
+	Reply:            event.CapLevelFullySupported,
 	Reaction:         event.CapLevelFullySupported,
 	ReactionCount:    1,
 	AllowedReactions: slices.Sorted(maps.Keys(groupme.UnicodeLikeIcons)),

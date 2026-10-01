@@ -250,6 +250,8 @@ type Attachment struct {
 	Placeholder     string         `json:"placeholder,omitempty"`
 	Charmap         [][]int        `json:"charmap,omitempty"`
 	ReplyID         ID             `json:"reply_id,omitempty"`
+	BaseReplyID     ID             `json:"base_reply_id,omitempty"`
+	UserID          ID             `json:"user_id,omitempty"`
 	// PollID: local addition, present on a "poll" attachment. See the
 	// Poll attachmentType constant's doc comment.
 	PollID string `json:"poll_id,omitempty"`

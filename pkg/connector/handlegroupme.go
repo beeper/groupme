@@ -200,6 +200,12 @@ func (gc *GMClient) makeRemoteMessage(msg groupme.Message) *simplevent.Message[*
 func convertGroupMeMessage(ctx context.Context, portal *bridgev2.Portal, intent bridgev2.MatrixAPI, msg *groupme.Message, client *groupmeext.Client, token string) (*bridgev2.ConvertedMessage, error) {
 	cm := &bridgev2.ConvertedMessage{}
 	log := zerolog.Ctx(ctx)
+	for _, att := range msg.Attachments {
+		if att != nil && att.Type == groupme.Reply && att.ReplyID != "" {
+			cm.ReplyTo = &networkid.MessageOptionalPartID{MessageID: MakeMessageID(att.ReplyID)}
+			break
+		}
+	}
 
 	// Poll lifecycle messages (poll.created/poll.reminder/poll.finished)
 	// carry their real content in Event.Data, not as a normal attachment
@@ -221,6 +227,9 @@ func convertGroupMeMessage(ctx context.Context, portal *bridgev2.Portal, intent 
 	}
 
 	for i, att := range msg.Attachments {
+		if att == nil {
+			continue
+		}
 		partID := networkid.PartID(fmt.Sprintf("attachment-%d", i))
 		var content *event.MessageEventContent
 
@@ -336,14 +345,11 @@ func convertGroupMeMessage(ctx context.Context, portal *bridgev2.Portal, intent 
 			// part (e.g. Event was nil/malformed for some reason), so
 			// there's nothing useful to do with just the poll ID here.
 			continue
+		case groupme.Reply:
+			continue
 
 		default:
-			// Mentions/Emoji/Reply attachments ride alongside msg.Text
-			// rather than needing their own message part (mentions are
-			// just formatting metadata over the text; a reply's quoted
-			// content isn't bridged as a separate part here -- see
-			// NOTES.md "Known gaps"), and anything genuinely unknown is
-			// safe to just skip rather than fail the whole message over.
+			// Mentions and custom emoji retain their plaintext fallback.
 			continue
 		}
 

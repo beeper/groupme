@@ -83,6 +83,9 @@ var groupmeHTMLParser = &format.HTMLParser{
 // for the full investigation and groupmeext.UploadVideo/UploadFile for
 // the resulting implementation.
 func (gc *GMClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.MatrixMessage) (*bridgev2.MatrixMessageResponse, error) {
+	if msg.ReplyTo != nil && (msg.ReplyTo.ID == "" || msg.ReplyTo.Room != msg.Portal.PortalKey) {
+		return nil, fmt.Errorf("GroupMe replies must target a message in the same conversation")
+	}
 	content := msg.Content
 	text := content.Body
 	if content.Format == event.FormatHTML && content.FormattedBody != "" {
@@ -150,6 +153,15 @@ func (gc *GMClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.Matri
 		}
 		out.Attachments = []*groupme.Attachment{attachment}
 		out.Text = ""
+	}
+
+	if msg.ReplyTo != nil {
+		out.Attachments = append(out.Attachments, &groupme.Attachment{
+			Type:        groupme.Reply,
+			ReplyID:     ParseMessageID(msg.ReplyTo.ID),
+			BaseReplyID: ParseMessageID(msg.ReplyTo.ID),
+			UserID:      ParseUserID(msg.ReplyTo.SenderID),
+		})
 	}
 
 	var sent *groupme.Message

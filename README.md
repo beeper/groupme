@@ -25,6 +25,12 @@ provider failures. DM capabilities omit unsupported generic file uploads.
 Both groups and DMs retain the same native request ID when retrying a Matrix
 event and reject malformed send responses without creating an empty mapping.
 These tests use simulated responses; live two-account DM testing is still pending.
+The native `source_guid` is a correlation ID, not a durable idempotency guarantee:
+live testing found that GroupMe accepts it again after a delay. Crash-safe
+outgoing retry reconciliation still requires local send tracking.
+
+Replies preserve their native parent in both directions, including replies
+with attachments. Cross-conversation replies are rejected before upload or send.
 
 ## Login and local development
 
