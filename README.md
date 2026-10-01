@@ -7,9 +7,13 @@ A Matrix–GroupMe puppeting bridge, built on [mautrix-go bridgev2](https://gith
 which continues the original Beeper bridge's Git history. This branch adds
 Beeper webview login, account-scoped push authentication, cancellable connection
 workers, and paginated conversation discovery. These changes have source-level
-regression coverage; current-branch GroupMe/Beeper login and delivery still need
-live verification. The upstream author's earlier observations below are useful
-background, not validation of this candidate.
+regression coverage. Local self-host testing has verified token login, encrypted
+text delivery in both directions, duplicate suppression, and restart with the
+same saved login and room. Outbound testing exposed unwanted Markdown markers
+when sending bold text; the bridge now uses Matrix's plain-text body, covered by
+a regression test. Media, reactions, DMs, and history recovery still need
+validation on this branch. The upstream author's earlier observations below
+are useful background, not validation of this candidate.
 
 ## Login and local development
 

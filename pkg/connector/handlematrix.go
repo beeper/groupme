@@ -29,7 +29,6 @@ import (
 	"maunium.net/go/mautrix/bridgev2"
 	"maunium.net/go/mautrix/bridgev2/database"
 	"maunium.net/go/mautrix/event"
-	"maunium.net/go/mautrix/format"
 
 	"github.com/beeper/groupme-lib"
 
@@ -72,9 +71,6 @@ func (gc *GMClient) PreHandleMatrixReaction(ctx context.Context, msg *bridgev2.M
 func (gc *GMClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.MatrixMessage) (*bridgev2.MatrixMessageResponse, error) {
 	content := msg.Content
 	text := content.Body
-	if content.Format == event.FormatHTML {
-		text = format.HTMLToText(content.FormattedBody)
-	}
 	if content.MsgType == event.MsgEmote {
 		text = "/me " + text
 	}
