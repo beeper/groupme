@@ -18,6 +18,10 @@ package connector
 
 import (
 	"context"
+	"maps"
+	"slices"
+
+	"github.com/beeper/groupme-lib"
 
 	"maunium.net/go/mautrix/bridgev2"
 	"maunium.net/go/mautrix/event"
@@ -50,7 +54,7 @@ var fileMimes = map[string]event.CapabilitySupportLevel{
 }
 
 var roomCaps = &event.RoomFeatures{
-	ID: "fi.mau.groupme.capabilities.2026_09_18",
+	ID: "fi.mau.groupme.capabilities.2026_10_01",
 	File: event.FileFeatureMap{
 		event.MsgImage: {
 			MimeTypes: imageMimes,
@@ -69,10 +73,11 @@ var roomCaps = &event.RoomFeatures{
 		},
 	},
 	// Outgoing (Matrix -> GroupMe) support is currently text-only; see NOTES.md.
-	Reply:           event.CapLevelPartialSupport,
-	Reaction:        event.CapLevelFullySupported,
-	ReactionCount:   1,
-	LocationMessage: event.CapLevelPartialSupport,
+	Reply:            event.CapLevelPartialSupport,
+	Reaction:         event.CapLevelFullySupported,
+	ReactionCount:    1,
+	AllowedReactions: slices.Sorted(maps.Keys(groupme.UnicodeLikeIcons)),
+	LocationMessage:  event.CapLevelPartialSupport,
 }
 
 func (gc *GMClient) GetCapabilities(ctx context.Context, portal *bridgev2.Portal) *event.RoomFeatures {

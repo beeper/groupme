@@ -10,8 +10,11 @@ workers, and paginated conversation discovery. These changes have source-level
 regression coverage. Local self-host testing has verified token login, encrypted
 text delivery in both directions, duplicate suppression, and restart with the
 same saved login and room. Outbound testing exposed unwanted Markdown markers
-when sending bold text; the bridge now uses Matrix's plain-text body, covered by
-a regression test. Media, reactions, DMs, and history recovery still need
+when sending bold text; the bridge now converts Matrix HTML to plain text
+without introducing Markdown markers. Reaction conversion normalizes emoji
+presentation variants and rejects unsupported emoji instead of substituting a
+heart. Both fixes have regression coverage using the observed Beeper payloads.
+Media, reactions, DMs, and history recovery still need
 validation on this branch. The upstream author's earlier observations below
 are useful background, not validation of this candidate.
 

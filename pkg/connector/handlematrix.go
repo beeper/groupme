@@ -26,9 +26,11 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
+	"go.mau.fi/util/variationselector"
 	"maunium.net/go/mautrix/bridgev2"
 	"maunium.net/go/mautrix/bridgev2/database"
 	"maunium.net/go/mautrix/event"
+	"maunium.net/go/mautrix/format"
 
 	"github.com/beeper/groupme-lib"
 
@@ -37,24 +39,35 @@ import (
 
 var _ bridgev2.ReactionHandlingNetworkAPI = (*GMClient)(nil)
 
-// GroupMe only supports a single reaction per user per message (reacting
-// again overwrites the previous one, confirmed in the community docs -- see
-// thirdparty/groupme-lib/likes_api.go), so MaxReactions is fixed at 1.
-// The emoji itself, however, is NOT fixed: GroupMe supports 15 specific
-// unicode reactions (groupme.UnicodeLikeIcons), not just a generic heart --
-// use whichever one the Matrix reaction actually used, falling back to the
-// heart only if it's not one GroupMe accepts (e.g. an arbitrary custom
-// Matrix emoji with no GroupMe equivalent).
 func (gc *GMClient) PreHandleMatrixReaction(ctx context.Context, msg *bridgev2.MatrixReaction) (bridgev2.MatrixReactionPreResponse, error) {
-	emoji := msg.Content.RelatesTo.Key
+	emoji := variationselector.FullyQualify(msg.Content.RelatesTo.Key)
 	if !groupme.UnicodeLikeIcons[emoji] {
-		emoji = "❤️"
+		return bridgev2.MatrixReactionPreResponse{}, bridgev2.WrapErrorInStatus(
+			fmt.Errorf("GroupMe does not support the %q reaction", emoji),
+		).WithIsCertain(true).WithErrorAsMessage().WithErrorReason(event.MessageStatusUnsupported)
 	}
 	return bridgev2.MatrixReactionPreResponse{
 		SenderID:     MakeUserID(groupme.ID(gc.Meta.GMID)),
 		Emoji:        emoji,
 		MaxReactions: 1,
 	}, nil
+}
+
+func unformattedText(text string, _ format.Context) string { return text }
+
+var groupmeHTMLParser = &format.HTMLParser{
+	TabsToSpaces:           4,
+	Newline:                "\n",
+	HorizontalLine:         "\n---\n",
+	PillConverter:          format.DefaultPillConverter,
+	BoldConverter:          unformattedText,
+	ItalicConverter:        unformattedText,
+	StrikethroughConverter: unformattedText,
+	UnderlineConverter:     unformattedText,
+	MonospaceConverter:     unformattedText,
+	MonospaceBlockConverter: func(code, _ string, _ format.Context) string {
+		return code
+	},
 }
 
 // HandleMatrixMessage bridges an outgoing Matrix message to GroupMe.
@@ -71,6 +84,9 @@ func (gc *GMClient) PreHandleMatrixReaction(ctx context.Context, msg *bridgev2.M
 func (gc *GMClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.MatrixMessage) (*bridgev2.MatrixMessageResponse, error) {
 	content := msg.Content
 	text := content.Body
+	if content.Format == event.FormatHTML && content.FormattedBody != "" {
+		text = groupmeHTMLParser.Parse(content.FormattedBody, format.NewContext(ctx))
+	}
 	if content.MsgType == event.MsgEmote {
 		text = "/me " + text
 	}
