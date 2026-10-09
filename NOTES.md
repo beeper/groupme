@@ -1463,3 +1463,294 @@ stopped, after a backup) and PUT an empty `avatar_url` on their Matrix
 profiles. The next resync would then fill in a working current picture for
 the 12 who have one; the other 22 have no working GroupMe picture anywhere
 and would be left blank instead of broken.
+
+## Framework ownership cleanup (2026-10-08)
+
+Replaced the connector-specific persisted polling delivery queue with standard
+bridgev2 `FetchMessages` and `ChatResync` catch-up. Removed its schema, store, and
+recovery/lifecycle tests. Existing framework mappings and authentication are not
+rewritten. Old poll tables, if present, are left unused.
+
+Message snapshot profile fallback now runs during conversion in the framework
+path, with no background ghost-refresh worker or second deduplication check.
+Media handling validates HTTP status, bounds downloads, restricts credential-bearing
+hosts, and redacts signed request URLs. Failed downloads produce a visible notice;
+Matrix media upload errors propagate. Outgoing captions and filenames are retained,
+and malformed history responses are rejected. Poll system messages are passed to
+the connector instead of silently discarded by the native push dispatcher.
+
+The user authorized direct bbctl use because the harness's external self-hosting
+skill is unavailable. The shipped container was run under a dedicated
+self-hosted registration, with the same authenticated state retained throughout
+the feature checks. Two GroupMe accounts verified group and DM text, replies,
+reactions, and initial history through the production Beeper account. The operator
+confirmed both pre-login history markers; native clients and bridge protocol logs
+independently confirmed outgoing messages and their reply/reaction targets.
+
+A native PDF with a caption reached Beeper and the operator confirmed it opens.
+The returned file was verified in the native counterparty's group with its filename
+preserved. Its forwarded copy has no caption; outgoing caption preservation and
+byte identity are not established by this check. Native web image uploads timed
+out, a video upload stalled at 0%, and a built-in GIF upload failed before creating
+a message. These failures are not evidence of bridge media conversion failure or
+success. The retained captioned image has an accepted Matrix history event, and
+the operator confirmed its image and caption render correctly in Beeper. Forwarding
+it back produced a loaded native image and a separate caption message, matching
+two distinct Matrix source events. Beeper New Chat found the known GroupMe contact
+and opened the existing DM; there was no fresh provisioning request in bridge logs.
+
+The outgoing synthetic MP4 reached GroupMe as a video attachment. Its render URL
+returned HTTP 200 and 206 with bytes identical to the source fixture. The native
+web player nevertheless reports a playback failure; its DOM references the
+returned render URL, without a cross-origin attribute, and never reaches loaded
+metadata. Direct Chrome navigation through browser control was denied by browser
+permission review. The operator opened the same URL manually and reported that
+it hangs without loading, so the failure also occurs outside GroupMe's player.
+Upload integrity is established, but native playback and the incoming video path
+are not. No speculative connector change was made.
+
+The current feature and validation gaps are listed in ROADMAP.md. Framework and lifecycle tests remain
+outside the user's requested scope. Earlier live results in this file must not
+be used to validate this candidate.
+
+## Interactive poll voting follow-up (2026-10-08)
+
+The operator confirmed the new native poll's two options render in Beeper and
+requested voting from Beeper. The connector now emits MSC3381 poll events and
+implements PollHandlingNetworkAPI using native poll/option IDs. It refetches the
+poll before voting, sends GroupMe's single/multiple-choice request, and checks
+that the response confirms the selected options and poll identity.
+
+GroupMe returns poll state without a chat-message ID. The operator explicitly
+approved synthetic vote mappings through the existing framework contract. The
+mapping uses the originating Matrix event ID; the framework is unchanged. Typed
+message metadata stores only the native poll ID. No separate poll store, delivery
+engine, or history workaround was added.
+
+Focused remote-response tests and go vet pass. The first voting build was deployed
+and delivered a fresh MSC3381 poll, but the operator saw its text fallback. Beeper
+Desktop's renderer also requires positive room poll capability before displaying
+the widget (ThreadStore.canVoteOnPolls and MessageContent). The connector now
+declares partial poll support in groups, leaves it unsupported in DMs, and bumps
+the normal capability version. The standard MSC1767 fallback text field is also
+included. The follow-up is deployed and single-choice voting is verified: a Beeper
+vote for Option B appears selected with one vote in the bridged account's native
+client. Initial multiple-choice submissions returned native HTTP 500 and saved no
+selection, while the counterparty's native UI can vote on the same poll. The
+published multi-choice request format is therefore not live-validated. The
+operator supplied the native request: it POSTs the same votes array to the poll
+path without a trailing slash. Removed the connector's trailing slash and updated
+the focused request test, including native HTTP 500 handling. The correction is
+deployed as ff4fbcc-worktree-4f360d55923d. Two Beeper vote events succeeded, and
+refreshing the bridged account's native client confirmed both Option A and Option B
+selected with one vote each on GM-20261008-voting-multi-fixed. Single- and
+multiple-choice voting are now verified end to end. Existing text-only poll events are not
+rewritten. Poll creation, vote withdrawal, and live result synchronization remain
+unsupported. Framework/lifecycle tests stay excluded.
+
+## Framework direct media (2026-10-08)
+
+The connector now implements `DirectMediableNetwork`. With framework direct media
+enabled, incoming images, videos, group files, and avatars receive generated MXC
+URIs and are downloaded on request through the existing bounded native helpers.
+Group-file metadata is fetched independently to preserve filenames and MIME types
+without fetching bytes during conversion. Versioned native media IDs contain the
+source URL or login/group/file identifiers; GroupMe access tokens remain in the
+existing login metadata. The framework owns signing and HTTP routing. No new
+media database, cache, server, or delivery mechanism was added.
+
+Direct media remains disabled by default. The existing production-account test
+runtime has only a placeholder media server name, so this source change is not a
+live direct-media pass. Existing uploaded media is unchanged, and the previously
+observed native video playback failure remains unresolved. Focused native media response checks remain; mock Matrix conversion checks
+were removed in the simplification pass below. Framework and lifecycle tests
+remain outside scope.
+
+
+## Simplification pass (2026-10-08)
+
+Removed tests of mock Matrix media routing, framework mappings/capabilities,
+retry identity, cancellation, and WebSocket reconnect lifecycle. Retained small
+native request/response tests for authentication, identity, pagination, polls,
+media bytes/metadata, and conversion rules.
+
+The connector now leaves mapping defaults, media capability enforcement, avatar
+retry decisions, and message-request orchestration to bridgev2. Pending DM status
+is supplied in ChatInfo; the standard acceptance hook performs GroupMe's native
+approve request. Native send identity checks and same-conversation reply/poll
+guards remain because the pinned framework does not supply those checks.
+
+Image/video downloads and incoming/outgoing media transfers share their common
+steps. Removed unused push configuration and legacy constants, duplicate locks,
+a forced HTTP/1 WebSocket client, and custom degradation-alert state. Go's HTTP
+transport selects HTTP/1 for WebSocket upgrades, and the WebSocket library already
+serializes writes. Native session coordination, subscriptions, reconnects,
+rate-limit handling, and media limits remain. No media URL refreshing was added.
+Historical implementation narratives were shortened in source comments; earlier
+investigation notes remain here. This candidate is not deployed, so the prior
+live results do not verify this refactor or the new message-request hook.
+
+## Push-driven catch-up, poller removed (2026-10-09)
+
+Bridgev2 never notices a gap on its own; the connector has to tell it which
+rooms to catch up. The REST poller previously did this by queueing a full
+`ChatResync`, with chat info, for every chat every minute. It has been removed,
+along with the `network.poll` config. Catch-up now runs whenever the push user
+channel subscribes, at startup and after every reconnect. The connector lists
+groups and DMs, then queues a `ChatResync` per chat whose backfill check compares
+GroupMe's newest message ID with the newest bridged message. `WSFayeClient` holds
+each channel's pushes until its subscribe callback returns, so a live message
+cannot become the catch-up anchor ahead of the gap behind it. This depends on
+`backfill.enabled`, and the connector warns at startup when it is off.
+
+The poller also refreshed reactions on the latest page of every chat. The
+community protocol notes describe the user channel as carrying only reactions to
+the account's own messages. The connector now implements `ChatViewingNetworkAPI`
+and subscribes to the viewed group's push channel. That channel is expected, but
+not yet verified, to carry `favorite` events for everyone's messages.
+
+Synthetic poll-vote mappings are now dated one nanosecond before their poll, so
+they never become the newest message that catch-up compares native IDs against.
+A local Bayeux test server confirmed that pushes are held until catch-up finishes,
+on both the first connection and after a reconnect, and that group subscribe and
+unsubscribe work. None of this has been run against GroupMe yet.
+
+## Push-only reaction test and decoding fix (2026-10-09)
+
+The preserved self-hosted test registration was run with REST polling removed.
+Its saved login reconnected successfully. Live GroupMe reactions exposed two
+decoder bugs: `like.create` was an empty handler and `like.delete` was unhandled;
+group reactions nest the message under `subject.line`, while DM reactions use
+`subject.direct_message`. The reacting user and emoji are supplied separately as
+`subject.user_id` and `subject.user_reaction`, rather than by the message author.
+
+Both event types now use standard bridgev2 reaction events. The empty native
+emoji ID identifies each user's one reaction, letting the framework replace a
+changed emoji and remove only that user's reaction. Removal is not treated as a
+full message reaction snapshot. Focused native parsing tests cover both message
+envelopes, reactor identity, emoji changes, removal with other reactors retained,
+and malformed payloads.
+
+Live additions, emoji changes, and removals on own-authored group and DM messages
+reached the correct Matrix targets with HTTP 200 and no polling. The operator
+confirmed group addition/removal and DM addition render in Beeper. With two users reacting to the
+same message, removing one reaction preserved the other; a closed database
+snapshot independently confirmed the remaining reaction mapping.
+
+The wider subscription hypothesis did not hold in this test. The diagnostic
+listener successfully subscribed to the user, group, and DM channels. Reactions
+on own-authored messages arrived on the user channel. Reactions on the other
+account's group messages did not arrive on the group channel, although that
+same channel received native typing events. Adding the viewed-group subscription
+does not establish full reaction coverage. The pinned standard appservice
+backend also never invokes `HandleMatrixViewingChat`, so that callback cannot
+enable group subscriptions in this self-hosted runtime. Historical reactions
+still import through backfill, but changes outside delivered pushes remain
+unsynchronized. No polling fallback was restored.
+
+The final tested code is the uncommitted candidate
+`44579b7-reactions-v2-32dd0cb984c4`, container image
+`sha256:7fd0d3ea1aab1f3f1db7fee8a7f13c65f0311b5aae5ac7f2d773c7896de1f32a`.
+`go test -race -tags goolm ./pkg/connector ./pkg/groupmeext`,
+`go vet -tags goolm ./...`, and the shipped Docker build passed. Later changes
+to this entry only record the results. Broader lifecycle and release claims are
+outside this test.
+
+## Web favorite decoder and transport comparison (2026-10-09)
+
+The current public GroupMe Web bundles handle `favorite` on the open group or
+DM channel. The message identity is in `subject.line` or
+`subject.direct_message`, while the authoritative full snapshot is in
+`subject.reactions`. The library previously ignored that sibling snapshot and
+rejected the DM envelope. The decoder now passes the full snapshot to the
+existing bridgev2 `ReactionSync` path. An empty list clears reactions; missing
+state is ignored. Older nested reaction and favorite lists remain supported.
+Focused native parsing tests cover these cases without simulating the framework.
+
+The operator initially reported that native Tester A displayed Tester B's
+self-reaction on the group history marker. A subsequently supplied frame was an
+earlier own-DM removal, not that group change. The UI observation alone therefore
+does not establish chat-channel push delivery. Web also refreshes message state
+when opening a chat or recovering its connection.
+
+A second diagnostic connection used Web's JSONP handshake, Web Origin, a cookie
+jar, token-only subscription extensions, and subsequent WebSocket transport.
+All user/group/DM subscriptions were acknowledged. Neither probe received a
+chat-channel event for the subsequent native removal; both received the same
+user-channel `like.create` events in the positive control. Changing the initial
+handshake alone therefore did not resolve the observed absence. A further probe
+with the native browser's session token behaved identically; changing tokens
+alone did not resolve it either.
+
+After the operator enabled Chrome remote debugging, a direct CDP capture attached
+to both existing test tabs without reloading them. It recorded native B's
+addition and removal on message `179146511532350011`, HTTP 200 responses, and
+`like.create`/`like.delete` on B's `/user/97105956` channel. Native A received no
+reaction event for either change. Positive controls established that A's live
+connection received both `/group/117901762` typing and `/user/145151833`
+own-message reaction events during the same capture. Thus the measured absence
+also occurs in native Web; it is not evidence of an event our transport dropped.
+No `favorite` was observed. Complete push-only coverage remains unproved, rather
+than being inferred from Web's source handlers or a previously displayed count.
+
+The decoder candidate `44579b7-favorite-59ee0414175e` runs as image
+`sha256:9ac766d3e63694d96fe8214a6bc2e97e026a80716d1e22c77a4925988621c117`
+on the preserved test registration. Race-enabled connector/native tests, vet,
+and Docker build passed. The existing login remains connected. Group and DM
+user-channel addition, replacement, and removal were retested on this image;
+Matrix accepted each annotation and redaction. These are regression evidence,
+not end-to-end proof of `favorite` delivery. No polling was added, and the
+standard appservice's missing chat-view callback remains a separate limitation.
+
+## All-chat subscriptions and reconnect reaction recovery (2026-10-09)
+
+The follow-up fixes the appservice subscription gap: every discovered group and
+DM now gets its native chat channel, including conversations discovered through
+new messages and group joins. Repeated subscription requests retain readiness
+and buffered events. Draining buffered events no longer holds the subscription
+mutex while waiting for handlers that may subscribe to a newly discovered chat.
+The unavailable chat-view callback is no longer required.
+
+User-channel subscription now performs one combined inventory/chat-info catch-up
+and reconciles reactions from a recent message page independently of whether a
+newer message exists. This runs at startup and WebSocket recovery, with no
+periodic REST polling. The refresh is bounded to 100 group messages or the native
+20-message DM page. It uses the existing bridgev2 `ReactionSync`; the SDK still
+owns reaction mappings, replacement, removal and message backfill.
+
+Native A was directly observed showing two hearts while B showed one; reloading
+A changed its count to one. A subsequent B self-heart addition left A at one.
+This establishes stale native Web state for that specific two-account case.
+It does not establish behavior for a third participant reacting to another
+participant's message.
+
+Candidate `44579b7-subscriptions-c3fbd276f22f`, image
+`sha256:0f35f4e2607050afc090a04bc856aaba3550efc483ad2ee6055245c19043b494`,
+passed race-enabled connector/native tests, vet and the shipped Docker build.
+It runs on the preserved test registration with the existing login connected.
+The frozen source was verified before appending these results.
+
+- Startup acknowledged user, group and DM subscriptions and reconciled 39 group
+  messages and 4 DMs. It recovered B's previously missed self-heart with a
+  successful Matrix annotation.
+- Native B's live group addition, emoji replacement and removal each reached
+  Matrix. A's DM addition, replacement and removal also passed while retaining
+  B's original DM heart. Every annotation and redaction returned HTTP 200.
+- Disconnecting only the test container's network for 50 seconds exercised an
+  actual transport failure. B removed its self-heart while the bridge was
+  offline. The same bridge process reconnected, restored all three subscriptions,
+  and redacted exactly the missed reaction at 15:52:53 UTC without a new message.
+- A closed snapshot taken after stopping the writer confirmed that the original
+  A group heart and B DM heart retained their event IDs, with no temporary
+  reactions remaining. A native API read agreed. The bridge then restarted
+  successfully with its registration, database and login preserved.
+- A final direct Chrome capture recorded B's native POST, A's `like.create`
+  frame and visible thumbs-up, and the corresponding Matrix annotation. Its
+  cleanup `like.delete` also reached Matrix. Captures were stopped afterward.
+
+Full instantaneous coverage remains limited by native event delivery: no
+`favorite` was observed, and the tested self-reaction was not broadcast to the
+other account. Such changes within the recent page now recover on reconnection;
+older changes still depend on native push or history. Private raw captures,
+source manifest, runtime summaries and closed snapshots are under
+`.local/subscriptions-20261009/`; they are excluded from Git and Docker builds.
