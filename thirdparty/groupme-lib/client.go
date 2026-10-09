@@ -60,6 +60,9 @@ type response struct {
 }
 
 func (r response) UnmarshalJSON(bs []byte) error {
+	if r.i == nil {
+		return nil
+	}
 	return json.NewDecoder(bytes.NewBuffer(bs)).Decode(r.i)
 }
 
@@ -106,6 +109,8 @@ func (c Client) do(ctx context.Context, req *http.Request, i interface{}) error 
 				Code: HTTPStatusCode(getResp.StatusCode),
 			}
 		}
+		// HTTP is authoritative even when an error envelope omits meta.code.
+		resp.Meta.Code = HTTPStatusCode(getResp.StatusCode)
 		return &resp.Meta
 	}
 

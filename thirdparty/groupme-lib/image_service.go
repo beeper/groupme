@@ -59,12 +59,12 @@ func (c *Client) UploadImage(ctx context.Context, data []byte, contentType strin
 	}
 	defer httpResp.Body.Close()
 
-	body, err := io.ReadAll(httpResp.Body)
+	body, err := io.ReadAll(io.LimitReader(httpResp.Body, 1024*1024))
 	if err != nil {
 		return "", fmt.Errorf("failed to read image upload response: %w", err)
 	}
 	if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
-		return "", fmt.Errorf("image upload failed with status %d: %s", httpResp.StatusCode, string(body))
+		return "", fmt.Errorf("image upload failed with status %d", httpResp.StatusCode)
 	}
 
 	var resp imageUploadResponse
@@ -72,7 +72,7 @@ func (c *Client) UploadImage(ctx context.Context, data []byte, contentType strin
 		return "", fmt.Errorf("failed to parse image upload response: %w", err)
 	}
 	if resp.Payload.URL == "" {
-		return "", fmt.Errorf("image upload response had no payload.url: %s", string(body))
+		return "", fmt.Errorf("image upload response had no payload.url")
 	}
 	return resp.Payload.URL, nil
 }

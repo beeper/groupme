@@ -61,7 +61,7 @@ func TestReplyConversionUsesImmediateParent(t *testing.T) {
 		{Type: groupme.Reply, ReplyID: "immediate-parent", BaseReplyID: "thread-root", UserID: "9"},
 		{Type: groupme.Location, Latitude: "51.5", Longitude: "-0.1", Name: "Test location"},
 	}}
-	converted, err := convertGroupMeMessage(context.Background(), nil, nil, msg, nil, "")
+	converted, err := (&GMClient{Main: &GMConnector{}}).convertGroupMeMessage(context.Background(), nil, nil, msg)
 	if err != nil {
 		t.Fatal(err)
 	}

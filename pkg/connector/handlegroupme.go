@@ -164,7 +164,7 @@ func (gc *GMClient) makeRemoteMessage(msg groupme.Message) *simplevent.Message[*
 				info.Name = ptr.Ptr(name)
 			}
 			if avatarURL != "" && ghost.AvatarMXC == "" && !avatarAlreadyFailed(ghost, avatarURL) {
-				info.Avatar = avatarFor(avatarURL)
+				info.Avatar = gc.avatarFor(ctx, avatarURL)
 			}
 			if info.Name == nil && info.Avatar == nil {
 				return
@@ -184,7 +184,7 @@ func (gc *GMClient) makeRemoteMessage(msg groupme.Message) *simplevent.Message[*
 		ID:   MakeMessageID(msg.ID),
 		Data: &msg,
 		ConvertMessageFunc: func(ctx context.Context, portal *bridgev2.Portal, intent bridgev2.MatrixAPI, data *groupme.Message) (*bridgev2.ConvertedMessage, error) {
-			return convertGroupMeMessage(ctx, portal, intent, data, gc.Client, gc.Meta.Token)
+			return gc.convertGroupMeMessage(ctx, portal, intent, data)
 		},
 	}
 }
@@ -197,7 +197,7 @@ func (gc *GMClient) makeRemoteMessage(msg groupme.Message) *simplevent.Message[*
 // needed separately to fetch a poll's full definition (see
 // convertGroupMePollEvent/groupme.Client.GetPoll) -- unlike the raw HTTP
 // download helpers, that's a normal authenticated groupme-lib API call.
-func convertGroupMeMessage(ctx context.Context, portal *bridgev2.Portal, intent bridgev2.MatrixAPI, msg *groupme.Message, client *groupmeext.Client, token string) (*bridgev2.ConvertedMessage, error) {
+func (gc *GMClient) convertGroupMeMessage(ctx context.Context, portal *bridgev2.Portal, intent bridgev2.MatrixAPI, msg *groupme.Message) (*bridgev2.ConvertedMessage, error) {
 	cm := &bridgev2.ConvertedMessage{}
 	log := zerolog.Ctx(ctx)
 	for _, att := range msg.Attachments {
@@ -207,19 +207,10 @@ func convertGroupMeMessage(ctx context.Context, portal *bridgev2.Portal, intent 
 		}
 	}
 
-	// Poll lifecycle messages (poll.created/poll.reminder/poll.finished)
-	// carry their real content in Event.Data, not as a normal attachment
-	// -- the "poll" attachment some of them also carry (see the Poll
-	// attachmentType's doc comment) is just a pointer, not enough on its
-	// own to render anything useful. Handle these separately and return
-	// early; falling through to the attachment loop below would either
-	// skip the poll attachment as unhandled (poll.created) or find no
-	// attachments at all (poll.reminder/poll.finished have none), in both
-	// cases falling back to GroupMe's own bare-text notice
-	// ("Created new poll 'X'") instead of the actual question/options/
-	// results.
+	// Poll events carry content in Event.Data; attachments only identify the
+	// poll. Fall back to the native message text if conversion fails.
 	if msg.Event != nil && strings.HasPrefix(msg.Event.Type, "poll.") {
-		if part := convertGroupMePollEvent(ctx, client, msg); part != nil {
+		if part := convertGroupMePollEvent(ctx, gc.Client, msg); part != nil {
 			cm.Parts = append(cm.Parts, part)
 			return cm, nil
 		}
@@ -232,88 +223,41 @@ func convertGroupMeMessage(ctx context.Context, portal *bridgev2.Portal, intent 
 		}
 		partID := networkid.PartID(fmt.Sprintf("attachment-%d", i))
 		var content *event.MessageEventContent
-
 		switch att.Type {
-		case groupme.Image:
-			imgData, mime, err := groupmeext.DownloadImage(att.URL)
-			if err != nil {
-				log.Warn().Err(err).Msg("Failed to download GroupMe image attachment")
+		case groupme.Image, groupme.Video, groupme.File:
+			if att.Type == groupme.File && msg.GroupID == "" {
+				log.Warn().Msg("Ignoring GroupMe file attachment outside a group")
 				continue
-			}
-			mxc, file, err := intent.UploadMedia(ctx, portal.MXID, *imgData, "image", mime)
-			if err != nil {
-				log.Warn().Err(err).Msg("Failed to upload GroupMe image attachment to Matrix media repo")
-				continue
-			}
-			content = &event.MessageEventContent{
-				MsgType: event.MsgImage,
-				Body:    "image",
-				Info: &event.FileInfo{
-					MimeType: mime,
-					Size:     len(*imgData),
-				},
-			}
-			if file != nil {
-				content.File = file
-			} else {
-				content.URL = mxc
 			}
 
-		case groupme.Video:
-			vidData, mime, err := groupmeext.DownloadVideo(att.URL, token)
+			var data []byte
+			var mime string
+			var err error
+			filename := string(att.Type)
+			switch att.Type {
+			case groupme.Image:
+				data, mime, err = groupmeext.DownloadImage(ctx, att.URL)
+			case groupme.Video:
+				data, mime, err = groupmeext.DownloadVideo(ctx, att.URL, gc.Meta.Token)
+			case groupme.File:
+				data, filename, mime, err = groupmeext.DownloadFile(ctx, msg.GroupID, att.FileID, gc.Meta.Token)
+			}
 			if err != nil {
-				log.Warn().Err(err).Msg("Failed to download GroupMe video attachment")
-				continue
-			}
-			mxc, file, err := intent.UploadMedia(ctx, portal.MXID, vidData, "video", mime)
-			if err != nil {
-				log.Warn().Err(err).Msg("Failed to upload GroupMe video attachment to Matrix media repo")
-				continue
-			}
-			content = &event.MessageEventContent{
-				MsgType: event.MsgVideo,
-				Body:    "video",
-				Info: &event.FileInfo{
-					MimeType: mime,
-					Size:     len(vidData),
-				},
-			}
-			if file != nil {
-				content.File = file
-			} else {
-				content.URL = mxc
-			}
-
-		case groupme.File:
-			// GroupMe's file-sharing feature is group-only (no known DM
-			// equivalent), and its download API is keyed by group ID, not
-			// conversation ID -- msg.GroupID is empty for DMs, so this
-			// deliberately no-ops rather than guessing a wrong ID for
-			// something that shouldn't be reachable from a DM anyway.
-			if len(msg.GroupID) == 0 {
-				log.Warn().Str("file_id", att.FileID).Msg("Got a GroupMe file attachment outside a group chat, don't know how to fetch it")
-				continue
-			}
-			fileData, filename, mime, err := groupmeext.DownloadFile(msg.GroupID, att.FileID, token)
-			if err != nil {
-				log.Warn().Err(err).Msg("Failed to download GroupMe file attachment")
+				log.Warn().Err(err).Msg("Failed to download GroupMe attachment")
+				cm.Parts = append(cm.Parts, failedAttachment(partID))
 				continue
 			}
 			if mime == "" {
-				mime = http.DetectContentType(fileData)
+				mime = http.DetectContentType(data)
 			}
-			mxc, file, err := intent.UploadMedia(ctx, portal.MXID, fileData, filename, mime)
+			mxc, file, err := intent.UploadMedia(ctx, portal.MXID, data, filename, mime)
 			if err != nil {
-				log.Warn().Err(err).Msg("Failed to upload GroupMe file attachment to Matrix media repo")
-				continue
+				return nil, fmt.Errorf("upload GroupMe attachment: %w", err)
 			}
 			content = &event.MessageEventContent{
-				MsgType: event.MsgFile,
+				MsgType: event.MessageType("m." + att.Type),
 				Body:    filename,
-				Info: &event.FileInfo{
-					MimeType: mime,
-					Size:     len(fileData),
-				},
+				Info:    &event.FileInfo{MimeType: mime, Size: len(data)},
 			}
 			if file != nil {
 				content.File = file
@@ -340,10 +284,7 @@ func convertGroupMeMessage(ctx context.Context, portal *bridgev2.Portal, intent 
 			}
 
 		case groupme.Poll:
-			// Handled above via msg.Event, before this loop even starts --
-			// reaching this case means that handling didn't produce a
-			// part (e.g. Event was nil/malformed for some reason), so
-			// there's nothing useful to do with just the poll ID here.
+			// Handled through Event.Data above.
 			continue
 		case groupme.Reply:
 			continue
@@ -371,7 +312,14 @@ func convertGroupMeMessage(ctx context.Context, portal *bridgev2.Portal, intent 
 		})
 	}
 
+	cm.MergeCaption()
 	return cm, nil
+}
+
+func failedAttachment(partID networkid.PartID) *bridgev2.ConvertedMessagePart {
+	return &bridgev2.ConvertedMessagePart{ID: partID, Type: event.EventMessage, Content: &event.MessageEventContent{
+		MsgType: event.MsgNotice, Body: "Could not download this GroupMe attachment. View it in GroupMe.",
+	}}
 }
 
 // convertGroupMePollEvent renders a poll.created/poll.reminder/

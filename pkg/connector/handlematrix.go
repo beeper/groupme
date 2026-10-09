@@ -19,11 +19,12 @@ package connector
 import (
 	"context"
 	"fmt"
+	"math"
 	"mime"
 	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
@@ -71,17 +72,7 @@ var groupmeHTMLParser = &format.HTMLParser{
 	},
 }
 
-// HandleMatrixMessage bridges an outgoing Matrix message to GroupMe.
-//
-// Plain text (and emote/notice) messages, plus outgoing image, location,
-// video, and file attachments (new -- the legacy bridge never implemented
-// any outgoing media at all, see NOTES.md). Video and file both needed a
-// real upload API GroupMe doesn't publicly document; both were
-// reverse-engineered live (a packet-capture session against the real
-// GroupMe web client, then confirmed independently from this Go code
-// against the live API) -- see NOTES.md "Outgoing video/file attachments"
-// for the full investigation and groupmeext.UploadVideo/UploadFile for
-// the resulting implementation.
+// HandleMatrixMessage converts and sends a native GroupMe message.
 func (gc *GMClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.MatrixMessage) (*bridgev2.MatrixMessageResponse, error) {
 	if msg.ReplyTo != nil && (msg.ReplyTo.ID == "" || msg.ReplyTo.Room != msg.Portal.PortalKey) {
 		return nil, fmt.Errorf("GroupMe replies must target a message in the same conversation")
@@ -96,63 +87,46 @@ func (gc *GMClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.Matri
 	}
 
 	portalType, gmid := ParsePortalID(msg.Portal.ID)
+	if gmid == "" || (portalType != PortalTypeGroup && portalType != PortalTypeDM) {
+		return nil, fmt.Errorf("invalid GroupMe portal")
+	}
+	if content.MsgType == event.MsgImage || content.MsgType == event.MsgVideo || content.MsgType == event.MsgFile {
+		text = content.GetCaption()
+		if text != "" && content.Format == event.FormatHTML && content.FormattedBody != "" {
+			text = groupmeHTMLParser.Parse(content.FormattedBody, format.NewContext(ctx))
+		}
+	}
+	if utf8.RuneCountInString(text) > 1000 {
+		return nil, fmt.Errorf("GroupMe messages are limited to 1000 characters")
+	}
 	out := &groupme.Message{
 		Text: text,
 		SourceGUID: uuid.NewSHA1(uuid.NameSpaceURL, []byte(strings.Join([]string{
 			"mautrix-groupme", gc.Meta.GMID, string(msg.Portal.ID), string(msg.Event.ID),
 		}, "\x00"))).String(),
 	}
+	if msg.InputTransactionID != "" {
+		out.SourceGUID = string(msg.InputTransactionID)
+	}
 
 	switch content.MsgType {
-	case event.MsgImage:
-		attachment, err := gc.uploadMatrixImage(ctx, content)
+	case event.MsgText, event.MsgNotice, event.MsgEmote:
+	case event.MsgImage, event.MsgVideo, event.MsgFile:
+		attachment, err := gc.uploadMatrixMedia(ctx, content, portalType, gmid)
 		if err != nil {
-			return nil, fmt.Errorf("failed to upload image to GroupMe: %w", err)
+			return nil, err
 		}
 		out.Attachments = []*groupme.Attachment{attachment}
-		// content.Body is the filename (e.g. "image.jpg"), not a caption --
-		// showing it as message text alongside the attachment would look
-		// wrong (a stray filename above the image), so an image with no
-		// separate caption gets no Text at all, matching how a plain image
-		// send looks in the native GroupMe app.
-		out.Text = ""
-
 	case event.MsgLocation:
 		attachment, err := matrixLocationToAttachment(content)
 		if err != nil {
-			return nil, fmt.Errorf("failed to convert Matrix location for GroupMe: %w", err)
+			return nil, err
 		}
 		out.Attachments = []*groupme.Attachment{attachment}
-		// Same reasoning as image, above: content.Body for a Matrix
-		// location is typically a generic client-generated description
-		// (e.g. "User location"), not meaningful text worth showing
-		// alongside the pin -- the attachment's own Name already carries
-		// whatever description was given (see matrixLocationToAttachment).
-		out.Text = ""
+		out.Text = "" // The pin's name already contains the description.
 
-	case event.MsgVideo:
-		attachment, err := gc.uploadMatrixVideo(ctx, content, portalType, gmid)
-		if err != nil {
-			return nil, fmt.Errorf("failed to upload video to GroupMe: %w", err)
-		}
-		out.Attachments = []*groupme.Attachment{attachment}
-		out.Text = ""
-
-	case event.MsgFile:
-		// GroupMe's file-sharing feature is group-only (see
-		// groupmeext.UploadFile/DownloadFile's doc comments) -- there's no
-		// recipient-scoped equivalent to fall back to for a DM the way
-		// video has GroupId/RecipientId, so this fails clearly instead of
-		// guessing at an endpoint shape that doesn't exist.
-		if portalType != PortalTypeGroup {
-			return nil, fmt.Errorf("outgoing file attachments are only supported in groups, not DMs (GroupMe's file-sharing feature is group-only)")
-		}
-		attachment, err := gc.uploadMatrixFile(ctx, content, gmid)
-		if err != nil {
-			return nil, fmt.Errorf("failed to upload file to GroupMe: %w", err)
-		}
-		out.Attachments = []*groupme.Attachment{attachment}
-		out.Text = ""
+	default:
+		return nil, bridgev2.ErrUnsupportedMessageType
 	}
 
 	if msg.ReplyTo != nil {
@@ -185,96 +159,67 @@ func (gc *GMClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.Matri
 	if sent == nil || sent.ID == "" {
 		return nil, fmt.Errorf("GroupMe send response did not include a message ID")
 	}
-
-	return &bridgev2.MatrixMessageResponse{
-		DB: &database.Message{
-			ID:        MakeMessageID(sent.ID),
-			MXID:      msg.Event.ID,
-			Room:      msg.Portal.PortalKey,
-			SenderID:  MakeUserID(groupme.ID(gc.Meta.GMID)),
-			Timestamp: time.UnixMilli(msg.Event.Timestamp),
-		},
-	}, nil
+	if (sent.UserID != "" && string(sent.UserID) != gc.Meta.GMID) ||
+		(sent.GroupID != "" && sent.GroupID != out.GroupID) ||
+		(sent.RecipientID != "" && sent.RecipientID != out.RecipientID) {
+		return nil, fmt.Errorf("GroupMe send response belongs to another sender or conversation")
+	}
+	dbMessage := &database.Message{
+		ID:       MakeMessageID(sent.ID),
+		SenderID: MakeUserID(groupme.ID(gc.Meta.GMID)),
+	}
+	if sent.CreatedAt > 0 {
+		dbMessage.Timestamp = sent.CreatedAt.ToTime()
+	}
+	return &bridgev2.MatrixMessageResponse{DB: dbMessage}, nil
 }
 
-// uploadMatrixImage downloads an outgoing m.image event's media from Matrix
-// (handling both encrypted and unencrypted rooms via the same DownloadMedia
-// call -- content.File is nil for unencrypted media, in which case
-// DownloadMedia falls back to content.URL directly per its documented
-// contract) and re-uploads it to GroupMe's separate image-upload host
-// (thirdparty/groupme-lib/image_service.go, a local addition -- this
-// bridge never supported outgoing media at all before this, encrypted or
-// not), returning a ready-to-attach groupme.Attachment.
-func (gc *GMClient) uploadMatrixImage(ctx context.Context, content *event.MessageEventContent) (*groupme.Attachment, error) {
+// uploadMatrixMedia shares the Matrix download and byte limit checks. GroupMe
+// has separate image, video-session, and group-file upload APIs.
+func (gc *GMClient) uploadMatrixMedia(ctx context.Context, content *event.MessageEventContent, portalType PortalType, gmid groupme.ID) (*groupme.Attachment, error) {
 	data, err := gc.Main.br.Bot.DownloadMedia(ctx, content.URL, content.File)
 	if err != nil {
-		return nil, fmt.Errorf("failed to download image from Matrix: %w", err)
+		return nil, fmt.Errorf("failed to download media from Matrix: %w", err)
 	}
-
+	limit := MaxFileSize
+	if content.MsgType == event.MsgFile {
+		limit = MaxDocumentSize
+	}
+	if len(data) > limit {
+		return nil, fmt.Errorf("GroupMe attachment exceeds the %d-byte limit", limit)
+	}
 	mimeType := ""
 	if content.Info != nil {
 		mimeType = content.Info.MimeType
 	}
-
-	url, err := gc.Client.UploadImage(ctx, data, mimeType)
-	if err != nil {
-		return nil, err
-	}
-
-	return &groupme.Attachment{Type: groupme.Image, URL: url}, nil
-}
-
-// uploadMatrixVideo downloads an outgoing m.video event's media from
-// Matrix and uploads it to GroupMe via groupmeext.UploadVideo, returning a
-// ready-to-attach groupme.Attachment. Unlike image, this needs to know
-// whether the target is a group or a DM (GroupMe's upload-session API
-// wants either a group ID or a recipient ID, not a conversation ID
-// generically -- see UploadVideo's doc comment) and the file's extension
-// (also required by that same API; derived from the Matrix filename,
-// falling back to the mimetype and then a hardcoded "mp4" if neither
-// yields one).
-func (gc *GMClient) uploadMatrixVideo(ctx context.Context, content *event.MessageEventContent, portalType PortalType, gmid groupme.ID) (*groupme.Attachment, error) {
-	data, err := gc.Main.br.Bot.DownloadMedia(ctx, content.URL, content.File)
-	if err != nil {
-		return nil, fmt.Errorf("failed to download video from Matrix: %w", err)
-	}
-
-	mimeType := "video/mp4"
-	if content.Info != nil && content.Info.MimeType != "" {
-		mimeType = content.Info.MimeType
-	}
-
-	var groupID, recipientID string
-	switch portalType {
-	case PortalTypeGroup:
-		groupID = gmid.String()
-	case PortalTypeDM:
-		recipientID = gmid.String()
-	}
-
-	renderURL, thumbnailURL, err := groupmeext.UploadVideo(ctx, gc.Meta.Token, gc.Meta.GMID, groupID, recipientID, data, videoExtension(content, mimeType), mimeType)
-	if err != nil {
-		return nil, err
-	}
-
-	return &groupme.Attachment{Type: groupme.Video, URL: renderURL, VideoPreviewURL: thumbnailURL}, nil
-}
-
-// videoExtension picks a file extension (no leading dot) for an outgoing
-// video upload -- required by GroupMe's upload-session API
-// (groupmeext.UploadVideo), which has no way to infer it server-side
-// since the request just declares the extension up front rather than
-// e.g. sniffing the uploaded bytes. Prefers the real Matrix filename's own
-// extension; falls back to a guess from the MIME type, then to "mp4" if
-// neither is available -- unconfirmed whether GroupMe cares about this
-// value beyond cosmetic (the URL it hands back embeds it, see
-// createUploadResponse), but there's no reason to guess less carefully
-// than necessary.
-func videoExtension(content *event.MessageEventContent, mimeType string) string {
-	if content.Body != "" {
-		if ext := strings.TrimPrefix(filepath.Ext(content.Body), "."); ext != "" {
-			return strings.ToLower(ext)
+	switch content.MsgType {
+	case event.MsgImage:
+		url, err := gc.Client.UploadImage(ctx, data, mimeType)
+		return &groupme.Attachment{Type: groupme.Image, URL: url}, err
+	case event.MsgVideo:
+		if mimeType == "" {
+			mimeType = "video/mp4"
 		}
+		var groupID, recipientID string
+		if portalType == PortalTypeDM {
+			recipientID = string(gmid)
+		} else {
+			groupID = string(gmid)
+		}
+		url, preview, err := groupmeext.UploadVideo(ctx, gc.Meta.Token, gc.Meta.GMID, groupID, recipientID, data, videoExtension(content, mimeType), mimeType)
+		return &groupme.Attachment{Type: groupme.Video, URL: url, VideoPreviewURL: preview}, err
+	case event.MsgFile:
+		fileID, err := groupmeext.UploadFile(ctx, gmid, gc.Meta.Token, content.GetFileName(), data, mimeType)
+		return &groupme.Attachment{Type: groupme.File, FileID: fileID}, err
+	default:
+		return nil, bridgev2.ErrUnsupportedMessageType
+	}
+}
+
+// The video upload session requires an extension before it receives any bytes.
+func videoExtension(content *event.MessageEventContent, mimeType string) string {
+	if ext := strings.TrimPrefix(filepath.Ext(content.GetFileName()), "."); ext != "" {
+		return strings.ToLower(ext)
 	}
 	if exts, err := mime.ExtensionsByType(mimeType); err == nil && len(exts) > 0 {
 		return strings.ToLower(strings.TrimPrefix(exts[0], "."))
@@ -282,45 +227,11 @@ func videoExtension(content *event.MessageEventContent, mimeType string) string 
 	return "mp4"
 }
 
-// uploadMatrixFile downloads an outgoing m.file event's media from Matrix
-// and uploads it to GroupMe via groupmeext.UploadFile, returning a
-// ready-to-attach groupme.Attachment. groupID is required (not just a
-// generic portal/conversation ID) since GroupMe's file API is
-// group-scoped -- see UploadFile's doc comment; callers must only reach
-// this for a group portal (checked in HandleMatrixMessage).
-//
-// content.Body -- the real Matrix filename -- is passed through as-is:
-// UploadFile's doc comment covers why this is the one thing that actually
-// determines both the stored filename *and* mime type (GroupMe derives
-// the latter from the former's extension) on GroupMe's side.
-func (gc *GMClient) uploadMatrixFile(ctx context.Context, content *event.MessageEventContent, groupID groupme.ID) (*groupme.Attachment, error) {
-	data, err := gc.Main.br.Bot.DownloadMedia(ctx, content.URL, content.File)
-	if err != nil {
-		return nil, fmt.Errorf("failed to download file from Matrix: %w", err)
-	}
-
-	mimeType := ""
-	if content.Info != nil {
-		mimeType = content.Info.MimeType
-	}
-
-	fileID, err := groupmeext.UploadFile(ctx, groupID, gc.Meta.Token, content.Body, data, mimeType)
-	if err != nil {
-		return nil, err
-	}
-
-	return &groupme.Attachment{Type: groupme.File, FileID: fileID}, nil
-}
-
-// matrixLocationToAttachment converts an outgoing m.location event's
-// content.GeoURI (an RFC 5870 "geo:" URI, e.g.
-// "geo:37.786971,-122.399677;u=35") into a GroupMe location attachment.
-// No upload/API call needed, unlike image (or the still-unimplemented
-// video/file) -- a GroupMe location is just lat/lng and a name embedded
-// directly in the message JSON (see the incoming path's equivalent
-// parsing in handlegroupme.go's convertGroupMeMessage, which this
-// mirrors).
+// GroupMe location attachments carry latitude, longitude, and a name.
 func matrixLocationToAttachment(content *event.MessageEventContent) (*groupme.Attachment, error) {
+	if !strings.HasPrefix(content.GeoURI, "geo:") {
+		return nil, fmt.Errorf("location must have a geo: URI")
+	}
 	geo := strings.TrimPrefix(content.GeoURI, "geo:")
 	// RFC 5870 allows an optional altitude (three comma-separated
 	// coordinates instead of two) and a ";u=<uncertainty>" parameter
@@ -340,6 +251,9 @@ func matrixLocationToAttachment(content *event.MessageEventContent) (*groupme.At
 		return nil, fmt.Errorf("invalid longitude in geo URI %q: %w", content.GeoURI, err)
 	}
 
+	if math.IsNaN(lat) || math.IsInf(lat, 0) || math.Abs(lat) > 90 || math.IsNaN(lng) || math.IsInf(lng, 0) || math.Abs(lng) > 180 {
+		return nil, fmt.Errorf("invalid location coordinates")
+	}
 	name := content.Body
 	if name == "" {
 		name = "Location"
@@ -384,11 +298,7 @@ func (gc *GMClient) HandleMatrixReaction(ctx context.Context, msg *bridgev2.Matr
 		conversationID = DMConversationID(groupme.ID(gc.Meta.GMID), gmid)
 	}
 	messageID := ParseMessageID(msg.TargetMessage.ID)
-	var emoji string
-	if msg.PreHandleResp != nil {
-		emoji = msg.PreHandleResp.Emoji
-	}
-	err := gc.Client.CreateLike(ctx, conversationID, messageID, emoji)
+	err := gc.Client.CreateLike(ctx, conversationID, messageID, msg.PreHandleResp.Emoji)
 	if err != nil {
 		return nil, fmt.Errorf("failed to like GroupMe message: %w", err)
 	}

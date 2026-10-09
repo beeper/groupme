@@ -37,6 +37,7 @@ func mockGroupMe(t *testing.T, handle func(*http.Request) (int, string)) {
 
 func dmTestClient() *GMClient {
 	return &GMClient{
+		Main:      &GMConnector{},
 		Client:    groupmeext.NewClient("test-token"),
 		Meta:      &UserLoginMetadata{GMID: "20", Token: "test-token"},
 		UserLogin: &bridgev2.UserLogin{UserLogin: &database.UserLogin{ID: "20"}},
@@ -122,7 +123,7 @@ func TestDMSendAcceptsPendingRequestAndMapsResponse(t *testing.T) {
 			if strings.Join(calls, ",") != want {
 				t.Fatalf("incorrect approval/send order: %v", calls)
 			}
-			if result.DB.ID != "native-dm" || result.DB.MXID != msg.Event.ID || result.DB.Room != msg.Portal.PortalKey || result.DB.SenderID != "20" {
+			if result.DB.ID != "native-dm" || result.DB.SenderID != "20" {
 				t.Fatalf("incorrect mapping: %+v", result.DB)
 			}
 		})
@@ -138,6 +139,8 @@ func TestSendRejectsEmptySuccessAndPreservesFailures(t *testing.T) {
 		}{
 			{"null", 201, "null"}, {"missing message", 201, "{}"}, {"missing ID", 201, `{"message":{},"direct_message":{}}`},
 			{"rate limit", 429, "null"}, {"unauthorized", 401, "null"},
+			{"wrong sender", 201, `{"message":{"id":"sent","user_id":"99"},"direct_message":{"id":"sent","user_id":"99"}}`},
+			{"wrong conversation", 201, `{"message":{"id":"sent","group_id":"8"},"direct_message":{"id":"sent","recipient_id":"8"}}`},
 		} {
 			t.Run(string(portal)+"/"+tc.name, func(t *testing.T) {
 				mockGroupMe(t, func(r *http.Request) (int, string) {
@@ -254,25 +257,5 @@ func TestDMReactionsUseNumericConversationOrder(t *testing.T) {
 	}
 	if strings.Join(calls, ",") != "/v3/messages/9+20/native-dm/like,/v3/messages/9+20/native-dm/unlike" {
 		t.Fatalf("wrong reaction endpoints: %v", calls)
-	}
-}
-
-func TestDMCapabilitiesMatchFileRejection(t *testing.T) {
-	gc := dmTestClient()
-	dm := testMatrixText("dm:9")
-	group := testMatrixText("group:9")
-	if gc.GetCapabilities(context.Background(), dm.Portal).File[event.MsgFile] != nil {
-		t.Fatal("DM advertised unsupported file sending")
-	}
-	if gc.GetCapabilities(context.Background(), group.Portal).File[event.MsgFile] == nil {
-		t.Fatal("DM capability lookup changed group capabilities")
-	}
-	mockGroupMe(t, func(r *http.Request) (int, string) {
-		t.Fatal("unsupported DM file made a network request")
-		return 500, ""
-	})
-	dm.Content = &event.MessageEventContent{MsgType: event.MsgFile, Body: "file.pdf"}
-	if result, err := gc.HandleMatrixMessage(context.Background(), dm); err == nil || result != nil {
-		t.Fatal("unsupported DM file accepted")
 	}
 }

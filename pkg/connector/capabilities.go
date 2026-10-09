@@ -22,6 +22,7 @@ import (
 	"slices"
 
 	"github.com/beeper/groupme-lib"
+	"github.com/beeper/groupme/pkg/groupmeext"
 
 	"maunium.net/go/mautrix/bridgev2"
 	"maunium.net/go/mautrix/event"
@@ -37,6 +38,7 @@ func (gc *GMConnector) GetCapabilities() *bridgev2.NetworkGeneralCapabilities {
 }
 
 const MaxFileSize = 25 * 1024 * 1024
+const MaxDocumentSize = groupmeext.MaxMediaSize
 
 var imageMimes = map[string]event.CapabilitySupportLevel{
 	"image/png":  event.CapLevelFullySupported,
@@ -54,24 +56,25 @@ var fileMimes = map[string]event.CapabilitySupportLevel{
 }
 
 var roomCaps = &event.RoomFeatures{
-	ID: "fi.mau.groupme.capabilities.2026_10_01.3",
+	ID: "fi.mau.groupme.capabilities.2026_10_08.1",
 	File: event.FileFeatureMap{
 		event.MsgImage: {
 			MimeTypes: imageMimes,
-			Caption:   event.CapLevelRejected,
+			Caption:   event.CapLevelFullySupported,
 			MaxSize:   MaxFileSize,
 		},
 		event.MsgVideo: {
 			MimeTypes: videoMimes,
-			Caption:   event.CapLevelRejected,
+			Caption:   event.CapLevelFullySupported,
 			MaxSize:   MaxFileSize,
 		},
 		event.MsgFile: {
 			MimeTypes: fileMimes,
-			Caption:   event.CapLevelRejected,
-			MaxSize:   MaxFileSize,
+			Caption:   event.CapLevelFullySupported,
+			MaxSize:   MaxDocumentSize,
 		},
 	},
+	MaxTextLength:    1000,
 	Reply:            event.CapLevelFullySupported,
 	Reaction:         event.CapLevelFullySupported,
 	ReactionCount:    1,

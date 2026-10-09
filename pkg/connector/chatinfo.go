@@ -30,18 +30,15 @@ import (
 	"github.com/beeper/groupme/pkg/groupmeext"
 )
 
-func avatarFor(url string) *bridgev2.Avatar {
+func (gc *GMClient) avatarFor(ctx context.Context, url string) *bridgev2.Avatar {
 	if url == "" {
 		return &bridgev2.Avatar{ID: "remove", Remove: true}
 	}
 	return &bridgev2.Avatar{
 		ID: networkid.AvatarID(url),
 		Get: func(ctx context.Context) ([]byte, error) {
-			data, _, err := groupmeext.DownloadImage(url)
-			if err != nil {
-				return nil, err
-			}
-			return *data, nil
+			data, _, err := groupmeext.DownloadImage(ctx, url)
+			return data, err
 		},
 	}
 }
@@ -50,11 +47,11 @@ func avatarFor(url string) *bridgev2.Avatar {
 // leave the avatar alone" (nil) rather than "remove it". Used everywhere a
 // person's avatar comes from a source that can't be trusted to mean "this
 // person has no picture" when it's blank.
-func avatarIfSet(url string) *bridgev2.Avatar {
+func (gc *GMClient) avatarIfSet(ctx context.Context, url string) *bridgev2.Avatar {
 	if url == "" {
 		return nil
 	}
-	return avatarFor(url)
+	return gc.avatarFor(ctx, url)
 }
 
 // avatarAlreadyFailed reports whether this exact avatar URL was already
@@ -121,7 +118,7 @@ func (gc *GMClient) GetChatInfo(ctx context.Context, portal *bridgev2.Portal) (*
 			if m.ImageURL != "" {
 				ghost, err := gc.Main.br.GetExistingGhostByID(ctx, MakeUserID(m.UserID))
 				if err == nil && (ghost == nil || ghost.AvatarMXC == "") && !avatarAlreadyFailed(ghost, m.ImageURL) {
-					info.Avatar = avatarFor(m.ImageURL)
+					info.Avatar = gc.avatarFor(ctx, m.ImageURL)
 				}
 			}
 			members.MemberMap.Set(bridgev2.ChatMember{
@@ -137,7 +134,7 @@ func (gc *GMClient) GetChatInfo(ctx context.Context, portal *bridgev2.Portal) (*
 		return &bridgev2.ChatInfo{
 			Name:    ptr.Ptr(group.Name),
 			Topic:   ptr.Ptr(group.Description),
-			Avatar:  avatarFor(group.ImageURL),
+			Avatar:  gc.avatarFor(ctx, group.ImageURL),
 			Members: members,
 			Type:    &roomType,
 		}, nil
@@ -195,7 +192,7 @@ func (gc *GMClient) GetChatInfo(ctx context.Context, portal *bridgev2.Portal) (*
 		// Sampson" -> "94228122" -> back, on one restart).
 		var otherInfo *bridgev2.UserInfo
 		if found {
-			otherInfo = &bridgev2.UserInfo{Name: ptr.Ptr(name), Avatar: avatarIfSet(avatarURL)}
+			otherInfo = &bridgev2.UserInfo{Name: ptr.Ptr(name), Avatar: gc.avatarIfSet(ctx, avatarURL)}
 			if ghost, err := gc.Main.br.GetExistingGhostByID(ctx, MakeUserID(gmid)); err == nil && avatarAlreadyFailed(ghost, avatarURL) {
 				otherInfo.Avatar = nil
 			}
@@ -217,7 +214,7 @@ func (gc *GMClient) GetChatInfo(ctx context.Context, portal *bridgev2.Portal) (*
 		}
 		return &bridgev2.ChatInfo{
 			Name:    ptr.Ptr(name),
-			Avatar:  avatarIfSet(avatarURL),
+			Avatar:  gc.avatarIfSet(ctx, avatarURL),
 			Members: members,
 			Type:    &roomType,
 		}, nil
@@ -236,7 +233,7 @@ func (gc *GMClient) GetUserInfo(ctx context.Context, ghost *bridgev2.Ghost) (*br
 		if u.ID == gmid {
 			return &bridgev2.UserInfo{
 				Name:   ptr.Ptr(u.Name),
-				Avatar: avatarIfSet(u.AvatarURL),
+				Avatar: gc.avatarIfSet(ctx, u.AvatarURL),
 			}, nil
 		}
 	}
@@ -245,7 +242,7 @@ func (gc *GMClient) GetUserInfo(ctx context.Context, ghost *bridgev2.Ghost) (*br
 		if err == nil {
 			return &bridgev2.UserInfo{
 				Name:   ptr.Ptr(me.Name),
-				Avatar: avatarIfSet(me.AvatarURL),
+				Avatar: gc.avatarIfSet(ctx, me.AvatarURL),
 			}, nil
 		}
 	}
