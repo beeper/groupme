@@ -180,11 +180,19 @@ func (gc *GMClient) dmChatInfo(ctx context.Context, gmid groupme.ID, partner *gr
 		},
 		OtherUserID: MakeUserID(gmid),
 	}
+	var messageRequest *bool
+	conversationID := DMConversationID(groupme.ID(gc.Meta.GMID), gmid)
+	if pending, err := groupmeext.ChatRequiresApproval(ctx, gc.Meta.Token, string(conversationID)); err == nil {
+		messageRequest = &pending
+	} else {
+		zerolog.Ctx(ctx).Warn().Err(err).Msg("Failed to fetch GroupMe message request status")
+	}
 	return &bridgev2.ChatInfo{
-		Name:    ptr.Ptr(name),
-		Avatar:  gc.avatarIfSet(ctx, avatarURL),
-		Members: members,
-		Type:    &roomType,
+		MessageRequest: messageRequest,
+		Name:           ptr.Ptr(name),
+		Avatar:         gc.avatarIfSet(ctx, avatarURL),
+		Members:        members,
+		Type:           &roomType,
 	}
 }
 

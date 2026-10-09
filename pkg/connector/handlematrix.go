@@ -27,7 +27,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/google/uuid"
-	"github.com/rs/zerolog"
 	"go.mau.fi/util/variationselector"
 	"maunium.net/go/mautrix/bridgev2"
 	"maunium.net/go/mautrix/bridgev2/database"
@@ -39,7 +38,10 @@ import (
 	"github.com/beeper/groupme/pkg/groupmeext"
 )
 
-var _ bridgev2.ReactionHandlingNetworkAPI = (*GMClient)(nil)
+var (
+	_ bridgev2.ReactionHandlingNetworkAPI        = (*GMClient)(nil)
+	_ bridgev2.MessageRequestAcceptingNetworkAPI = (*GMClient)(nil)
+)
 
 func (gc *GMClient) PreHandleMatrixReaction(ctx context.Context, msg *bridgev2.MatrixReaction) (bridgev2.MatrixReactionPreResponse, error) {
 	emoji := variationselector.FullyQualify(msg.Content.RelatesTo.Key)
@@ -146,9 +148,6 @@ func (gc *GMClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.Matri
 		sent, err = gc.Client.CreateMessage(ctx, gmid, out)
 	case PortalTypeDM:
 		out.RecipientID = gmid
-		if err = gc.approveDMRequestIfPending(ctx, gmid); err != nil {
-			return nil, err
-		}
 		sent, err = gc.Client.CreateDirectMessage(ctx, out)
 	default:
 		return nil, fmt.Errorf("unknown portal type for %s", msg.Portal.ID)
@@ -267,27 +266,14 @@ func matrixLocationToAttachment(content *event.MessageEventContent) (*groupme.At
 	}, nil
 }
 
-// A new conversation may not have chat metadata yet. A known pending request,
-// however, must be accepted before sending the reply.
-func (gc *GMClient) approveDMRequestIfPending(ctx context.Context, otherUser groupme.ID) error {
-	if err := ctx.Err(); err != nil {
-		return err
+// Bridgev2 invokes this for explicit acceptance or before replying to a request.
+func (gc *GMClient) HandleMatrixAcceptMessageRequest(ctx context.Context, msg *bridgev2.MatrixAcceptMessageRequest) error {
+	portalType, otherUser := ParsePortalID(msg.Portal.ID)
+	if portalType != PortalTypeDM {
+		return fmt.Errorf("GroupMe message requests are only supported in DMs")
 	}
-	convID := string(DMConversationID(groupme.ID(gc.Meta.GMID), otherUser))
-	log := zerolog.Ctx(ctx).With().Str("conversation_id", convID).Logger()
-	pending, err := groupmeext.ChatRequiresApproval(ctx, gc.Meta.Token, convID)
-	if err != nil {
-		log.Warn().Err(err).Msg("Failed to check whether DM is a pending message request, sending anyway")
-		return ctx.Err()
-	}
-	if !pending {
-		return nil
-	}
-	if err := groupmeext.ApproveChat(ctx, gc.Meta.Token, convID); err != nil {
-		return fmt.Errorf("failed to accept GroupMe message request: %w", err)
-	}
-	log.Info().Msg("Accepted GroupMe DM message request before replying")
-	return nil
+	conversationID := DMConversationID(groupme.ID(gc.Meta.GMID), otherUser)
+	return groupmeext.ApproveChat(ctx, gc.Meta.Token, string(conversationID))
 }
 
 // HandleMatrixReaction bridges a Matrix reaction to a GroupMe "like".

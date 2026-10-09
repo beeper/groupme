@@ -31,6 +31,9 @@ import (
 var generalCaps = &bridgev2.NetworkGeneralCapabilities{
 	DisappearingMessages: false,
 	AggressiveUpdateInfo: false,
+	Provisioning: bridgev2.ProvisioningCapabilities{
+		ResolveIdentifier: bridgev2.ResolveIdentifierCapabilities{CreateDM: true, ContactList: true},
+	},
 }
 
 func (gc *GMConnector) GetCapabilities() *bridgev2.NetworkGeneralCapabilities {
@@ -56,7 +59,7 @@ var fileMimes = map[string]event.CapabilitySupportLevel{
 }
 
 var roomCaps = &event.RoomFeatures{
-	ID: "fi.mau.groupme.capabilities.2026_10_08.1",
+	ID: "fi.mau.groupme.capabilities.2026_10_08.2",
 	File: event.FileFeatureMap{
 		event.MsgImage: {
 			MimeTypes: imageMimes,
@@ -86,6 +89,10 @@ var dmRoomCaps = func() *event.RoomFeatures {
 	caps := roomCaps.Clone()
 	caps.ID += ".dm"
 	delete(caps.File, event.MsgFile)
+	caps.MessageRequest = &event.MessageRequestFeatures{
+		AcceptWithMessage: event.CapLevelPartialSupport,
+		AcceptWithButton:  event.CapLevelFullySupported,
+	}
 	return caps
 }()
 

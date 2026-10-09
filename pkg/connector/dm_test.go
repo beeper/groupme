@@ -10,13 +10,14 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/beeper/groupme-lib"
-	"github.com/beeper/groupme/pkg/groupmeext"
 	"maunium.net/go/mautrix/bridgev2"
 	"maunium.net/go/mautrix/bridgev2/database"
 	"maunium.net/go/mautrix/bridgev2/networkid"
 	"maunium.net/go/mautrix/event"
 	"maunium.net/go/mautrix/id"
+
+	"github.com/beeper/groupme-lib"
+	"github.com/beeper/groupme/pkg/groupmeext"
 )
 
 func mockGroupMe(t *testing.T, handle func(*http.Request) (int, string)) {
@@ -84,47 +85,42 @@ func TestDMIncomingAndEchoUseSamePortal(t *testing.T) {
 	}
 }
 
-func TestDMSendAcceptsPendingRequestAndMapsResponse(t *testing.T) {
-	for _, pending := range []bool{false, true} {
-		t.Run(fmt.Sprint(pending), func(t *testing.T) {
-			var calls []string
+func TestDMSendRemoteResponse(t *testing.T) {
+	mockGroupMe(t, func(r *http.Request) (int, string) {
+		if r.Method != "POST" || r.URL.Path != "/v3/direct_messages" {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		var body struct {
+			Message groupme.Message `json:"direct_message"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if body.Message.RecipientID != "9" || body.Message.GroupID != "" || body.Message.Text != "DM test" || body.Message.SourceGUID != "native-transaction-id" {
+			t.Fatalf("incorrect native DM request: %+v", body.Message)
+		}
+		return 201, `{"response":{"direct_message":{"id":"native-dm","created_at":1234567890}},"meta":{"code":201}}`
+	})
+	msg := testMatrixText("dm:9")
+	msg.InputTransactionID = "native-transaction-id"
+	result, err := dmTestClient().HandleMatrixMessage(context.Background(), msg)
+	if err != nil || result.DB.ID != "native-dm" || result.DB.Timestamp.Unix() != 1234567890 {
+		t.Fatalf("lost native send response: %+v, %v", result, err)
+	}
+}
+
+func TestDMAcceptRequestRemoteResponses(t *testing.T) {
+	for _, status := range []int{200, 429} {
+		t.Run(fmt.Sprint(status), func(t *testing.T) {
 			mockGroupMe(t, func(r *http.Request) (int, string) {
-				calls = append(calls, r.Method+" "+r.URL.Path)
-				switch r.URL.Path {
-				case "/v3/chats/9+20":
-					return 200, fmt.Sprintf(`{"response":{"requires_approval":%v}}`, pending)
-				case "/v3/chats/9+20/approve":
-					return 200, `{"meta":{"code":200}}`
-				case "/v3/direct_messages":
-					var body struct {
-						Message groupme.Message `json:"direct_message"`
-					}
-					if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-						t.Fatal(err)
-					}
-					if r.Method != "POST" || body.Message.RecipientID != "9" || body.Message.GroupID != "" || body.Message.Text != "DM test" || body.Message.SourceGUID == "" {
-						t.Fatalf("incorrect DM request: %+v", body.Message)
-					}
-					return 201, `{"response":{"direct_message":{"id":"native-dm"}},"meta":{"code":201}}`
-				default:
-					t.Fatalf("unexpected request: %s", r.URL.Path)
-					return 500, ""
+				if r.Method != "POST" || r.URL.Path != "/v3/chats/9+20/approve" {
+					t.Fatalf("incorrect native approval request: %s %s", r.Method, r.URL.Path)
 				}
+				return status, `{"meta":{"code":200}}`
 			})
-			msg := testMatrixText("dm:9")
-			result, err := dmTestClient().HandleMatrixMessage(context.Background(), msg)
-			if err != nil {
-				t.Fatal(err)
-			}
-			want := "GET /v3/chats/9+20,POST /v3/direct_messages"
-			if pending {
-				want = "GET /v3/chats/9+20,POST /v3/chats/9+20/approve,POST /v3/direct_messages"
-			}
-			if strings.Join(calls, ",") != want {
-				t.Fatalf("incorrect approval/send order: %v", calls)
-			}
-			if result.DB.ID != "native-dm" || result.DB.SenderID != "20" {
-				t.Fatalf("incorrect mapping: %+v", result.DB)
+			err := dmTestClient().HandleMatrixAcceptMessageRequest(context.Background(), &bridgev2.MatrixAcceptMessageRequest{Portal: testMatrixText("dm:9").Portal})
+			if (err != nil) != (status != 200) {
+				t.Fatalf("unexpected approval result: %v", err)
 			}
 		})
 	}
@@ -144,9 +140,6 @@ func TestSendRejectsEmptySuccessAndPreservesFailures(t *testing.T) {
 		} {
 			t.Run(string(portal)+"/"+tc.name, func(t *testing.T) {
 				mockGroupMe(t, func(r *http.Request) (int, string) {
-					if r.Method == "GET" {
-						return 200, `{"response":{"requires_approval":false}}`
-					}
 					return tc.code, fmt.Sprintf(`{"response":%s,"meta":{"code":%d}}`, tc.response, tc.code)
 				})
 				defer func() {
@@ -169,24 +162,6 @@ func TestSendRejectsEmptySuccessAndPreservesFailures(t *testing.T) {
 	}
 }
 
-func TestDMPendingApprovalFailureStopsSend(t *testing.T) {
-	mockGroupMe(t, func(r *http.Request) (int, string) {
-		switch r.URL.Path {
-		case "/v3/chats/9+20":
-			return 200, `{"response":{"requires_approval":true}}`
-		case "/v3/chats/9+20/approve":
-			return 429, `{"error":"private response data"}`
-		default:
-			t.Error("sent DM before required approval succeeded")
-			return 201, `{"response":{"direct_message":{"id":"sent"}},"meta":{"code":201}}`
-		}
-	})
-	result, err := dmTestClient().HandleMatrixMessage(context.Background(), testMatrixText("dm:9"))
-	if result != nil || err == nil || strings.Contains(err.Error(), "private response data") {
-		t.Fatalf("approval failure was lost or exposed response data: %v", err)
-	}
-}
-
 func TestDMCanceledSendMakesNoRequest(t *testing.T) {
 	mockGroupMe(t, func(r *http.Request) (int, string) {
 		t.Fatal("canceled send made a request")
@@ -203,9 +178,6 @@ func TestDMCanceledSendMakesNoRequest(t *testing.T) {
 func TestSendRetryKeepsNativeRequestIdentity(t *testing.T) {
 	var guids []string
 	mockGroupMe(t, func(r *http.Request) (int, string) {
-		if r.Method == "GET" {
-			return 200, `{"response":{"requires_approval":false}}`
-		}
 		var body map[string]groupme.Message
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Fatal(err)
