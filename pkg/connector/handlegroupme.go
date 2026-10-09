@@ -37,141 +37,24 @@ import (
 	"github.com/beeper/groupme/pkg/groupmeext"
 )
 
-// This file implements groupme.HandlerAll, converting GroupMe's real-time
-// push events (delivered over the Faye/Bayeux channel via pkg/groupmeext)
-// into bridgev2 remote events. It is a port of the equivalent logic that
-// used to live in user.go/portal.go before the bridgev2 migration.
+// GroupMe push handlers translate native events into bridgev2 remote events.
 
 func (gc *GMClient) HandleError(err error) {
 	gc.UserLogin.Log.Err(err).Msg("Error from GroupMe push subscription")
 }
 
-// ghostRefreshCooldown bounds how often HandleTextMessage's opportunistic
-// ghost name/avatar refresh (below) can actually run for a given sender,
-// regardless of how many messages mention them. See shouldRefreshGhost
-// and the call site's doc comment for why this exists -- in short,
-// without it, REST polling replaying old messages every tick could flip
-// a ghost's name/avatar back and forth forever.
-const ghostRefreshCooldown = 10 * time.Minute
-
-// shouldRefreshGhost reports whether HandleTextMessage's opportunistic
-// ghost refresh should actually run for gmid right now, and if so records
-// that it did. Callers should treat a false return as "skip this time",
-// not an error.
-func (gc *GMClient) shouldRefreshGhost(gmid groupme.ID) bool {
-	gc.ghostRefreshMu.Lock()
-	defer gc.ghostRefreshMu.Unlock()
-	if gc.ghostRefreshedAt == nil {
-		gc.ghostRefreshedAt = make(map[string]time.Time)
-	}
-	if last, ok := gc.ghostRefreshedAt[gmid.String()]; ok && time.Since(last) < ghostRefreshCooldown {
-		return false
-	}
-	gc.ghostRefreshedAt[gmid.String()] = time.Now()
-	return true
-}
-
 func (gc *GMClient) HandleTextMessage(msg groupme.Message) {
+	if msg.ID == "" || msg.UserID == "" || gc.portalKeyForMessage(&msg).ID == "" {
+		gc.UserLogin.Log.Warn().Msg("Ignoring malformed GroupMe push message")
+		return
+	}
 	gc.Main.br.QueueRemoteEvent(gc.UserLogin, gc.makeRemoteMessage(msg))
+	gc.subscribeToChat(gc.portalKeyForMessage(&msg).ID)
 }
 
 func (gc *GMClient) makeRemoteMessage(msg groupme.Message) *simplevent.Message[*groupme.Message] {
 	portalKey := gc.portalKeyForMessage(&msg)
-	sender := bridgev2.EventSender{
-		IsFromMe: msg.UserID == groupme.ID(gc.Meta.GMID),
-		Sender:   MakeUserID(msg.UserID),
-	}
-
-	// Every GroupMe message carries the sender's name as of when it was
-	// sent (msg.Name), often also an avatar (msg.AvatarURL). GetChatInfo's
-	// group-member sync (chatinfo.go) only knows about *current* group
-	// members via their per-group nickname, so anyone who has since left a
-	// group -- or whose membership sync hasn't run yet -- would otherwise
-	// only ever get a raw-numeric-ID ghost name. Opportunistically refresh
-	// the ghost here too, on every message, as a second source that also
-	// covers former members. Best-effort and non-blocking: message
-	// delivery must not wait on this.
-	//
-	// Three real production bugs found in this one feature so far, all
-	// from the same underlying mistake -- treating "a message mentions
-	// this sender" as if it meant "this is fresh, current info about this
-	// sender", when a message is really a snapshot from whenever it was
-	// *sent*, and this function runs for every message polling re-fetches
-	// every tick (poll.go), not just genuinely new ones:
-	//
-	//  1. msg.AvatarURL is only ever passed through when non-empty --
-	//     confirmed live that GroupMe does NOT reliably echo it on every
-	//     message even for senders who do have a real profile picture set.
-	//     Passing avatarFor("") unconditionally caused a real erase/restore
-	//     flicker every time an avatar-url-less message got (re)processed.
-	//     UserInfo.Avatar left nil means "don't touch the avatar" (see
-	//     bridgev2 Ghost.UpdateInfo), not "remove it".
-	//  2. gc.shouldRefreshGhost throttles this to once per sender per
-	//     cooldown window -- fixing (1) alone wasn't enough, because
-	//     polling replays the same recent-messages page every 60s forever,
-	//     and that page can span a real nickname/avatar change; without a
-	//     cooldown, every poll tick re-walks the same span of old/new
-	//     snapshots and flips the ghost back and forth between them, once
-	//     per message per tick, indefinitely.
-	//  3. Even with the cooldown, a genuinely bad snapshot could still get
-	//     through and *persist* for the whole cooldown window: confirmed
-	//     live, two real senders had a years-old message on record with
-	//     GroupMe's own literal "GroupMe" as the recorded sender name
-	//     (apparently a real GroupMe-side data artifact from whenever
-	//     those messages were originally sent), and polling replaying that
-	//     one old message was enough to overwrite their ghost's real name
-	//     with "GroupMe" every time the cooldown lapsed. The cooldown
-	//     controls *frequency*; it does nothing about *correctness* when
-	//     the stale snapshot itself is bad. Fixed at the root instead of
-	//     patching around it further: skip the refresh entirely unless
-	//     this specific message hasn't been bridged before (i.e. this is
-	//     the message's first time through this function, live push or
-	//     first poll sighting -- never a replay). A message already in the
-	//     DB is, by definition, not fresh information about its sender no
-	//     matter what it says.
-	//     See NOTES.md "Live incident: avatar flicker/reupload storm,
-	//     take three" for the full incident -- discovered mid-cleanup of
-	//     the historical spam these earlier attempts left behind.
-	if msg.Name != "" && msg.UserID != groupme.ID(gc.Meta.GMID) {
-		go func(gmid groupme.ID, name, avatarURL string, id networkid.MessageID) {
-			ctx := context.Background()
-			if existing, err := gc.Main.br.DB.Message.GetAllPartsByID(ctx, gc.UserLogin.ID, id); err != nil {
-				gc.UserLogin.Log.Warn().Err(err).Str("gmid", string(gmid)).
-					Msg("Failed to check if message is new before opportunistic ghost refresh, skipping to be safe")
-				return
-			} else if len(existing) > 0 {
-				// Already bridged -- this is polling replaying old
-				// history, not a genuinely new message. Its sender
-				// snapshot is stale by definition; see bug 3 above.
-				return
-			}
-			if !gc.shouldRefreshGhost(gmid) {
-				return
-			}
-			ghost, err := gc.Main.br.GetGhostByID(ctx, MakeUserID(gmid))
-			if err != nil {
-				gc.UserLogin.Log.Warn().Err(err).Str("gmid", string(gmid)).
-					Msg("Failed to get ghost for opportunistic name refresh from message")
-				return
-			}
-			// 4. Fill gaps only. A message's name/avatar are the sender's
-			//    *per-group* nickname and picture, so even a genuinely
-			//    new message would flip the one shared profile between
-			//    groups (see the identity note in chatinfo.go). The group
-			//    and DM resyncs own the account-level name/avatar.
-			info := &bridgev2.UserInfo{}
-			if !ghostHasRealName(ghost) {
-				info.Name = ptr.Ptr(name)
-			}
-			if avatarURL != "" && ghost.AvatarMXC == "" && !avatarAlreadyFailed(ghost, avatarURL) {
-				info.Avatar = gc.avatarFor(ctx, avatarURL)
-			}
-			if info.Name == nil && info.Avatar == nil {
-				return
-			}
-			ghost.UpdateInfo(ctx, info)
-		}(msg.UserID, msg.Name, msg.AvatarURL, MakeMessageID(msg.ID))
-	}
+	sender := gc.messageSender(&msg)
 
 	return &simplevent.Message[*groupme.Message]{
 		EventMeta: simplevent.EventMeta{
@@ -181,12 +64,39 @@ func (gc *GMClient) makeRemoteMessage(msg groupme.Message) *simplevent.Message[*
 			CreatePortal: true,
 			Timestamp:    msg.CreatedAt.ToTime(),
 		},
-		ID:   MakeMessageID(msg.ID),
-		Data: &msg,
-		ConvertMessageFunc: func(ctx context.Context, portal *bridgev2.Portal, intent bridgev2.MatrixAPI, data *groupme.Message) (*bridgev2.ConvertedMessage, error) {
-			return gc.convertGroupMeMessage(ctx, portal, intent, data)
-		},
+		ID:                 MakeMessageID(msg.ID),
+		Data:               &msg,
+		ConvertMessageFunc: gc.convertMessage,
 	}
+}
+
+func (gc *GMClient) messageSender(msg *groupme.Message) bridgev2.EventSender {
+	if msg.UserID == "system" || msg.System {
+		return bridgev2.EventSender{}
+	}
+	return bridgev2.EventSender{IsFromMe: string(msg.UserID) == gc.Meta.GMID, Sender: MakeUserID(msg.UserID)}
+}
+
+func (gc *GMClient) convertMessage(ctx context.Context, portal *bridgev2.Portal, intent bridgev2.MatrixAPI, msg *groupme.Message) (*bridgev2.ConvertedMessage, error) {
+	// Message snapshots may fill a missing profile, never overwrite current
+	// account-level data. Conversion runs inside the framework event path.
+	if msg.Name != "" && string(msg.UserID) != gc.Meta.GMID && msg.UserID != "system" && !msg.System {
+		ghost, err := gc.Main.br.GetGhostByID(ctx, MakeUserID(msg.UserID))
+		if err != nil {
+			return nil, err
+		}
+		info := &bridgev2.UserInfo{}
+		if !ghostHasRealName(ghost) {
+			info.Name = ptr.Ptr(msg.Name)
+		}
+		if msg.AvatarURL != "" && ghost.AvatarMXC == "" {
+			info.Avatar = gc.avatarFor(ctx, msg.AvatarURL)
+		}
+		if info.Name != nil || info.Avatar != nil {
+			ghost.UpdateInfo(ctx, info)
+		}
+	}
+	return gc.convertGroupMeMessage(ctx, portal, intent, msg)
 }
 
 // convertGroupMeMessage builds the Matrix message parts for an incoming
@@ -410,10 +320,9 @@ func convertGroupMePollEvent(ctx context.Context, client *groupmeext.Client, msg
 	}
 }
 
-// HandleLike is called when GroupMe reports that a message's reactions
-// changed. GroupMe doesn't tell us who added/removed which reaction, just
-// the resulting state, so this is bridged as a full reaction resync for
-// the message.
+// HandleLike receives a favorite event's complete reaction snapshot, bridged
+// through the SDK's reaction resync. Individual like.create/like.delete changes
+// use HandleReaction instead.
 //
 // GroupMe now supports full per-emoji reactions (confirmed live against
 // the real API: msg.Reactions is a list of {emoji code, user_ids} pairs,
@@ -427,10 +336,43 @@ func convertGroupMePollEvent(ctx context.Context, client *groupmeext.Client, msg
 // silently dropped -- but it can only ever be represented as a generic ❤,
 // since it doesn't say which emoji was actually used.
 func (gc *GMClient) HandleLike(msg groupme.Message) {
+	if msg.ID == "" || gc.portalKeyForMessage(&msg).ID == "" {
+		return
+	}
+	gc.Main.br.QueueRemoteEvent(gc.UserLogin, &simplevent.ReactionSync{
+		EventMeta:     simplevent.EventMeta{Type: bridgev2.RemoteEventReactionSync, PortalKey: gc.portalKeyForMessage(&msg), Timestamp: time.Now()},
+		TargetMessage: MakeMessageID(msg.ID), Reactions: gc.messageReactions(&msg),
+	})
+}
+
+// Modern like.create/like.delete pushes carry an individual user's change.
+// The empty EmojiID identifies their single reaction, allowing bridgev2 to
+// replace its emoji or remove it without affecting anyone else's reaction.
+func (gc *GMClient) HandleReaction(msg groupme.Message, userID groupme.ID, reaction *groupme.Reaction) {
 	portalKey := gc.portalKeyForMessage(&msg)
+	if msg.ID == "" || userID == "" || portalKey.ID == "" {
+		return
+	}
+	evt := &simplevent.Reaction{
+		EventMeta: simplevent.EventMeta{
+			Type:      bridgev2.RemoteEventReactionRemove,
+			PortalKey: portalKey,
+			Sender:    bridgev2.EventSender{IsFromMe: string(userID) == gc.Meta.GMID, Sender: MakeUserID(userID)},
+			Timestamp: time.Now(),
+		},
+		TargetMessage: MakeMessageID(msg.ID),
+	}
+	if reaction != nil {
+		evt.Type = bridgev2.RemoteEventReaction
+		evt.Emoji = reaction.Code
+	}
+	gc.Main.br.QueueRemoteEvent(gc.UserLogin, evt)
+}
+
+func (gc *GMClient) messageReactions(msg *groupme.Message) *bridgev2.ReactionSyncData {
 	users := make(map[networkid.UserID]*bridgev2.ReactionSyncUser)
 
-	if len(msg.Reactions) > 0 {
+	if msg.Reactions != nil {
 		for _, r := range msg.Reactions {
 			if r.Code == "" {
 				continue
@@ -467,22 +409,12 @@ func (gc *GMClient) HandleLike(msg groupme.Message) {
 		}
 	}
 
-	gc.Main.br.QueueRemoteEvent(gc.UserLogin, &simplevent.ReactionSync{
-		EventMeta: simplevent.EventMeta{
-			Type:      bridgev2.RemoteEventReactionSync,
-			PortalKey: portalKey,
-			Timestamp: time.Now(),
-		},
-		TargetMessage: MakeMessageID(msg.ID),
-		Reactions: &bridgev2.ReactionSyncData{
-			Users:       users,
-			HasAllUsers: true,
-		},
-	})
+	return &bridgev2.ReactionSyncData{Users: users, HasAllUsers: true}
 }
 
 func (gc *GMClient) HandleJoin(id groupme.ID) {
 	gc.resyncGroup(id)
+	gc.subscribeToChat(MakeGroupPortalID(id))
 }
 
 func (gc *GMClient) HandleGroupName(group groupme.ID, newName string) {

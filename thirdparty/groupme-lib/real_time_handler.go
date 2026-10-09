@@ -2,10 +2,48 @@ package groupme
 
 import (
 	"encoding/json"
-	"fmt"
-	"log"
 	"strconv"
 )
+
+// Modern push events describe the reacting user separately from the message
+// author. In particular, like.delete doesn't include a full reaction snapshot.
+func reactionHandler(remove bool) func(*PushSubscription, string, ...interface{}) {
+	return func(r *PushSubscription, _ string, data ...interface{}) {
+		if len(data) == 0 {
+			return
+		}
+		raw, err := json.Marshal(data[0])
+		if err != nil {
+			return
+		}
+		var subject struct {
+			Line          Message   `json:"line"`
+			DirectMessage Message   `json:"direct_message"`
+			UserID        ID        `json:"user_id"`
+			UserReaction  *Reaction `json:"user_reaction"`
+		}
+		if json.Unmarshal(raw, &subject) != nil || subject.UserID == "" {
+			return
+		}
+		msg := subject.Line
+		if msg.ID == "" {
+			msg = subject.DirectMessage
+		}
+		if msg.ID == "" {
+			return
+		}
+		if remove {
+			subject.UserReaction = nil
+		} else if subject.UserReaction == nil || subject.UserReaction.Type != "unicode" || subject.UserReaction.Code == "" {
+			return
+		}
+		for _, h := range r.handlers {
+			if h, ok := h.(HandlerReaction); ok {
+				h.HandleReaction(msg, subject.UserID, subject.UserReaction)
+			}
+		}
+	}
+}
 
 func init() {
 
@@ -13,39 +51,31 @@ func init() {
 
 	//Base Handlers on user channel
 	RealTimeHandlers["direct_message.create"] = func(r *PushSubscription, channel string, data ...interface{}) {
-		b, _ := json.Marshal(data[0])
-		out := Message{}
-		_ = json.Unmarshal(b, &out)
-
-		//maybe something with API versioning
-		out.ConversationID = out.ChatID
-
-		if out.UserID.String() == "system" {
-			event := struct {
-				Event struct {
-					Kind string `json:"type"`
-					Data interface{}
+		if len(data) == 0 {
+			return
+		}
+		b, err := json.Marshal(data[0])
+		if err != nil {
+			return
+		}
+		var out Message
+		if json.Unmarshal(b, &out) != nil || out.ID == "" {
+			return
+		}
+		if out.ConversationID == "" {
+			out.ConversationID = out.ChatID
+		}
+		if out.UserID == "system" && out.Event != nil {
+			if handler := RealTimeSystemHandlers[out.Event.Type]; handler != nil {
+				id := out.GroupID
+				if id == "" {
+					id = out.ConversationID
 				}
-			}{}
-
-			err := json.Unmarshal(b, &event)
-			if err != nil {
-				fmt.Println(err)
-			}
-			rawData, _ := json.Marshal(event.Event.Data)
-			handler, ok := RealTimeSystemHandlers[event.Event.Kind]
-			if !ok {
-				log.Println("Unable to handle system message of type", event.Event.Kind)
+				handler(r, channel, id, out.Event.Data)
 				return
 			}
-
-			id := out.GroupID
-			if len(id) == 0 {
-				id = out.ConversationID
-			}
-
-			handler(r, channel, id, rawData)
-			return
+			// Polls and other user-visible system messages still have useful
+			// content. Let the network connector convert the native envelope.
 		}
 
 		for _, h := range r.handlers {
@@ -57,8 +87,8 @@ func init() {
 
 	RealTimeHandlers["line.create"] = RealTimeHandlers["direct_message.create"]
 
-	RealTimeHandlers["like.create"] = func(r *PushSubscription, channel string, data ...interface{}) { //should be an associated chatEvent
-	}
+	RealTimeHandlers["like.create"] = reactionHandler(false)
+	RealTimeHandlers["like.delete"] = reactionHandler(true)
 
 	RealTimeHandlers["membership.create"] = func(r *PushSubscription, channel string, data ...interface{}) {
 		c, _ := data[0].(map[string]interface{})
@@ -72,21 +102,37 @@ func init() {
 
 	}
 
-	//following are for each chat
+	// Chat-channel favorite events contain a complete reaction snapshot next
+	// to the target message, not inside it. Older payloads used message fields.
 	RealTimeHandlers["favorite"] = func(r *PushSubscription, channel string, data ...interface{}) {
-		c, ok := data[0].(map[string]interface{})
-		if !ok {
-			fmt.Println(data, "err")
+		if len(data) == 0 {
 			return
 		}
-		e, ok := c["line"]
-		if !ok {
-			fmt.Println(data, "err")
+		raw, err := json.Marshal(data[0])
+		if err != nil {
 			return
 		}
-		d, _ := json.Marshal(e)
-		msg := Message{}
-		_ = json.Unmarshal(d, &msg)
+		var subject struct {
+			Line          Message    `json:"line"`
+			DirectMessage Message    `json:"direct_message"`
+			Reactions     []Reaction `json:"reactions"`
+		}
+		if json.Unmarshal(raw, &subject) != nil {
+			return
+		}
+		msg := subject.Line
+		if msg.ID == "" {
+			msg = subject.DirectMessage
+		}
+		if msg.ID == "" {
+			return
+		}
+		if subject.Reactions != nil {
+			msg.Reactions = subject.Reactions
+		} else if msg.Reactions == nil && msg.FavoritedBy == nil {
+			// Missing state is not an empty snapshot: do not remove reactions.
+			return
+		}
 		for _, h := range r.handlers {
 			if h, ok := h.(HandlerLike); ok {
 				h.HandleLike(msg)
