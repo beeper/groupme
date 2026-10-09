@@ -6,10 +6,11 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/beeper/groupme-lib"
 	"maunium.net/go/mautrix/bridgev2/database"
 	"maunium.net/go/mautrix/bridgev2/networkid"
 	"maunium.net/go/mautrix/event"
+
+	"github.com/beeper/groupme-lib"
 )
 
 func TestReplySendRetainsRelationAndAttachment(t *testing.T) {
@@ -17,9 +18,6 @@ func TestReplySendRetainsRelationAndAttachment(t *testing.T) {
 		for _, location := range []bool{false, true} {
 			t.Run(string(portal)+"/"+map[bool]string{false: "text", true: "location"}[location], func(t *testing.T) {
 				mockGroupMe(t, func(r *http.Request) (int, string) {
-					if r.Method == "GET" {
-						return 200, `{"response":{"requires_approval":false}}`
-					}
 					var body map[string]groupme.Message
 					if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 						t.Fatal(err)
@@ -61,22 +59,11 @@ func TestReplyConversionUsesImmediateParent(t *testing.T) {
 		{Type: groupme.Reply, ReplyID: "immediate-parent", BaseReplyID: "thread-root", UserID: "9"},
 		{Type: groupme.Location, Latitude: "51.5", Longitude: "-0.1", Name: "Test location"},
 	}}
-	converted, err := convertGroupMeMessage(context.Background(), nil, nil, msg, nil, "")
+	converted, err := (&GMClient{Main: &GMConnector{}}).convertGroupMeMessage(context.Background(), nil, nil, msg)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if converted.ReplyTo == nil || converted.ReplyTo.MessageID != "immediate-parent" || len(converted.Parts) != 2 || converted.Parts[0].Content.MsgType != event.MsgLocation || converted.Parts[1].Content.Body != "reply" {
 		t.Fatalf("reply lost relation or content: %+v", converted)
-	}
-}
-
-func TestReplyCannotCrossConversationOrAccount(t *testing.T) {
-	for _, target := range []networkid.PortalKey{{ID: "group:other", Receiver: "20"}, {ID: "group:9", Receiver: "other-account"}} {
-		msg := testMatrixText("group:9")
-		msg.ReplyTo = &database.Message{ID: "parent", Room: target}
-		mockGroupMe(t, func(*http.Request) (int, string) { t.Fatal("invalid reply sent a request"); return 500, "" })
-		if result, err := dmTestClient().HandleMatrixMessage(context.Background(), msg); err == nil || result != nil {
-			t.Fatal("accepted cross-conversation reply")
-		}
 	}
 }

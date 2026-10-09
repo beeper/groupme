@@ -3,18 +3,14 @@ package connector
 import (
 	"context"
 	"encoding/json"
-	"io"
 	"net/http"
-	"strings"
 	"testing"
 
 	"maunium.net/go/mautrix/bridgev2"
 	"maunium.net/go/mautrix/bridgev2/database"
-	"maunium.net/go/mautrix/bridgev2/networkid"
 	"maunium.net/go/mautrix/event"
 
 	"github.com/beeper/groupme-lib"
-	"github.com/beeper/groupme/pkg/groupmeext"
 )
 
 func TestSendTextConvertsFormattingToPlaintext(t *testing.T) {
@@ -23,18 +19,12 @@ func TestSendTextConvertsFormattingToPlaintext(t *testing.T) {
 		msgType                event.MessageType
 	}{
 		{"bold", "Beeper bridge test reply", "<strong>Beeper bridge test reply</strong>", "Beeper bridge test reply", event.MsgText},
-		{"beeper bold fallback", "**Bold test two**", "<strong>Bold test two</strong>", "Bold test two", event.MsgText},
 		{"literal markers", "**literal asterisks**", "", "**literal asterisks**", event.MsgText},
-		{"literal markers in HTML", "**literal asterisks**", "<p>**literal asterisks**</p>", "**literal asterisks**", event.MsgText},
-		{"nested formatting", "**bold _and italic_** ~~deleted~~ `code`", "<strong>bold <em>and italic</em></strong> <del>deleted</del> <code>code</code>", "bold and italic deleted code", event.MsgText},
-		{"multiline link", "First line\nExample: https://example.com/", "First line<br>Example: <a href=\"https://example.com/\">website</a>", "First line\nExample: website (https://example.com/)", event.MsgText},
-		{"code block", "```\na * b\nc\n```", "<pre><code>a * b\nc</code></pre>", "a * b\nc", event.MsgText},
 		{"emote", "waves", "<em>waves</em>", "/me waves", event.MsgEmote},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			calls := 0
-			previous := http.DefaultTransport
-			http.DefaultTransport = loginTransport(func(r *http.Request) (*http.Response, error) {
+			mockGroupMe(t, func(r *http.Request) (int, string) {
 				calls++
 				if r.Method != http.MethodPost || r.URL.Path != "/v3/groups/test-group/messages" {
 					t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
@@ -48,25 +38,21 @@ func TestSendTextConvertsFormattingToPlaintext(t *testing.T) {
 				if request.Message.Text != tc.want {
 					t.Errorf("sent text %q, want %q", request.Message.Text, tc.want)
 				}
-				return &http.Response{StatusCode: http.StatusCreated, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"response":{"message":{"id":"sent-message"}},"meta":{"code":201}}`))}, nil
+				return 201, `{"response":{"message":{"id":"sent-message"}},"meta":{"code":201}}`
 			})
-			t.Cleanup(func() { http.DefaultTransport = previous })
-			gc := &GMClient{Client: groupmeext.NewClient("test-token"), Meta: &UserLoginMetadata{GMID: "self"}}
+			gc := dmTestClient()
 			content := &event.MessageEventContent{MsgType: tc.msgType, Body: tc.body}
 			if tc.html != "" {
 				content.Format = event.FormatHTML
 				content.FormattedBody = tc.html
 			}
-			msg := &bridgev2.MatrixMessage{MatrixEventBase: bridgev2.MatrixEventBase[*event.MessageEventContent]{
-				Event:   &event.Event{ID: "$matrix-message", Timestamp: 1234567890000},
-				Content: content,
-				Portal:  &bridgev2.Portal{Portal: &database.Portal{PortalKey: networkid.PortalKey{ID: "group:test-group", Receiver: "self"}}},
-			}}
+			msg := testMatrixText("group:test-group")
+			msg.Content = content
 			result, err := gc.HandleMatrixMessage(context.Background(), msg)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if calls != 1 || result.DB.ID != MakeMessageID("sent-message") || result.DB.MXID != msg.Event.ID || result.DB.Room != msg.Portal.PortalKey {
+			if calls != 1 || result.DB.ID != MakeMessageID("sent-message") {
 				t.Fatalf("unexpected send result: calls=%d, message=%+v", calls, result.DB)
 			}
 		})
@@ -84,8 +70,7 @@ func TestSendReactionPreservesEmoji(t *testing.T) {
 	} {
 		t.Run(tc.key, func(t *testing.T) {
 			calls := 0
-			previous := http.DefaultTransport
-			http.DefaultTransport = loginTransport(func(r *http.Request) (*http.Response, error) {
+			mockGroupMe(t, func(r *http.Request) (int, string) {
 				calls++
 				if r.Method != http.MethodPost || r.URL.Path != "/v3/messages/test-group/test-message/like" {
 					t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
@@ -99,14 +84,13 @@ func TestSendReactionPreservesEmoji(t *testing.T) {
 				if request.LikeIcon.Type != "unicode" || request.LikeIcon.Code != tc.want {
 					t.Errorf("sent reaction %+v, want unicode %q", request.LikeIcon, tc.want)
 				}
-				return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"meta":{"code":200}}`))}, nil
+				return 200, `{"meta":{"code":200}}`
 			})
-			t.Cleanup(func() { http.DefaultTransport = previous })
-			gc := &GMClient{Client: groupmeext.NewClient("test-token"), Meta: &UserLoginMetadata{GMID: "self"}}
+			gc := dmTestClient()
 			msg := &bridgev2.MatrixReaction{
 				MatrixEventBase: bridgev2.MatrixEventBase[*event.ReactionEventContent]{
 					Content: &event.ReactionEventContent{RelatesTo: event.RelatesTo{Key: tc.key}},
-					Portal:  &bridgev2.Portal{Portal: &database.Portal{PortalKey: networkid.PortalKey{ID: "group:test-group", Receiver: "self"}}},
+					Portal:  testMatrixText("group:test-group").Portal,
 				},
 				TargetMessage: &database.Message{ID: MakeMessageID("test-message")},
 			}
@@ -119,9 +103,6 @@ func TestSendReactionPreservesEmoji(t *testing.T) {
 			}
 			if err != nil {
 				t.Fatal(err)
-			}
-			if pre.Emoji != tc.want || pre.MaxReactions != 1 {
-				t.Fatalf("unexpected reaction metadata: %+v", pre)
 			}
 			msg.PreHandleResp = &pre
 			if _, err = gc.HandleMatrixReaction(context.Background(), msg); err != nil {

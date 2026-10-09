@@ -3,6 +3,8 @@
 .codex
 .aws
 .local
+FRAMEWORK_RECOMMENDATIONS.md
+GM-20261008-video.mp4
 *.db
 *.db-*
 *.log

@@ -19,10 +19,8 @@ package groupmeext
 import (
 	"bytes"
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"strconv"
 	"strings"
 	"sync"
@@ -36,50 +34,17 @@ import (
 	"github.com/beeper/groupme-lib"
 )
 
-// wsPushServer is the websocket variant of groupme.PushServer
-// ("https://push.groupme.com/faye"). Same host and path as the HTTP
-// long-polling transport, per both dev.groupme.com/tutorials/push and
-// https://groupme-js.github.io/GroupMeCommunityDocs/api/ws/ (verified
-// 2026-09-18) -- only the scheme and the handshake's
-// supportedConnectionTypes differ.
+// GroupMe uses the same Faye endpoint for WebSocket and HTTP transports.
 var wsPushServer = "wss" + strings.TrimPrefix(groupme.PushServer, "https")
 
 const (
-	metaHandshake = "/meta/handshake"
-	metaSubscribe = "/meta/subscribe"
-	metaConnect   = "/meta/connect"
+	metaHandshake   = "/meta/handshake"
+	metaSubscribe   = "/meta/subscribe"
+	metaUnsubscribe = "/meta/unsubscribe"
+	metaConnect     = "/meta/connect"
 )
 
-// sustainedDegradationThreshold and degradedAlertRepeatInterval govern
-// maybeLogSustainedDegradation, below.
-const (
-	sustainedDegradationThreshold = 5 * time.Minute
-	degradedAlertRepeatInterval   = 15 * time.Minute
-)
-
-// wsDialHTTPClient is used for the WebSocket upgrade handshake, exactly
-// mirroring the HTTP/1.1-forcing patch already applied to the vendored
-// long-polling transport (thirdparty/wray/http_transport.go). The RFC 6455
-// upgrade handshake is defined in terms of HTTP/1.1 semantics (a
-// "Connection: Upgrade" request), which Go's HTTP/2 transport does not
-// speak; since push.groupme.com/faye was already observed to hang/504 on
-// HTTP/2 for the long-polling transport on this host, the same defensive
-// fix is applied here up front rather than waiting to see if the websocket
-// path reproduces the same failure mode.
-var wsDialHTTPClient = &http.Client{
-	Transport: &http.Transport{
-		TLSNextProto: make(map[string]func(authority string, c *tls.Conn) http.RoundTripper),
-	},
-}
-
-// bayeuxMessage is a Bayeux protocol message, marshaled/unmarshaled as JSON
-// for the websocket transport. Field names/tags intentionally mirror
-// thirdparty/wray/response.go's `message` struct so the wire format matches
-// what GroupMe's push server already accepts from the long-polling path.
-//
-// Struct field names are chosen to avoid colliding with the PushMessage
-// interface methods implemented below (Channel/Data/Ext/Error), since Go
-// doesn't allow a field and a method of the same name on one type.
+// Bayeux field names match the native wire format.
 type bayeuxMessage struct {
 	ReqID                    string                 `json:"id,omitempty"`
 	Chan                     string                 `json:"channel,omitempty"`
@@ -96,15 +61,10 @@ type bayeuxMessage struct {
 }
 
 type bayeuxAdvice struct {
-	Reconnect string  `json:"reconnect,omitempty"`
-	Interval  float64 `json:"interval,omitempty"`
-	Timeout   float64 `json:"timeout,omitempty"`
+	Reconnect string `json:"reconnect,omitempty"`
 }
 
-// Channel, Data, Ext, and Error implement groupme.PushMessage, which lets a
-// *bayeuxMessage be handed directly to GroupMe's HandlerAll dispatch
-// (via PushSubscription.channel), exactly
-// like the wray-backed long-polling messages already do.
+// Adapt native messages to the GroupMe library's push dispatcher.
 func (m *bayeuxMessage) Channel() string { return m.Chan }
 func (m *bayeuxMessage) Data() map[string]interface{} {
 	return m.MsgData
@@ -117,45 +77,32 @@ func (m *bayeuxMessage) Ext() map[string]interface{} {
 }
 func (m *bayeuxMessage) Error() string { return m.MsgError }
 
-// WSFayeClient is a Bayeux client for GroupMe's push service
-// (push.groupme.com/faye) that speaks the protocol over a WebSocket instead
-// of the HTTP long-polling transport implemented by github.com/karmanyaahm/wray
-// (vendored at thirdparty/wray/). GroupMe's current docs recommend
-// websocket over long-polling, and the community-documented handshake
-// declares `"supportedConnectionTypes":["websocket"]` -- see NOTES.md for
-// the full investigation that motivated this.
-//
-// It implements groupme.FayeClient (Listen/WaitSubscribe), so it's a
-// drop-in replacement for the wray-backed FayeClient in this package: both
-// satisfy the same interface consumed by groupme.PushSubscription.
+// WSFayeClient implements GroupMe's Bayeux protocol over WebSocket.
 type WSFayeClient struct {
-	url string
-	log zerolog.Logger
+	log            zerolog.Logger
+	onSubscribed   func(ctx context.Context, channel string)
+	onDisconnected func(err error)
 
-	mu       sync.Mutex
-	conn     *websocket.Conn
-	clientID string
-	subs     map[string]pushSubscription
+	mu          sync.Mutex
+	conn        *websocket.Conn
+	connCtx     context.Context
+	connWorkers *sync.WaitGroup
+	clientID    string
+	subs        map[string]*pushSubscription
 
 	pendingMu sync.Mutex
 	pending   map[string]chan *bayeuxMessage
 
-	writeMu sync.Mutex
-	nextID  atomic.Int64
-
-	// connStateMu guards lastConnected/nextDegradedAt, used only by
-	// markConnected/maybeLogSustainedDegradation below to detect and alert
-	// on sustained (not just momentary) connection loss. Kept separate
-	// from mu since it's logically independent of the actual conn/subs
-	// state that mu protects.
-	connStateMu    sync.Mutex
-	lastConnected  time.Time
-	nextDegradedAt time.Time
+	nextID atomic.Int64
 }
 
+// Pushes that arrive before a channel is ready are held for the current connection.
 type pushSubscription struct {
-	messages chan groupme.PushMessage
-	token    string
+	messages    chan groupme.PushMessage
+	token       string
+	subscribing bool
+	ready       bool
+	held        []*bayeuxMessage
 }
 
 var _ groupme.FayeClient = (*WSFayeClient)(nil)
@@ -163,17 +110,16 @@ var _ groupme.FayeClient = (*WSFayeClient)(nil)
 // NewWSFayeClient creates a websocket-based Faye/Bayeux client for GroupMe's
 // push service. Call Listen (typically via
 // groupme.PushSubscription.StartListening) to begin connecting.
-func NewWSFayeClient(logger zerolog.Logger) *WSFayeClient {
+//
+// onSubscribed runs each time a channel is subscribed on a new connection.
+// That channel's pushes are delivered only after it returns. onDisconnected
+// runs each time a connection attempt fails or an established connection drops.
+func NewWSFayeClient(logger zerolog.Logger, onSubscribed func(ctx context.Context, channel string), onDisconnected func(err error)) *WSFayeClient {
 	return &WSFayeClient{
-		url:  wsPushServer,
-		log:  logger.With().Str("component", "WSFayeClient").Logger(),
-		subs: map[string]pushSubscription{},
-		// Starts the "how long has this been down" clock at construction,
-		// not the zero value -- otherwise a connection that fails on its
-		// very first attempt would immediately look like it's been down
-		// for decades and skip straight past sustainedDegradationThreshold
-		// instead of getting the same grace period a later failure would.
-		lastConnected: time.Now(),
+		log:            logger.With().Str("component", "WSFayeClient").Logger(),
+		onSubscribed:   onSubscribed,
+		onDisconnected: onDisconnected,
+		subs:           map[string]*pushSubscription{},
 	}
 }
 
@@ -214,19 +160,8 @@ func (c *WSFayeClient) getClientID() string {
 	return c.clientID
 }
 
-func (c *WSFayeClient) getConn() *websocket.Conn {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.conn
-}
-
-// writeMessage sends a single Bayeux message as a one-element JSON array
-// (the Bayeux spec envelope is always an array of message objects,
-// regardless of transport -- see thirdparty/wray's HTTP transport, which
-// does the same over POST bodies).
+// Bayeux sends even a single message in a JSON array.
 func (c *WSFayeClient) writeMessage(ctx context.Context, conn *websocket.Conn, msg *bayeuxMessage) error {
-	c.writeMu.Lock()
-	defer c.writeMu.Unlock()
 	return wsjson.Write(ctx, conn, []*bayeuxMessage{msg})
 }
 
@@ -249,13 +184,11 @@ func decodeBayeuxFrame(raw []byte) ([]*bayeuxMessage, error) {
 	return []*bayeuxMessage{&single}, nil
 }
 
-// handleIncoming routes one decoded Bayeux message either to a pending
-// request waiter (handshake/subscribe/connect responses, correlated by id)
-// or to a subscribed channel's message chan (actual push events), which
-// PushSubscription.StartListening reads from and dispatches into
-// RealTimeHandlers/HandlerAll -- the same path the long-polling transport
-// uses.
+// Route replies by request ID, and push events by subscription channel.
 func (c *WSFayeClient) handleIncoming(ctx context.Context, m *bayeuxMessage) {
+	if m == nil {
+		return
+	}
 	if m.ReqID != "" {
 		if ch, ok := c.takePending(m.ReqID); ok {
 			ch <- m
@@ -265,11 +198,18 @@ func (c *WSFayeClient) handleIncoming(ctx context.Context, m *bayeuxMessage) {
 
 	c.mu.Lock()
 	sub, ok := c.subs[m.Chan]
+	held := ok && !sub.ready
+	if held {
+		sub.held = append(sub.held, m)
+	}
 	c.mu.Unlock()
 	if !ok {
 		if m.Chan != "" && m.Chan != metaConnect {
 			c.log.Debug().Str("channel", m.Chan).Msg("No subscriber for GroupMe push channel")
 		}
+		return
+	}
+	if held {
 		return
 	}
 	select {
@@ -296,132 +236,125 @@ func (c *WSFayeClient) readLoop(ctx context.Context, conn *websocket.Conn) error
 	}
 }
 
-// handshake performs the Bayeux handshake over an already-dialed websocket
-// connection. Per the community-documented protocol
-// (https://groupme-js.github.io/GroupMeCommunityDocs/api/ws/, verified
-// 2026-09-18), supportedConnectionTypes must be ["websocket"] here (as
-// opposed to the ["long-polling"] wray/HTTP path uses).
+// Every reply except /meta/connect arrives promptly.
+func (c *WSFayeClient) request(ctx context.Context, conn *websocket.Conn, msg *bayeuxMessage) (*bayeuxMessage, error) {
+	msg.ReqID = c.nextRequestID()
+	respCh := c.registerPending(msg.ReqID)
+
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	if err := c.writeMessage(ctx, conn, msg); err != nil {
+		c.unregisterPending(msg.ReqID)
+		return nil, fmt.Errorf("sending %s: %w", msg.Chan, err)
+	}
+
+	select {
+	case resp := <-respCh:
+		if !resp.Successful {
+			return nil, fmt.Errorf("%s rejected: %s", msg.Chan, resp.MsgError)
+		}
+		return resp, nil
+	case <-ctx.Done():
+		c.unregisterPending(msg.ReqID)
+		return nil, fmt.Errorf("%s timed out: %w", msg.Chan, ctx.Err())
+	}
+}
+
+// The native handshake must advertise the WebSocket connection type.
 func (c *WSFayeClient) handshake(ctx context.Context, conn *websocket.Conn) error {
-	id := c.nextRequestID()
-	msg := &bayeuxMessage{
-		ReqID:                    id,
+	resp, err := c.request(ctx, conn, &bayeuxMessage{
 		Chan:                     metaHandshake,
 		Version:                  "1.0",
 		SupportedConnectionTypes: []string{"websocket"},
+	})
+	if err != nil {
+		return err
 	}
-	respCh := c.registerPending(id)
-
-	hsCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
-
-	if err := c.writeMessage(hsCtx, conn, msg); err != nil {
-		c.unregisterPending(id)
-		return fmt.Errorf("sending handshake: %w", err)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.clientID = resp.ClientID
+	for channel := range c.subs {
+		c.subscribeLocked(channel)
 	}
+	return nil
+}
 
-	select {
-	case resp := <-respCh:
-		if !resp.Successful {
-			return fmt.Errorf("handshake rejected: %s", resp.MsgError)
+// Starts the channel's subscription on the current connection, if there is one.
+func (c *WSFayeClient) subscribeLocked(channel string) {
+	sub := c.subs[channel]
+	if c.clientID == "" || sub.subscribing {
+		return
+	}
+	sub.subscribing = true
+	ctx, conn, clientID, workers := c.connCtx, c.conn, c.clientID, c.connWorkers
+	workers.Add(1)
+	go func() {
+		defer workers.Done()
+		c.subscribe(ctx, conn, clientID, channel, sub)
+	}()
+}
+
+func (c *WSFayeClient) isCurrent(conn *websocket.Conn, channel string, sub *pushSubscription) bool {
+	return c.conn == conn && c.subs[channel] == sub
+}
+
+func (c *WSFayeClient) subscribe(ctx context.Context, conn *websocket.Conn, clientID, channel string, sub *pushSubscription) {
+	for {
+		msg := &bayeuxMessage{Chan: metaSubscribe, ClientID: clientID, Subscription: channel}
+		msg.Ext()["access_token"] = sub.token
+		msg.Ext()["timestamp"] = time.Now().Unix()
+		_, err := c.request(ctx, conn, msg)
+		if err == nil {
+			break
 		}
 		c.mu.Lock()
-		c.clientID = resp.ClientID
+		current := c.isCurrent(conn, channel, sub)
 		c.mu.Unlock()
-		return nil
-	case <-hsCtx.Done():
-		c.unregisterPending(id)
-		return fmt.Errorf("handshake timed out: %w", hsCtx.Err())
-	}
-}
-
-func (c *WSFayeClient) subscribeOnce(ctx context.Context, channel string) error {
-	conn := c.getConn()
-	if conn == nil {
-		return fmt.Errorf("not connected")
-	}
-
-	id := c.nextRequestID()
-	msg := &bayeuxMessage{
-		ReqID:        id,
-		Chan:         metaSubscribe,
-		ClientID:     c.getClientID(),
-		Subscription: channel,
-	}
-	c.mu.Lock()
-	subscription, ok := c.subs[channel]
-	c.mu.Unlock()
-	if !ok {
-		return fmt.Errorf("unknown subscription")
-	}
-	msg.Ext()["access_token"] = subscription.token
-	msg.Ext()["timestamp"] = time.Now().Unix()
-
-	respCh := c.registerPending(id)
-
-	subCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
-
-	if err := c.writeMessage(subCtx, conn, msg); err != nil {
-		c.unregisterPending(id)
-		return fmt.Errorf("sending subscribe: %w", err)
-	}
-
-	select {
-	case resp := <-respCh:
-		if !resp.Successful {
-			return fmt.Errorf("subscribe to %s rejected: %s", channel, resp.MsgError)
+		if ctx.Err() != nil || !current {
+			return
 		}
-		return nil
-	case <-subCtx.Done():
-		c.unregisterPending(id)
-		return fmt.Errorf("subscribe to %s timed out: %w", channel, subCtx.Err())
+		c.log.Warn().Err(err).Str("channel", channel).Msg("Failed to subscribe to GroupMe push channel, retrying")
+		select {
+		case <-time.After(2 * time.Second):
+		case <-ctx.Done():
+			return
+		}
 	}
-}
+	c.log.Debug().Str("channel", channel).Msg("Subscribed to GroupMe push channel")
 
-// resubscribeAll re-sends /meta/subscribe for every channel WaitSubscribe
-// has ever been called for, after a fresh handshake (e.g. following a
-// reconnect). Each subscription is retried independently and indefinitely,
-// mirroring wray's resubscribeAll behavior for the long-polling transport.
-func (c *WSFayeClient) resubscribeAll(ctx context.Context, workers *sync.WaitGroup) {
-	c.mu.Lock()
-	channels := make([]string, 0, len(c.subs))
-	for ch := range c.subs {
-		channels = append(channels, ch)
+	if c.onSubscribed != nil {
+		c.onSubscribed(ctx, channel)
 	}
-	c.mu.Unlock()
 
-	for _, channel := range channels {
-		channel := channel
-		workers.Add(1)
-		go func() {
-			defer workers.Done()
-			for {
-				if ctx.Err() != nil {
-					return
-				}
-				if err := c.subscribeOnce(ctx, channel); err != nil {
-					c.log.Warn().Err(err).Str("channel", channel).Msg("Failed to (re)subscribe to GroupMe push channel, retrying")
-					select {
-					case <-time.After(2 * time.Second):
-						continue
-					case <-ctx.Done():
-						return
-					}
-				}
-				c.log.Debug().Str("channel", channel).Msg("Subscribed to GroupMe push channel")
+	// Handlers may subscribe to a newly discovered chat while consuming these
+	// frames. Never hold the subscription mutex while waiting for that consumer.
+	// Keep new arrivals held until every earlier batch has been delivered.
+	for {
+		c.mu.Lock()
+		if !c.isCurrent(conn, channel, sub) || ctx.Err() != nil {
+			c.mu.Unlock()
+			return
+		}
+		batch := sub.held
+		sub.held = nil
+		if len(batch) == 0 {
+			sub.ready = true
+			c.mu.Unlock()
+			return
+		}
+		c.mu.Unlock()
+		for _, m := range batch {
+			select {
+			case sub.messages <- m:
+			case <-ctx.Done():
 				return
 			}
-		}()
+		}
 	}
 }
 
-// connectLoop implements Bayeux's /meta/connect keep-alive cycle: as soon as
-// one connect request gets a response, the next is sent immediately. Unlike
-// the long-polling transport, the server doesn't need to hold this open to
-// deliver messages (those arrive as independent frames on the same
-// websocket at any time -- see handleIncoming/readLoop), but /meta/connect
-// is still how Bayeux clients signal liveness and receive `advice`
-// (e.g. being told to re-handshake), so it's kept running per spec.
+// Bayeux requires a continuous /meta/connect cycle alongside push delivery.
 func (c *WSFayeClient) connectLoop(ctx context.Context, conn *websocket.Conn) error {
 	for {
 		if ctx.Err() != nil {
@@ -437,23 +370,8 @@ func (c *WSFayeClient) connectLoop(ctx context.Context, conn *websocket.Conn) er
 		}
 		respCh := c.registerPending(id)
 
-		// Only the *send* is time-bounded -- Bayeux's /meta/connect is a
-		// long-hold by design (the server is meant to sit on it until
-		// there's something to report), and GroupMe's actual hold duration
-		// isn't documented, so there is no sane fixed deadline for "no
-		// response yet" that wouldn't eventually be too short. Waiting
-		// indefinitely for a *reply* isn't a bug: an unresponsive-forever
-		// connection is still detected, just via the independent
-		// websocket-level ping in connectAndRun (real transport liveness)
-		// and via readLoop's conn.Read erroring on an actually-dead
-		// connection, rather than by guessing how long GroupMe is allowed
-		// to take. Previously this used a 45s deadline on the wait itself
-		// and treated hitting it as fatal, tearing down and fully
-		// re-dialing/re-handshaking/re-subscribing the entire connection
-		// every time -- confirmed live to fire on a healthy connection
-		// roughly every 45 seconds, i.e. GroupMe routinely takes longer
-		// than 45s to respond to a connect and that's normal, not a
-		// failure.
+		// Only bound the send: GroupMe holds healthy /meta/connect requests
+		// open indefinitely. WebSocket pings detect transport failures.
 		sendCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 		err := c.writeMessage(sendCtx, conn, msg)
 		cancel()
@@ -482,14 +400,7 @@ func (c *WSFayeClient) connectLoop(ctx context.Context, conn *websocket.Conn) er
 	}
 }
 
-// pingLoop is the real liveness check for the connection: an active
-// websocket-protocol ping/pong on a fixed interval, independent of Bayeux
-// message traffic entirely. A ping failure (no pong within its own
-// timeout) is genuine evidence the transport is dead -- e.g. a "zombie"
-// connection that looks open but has silently stopped delivering anything,
-// which plain TCP doesn't always surface quickly on its own. This is what
-// should trigger a reconnect; a quiet /meta/connect (connectLoop, above)
-// should not.
+// Check transport liveness independently of Bayeux message traffic.
 func (c *WSFayeClient) pingLoop(ctx context.Context, conn *websocket.Conn) error {
 	const interval = 30 * time.Second
 	const pingTimeout = 10 * time.Second
@@ -510,66 +421,14 @@ func (c *WSFayeClient) pingLoop(ctx context.Context, conn *websocket.Conn) error
 	}
 }
 
-// markConnected records that the websocket just completed a successful
-// Bayeux handshake, resetting the "how long has this been down" clock that
-// maybeLogSustainedDegradation checks. Also clears any pending repeat-alert
-// cooldown, so a *new* degradation period (after a real recovery) gets its
-// own prompt alert instead of inheriting the previous period's cooldown.
-func (c *WSFayeClient) markConnected() {
-	c.connStateMu.Lock()
-	c.lastConnected = time.Now()
-	c.nextDegradedAt = time.Time{}
-	c.connStateMu.Unlock()
-}
-
-// maybeLogSustainedDegradation logs an Error-level line if the websocket
-// has not completed a successful handshake in over
-// sustainedDegradationThreshold. Deliberately Error, unlike every other
-// reconnect-related log line in this file (Listen, connectLoop, etc. all
-// log at Warn): a single reconnect is expected and self-healing and
-// shouldn't page anyone, but *sustained* inability to reconnect at all is
-// exactly the kind of thing worth surfacing -- the host's health-check
-// alerting (see NOTES.md "Health-check/alerting system") greps for
-// Error/Fatal/panic-level log lines specifically so this reaches it
-// without any changes needed on that side.
-//
-// Note this doesn't mean messages are being lost: the REST polling
-// fallback (pkg/connector/poll.go) is fully independent of this and keeps
-// delivering everything, just delayed up to the poll interval (60s by
-// default) instead of near-instant. This alert is about *that*
-// degradation being worth knowing about, not data loss.
-//
-// Throttled to degradedAlertRepeatInterval so a prolonged outage doesn't
-// spam an alert every single backoff cycle (which can be as short as 1s);
-// it still repeats periodically rather than alerting only once, so a
-// multi-hour outage isn't just a single alert easy to miss or forget.
-func (c *WSFayeClient) maybeLogSustainedDegradation() {
-	c.connStateMu.Lock()
-	downFor := time.Since(c.lastConnected)
-	shouldLog := downFor >= sustainedDegradationThreshold && time.Now().After(c.nextDegradedAt)
-	if shouldLog {
-		c.nextDegradedAt = time.Now().Add(degradedAlertRepeatInterval)
-	}
-	c.connStateMu.Unlock()
-	if shouldLog {
-		c.log.Error().Dur("down_for", downFor).
-			Msg("GroupMe push websocket has not reconnected in over 5 minutes; real-time delivery is degraded, falling back to REST polling (messages still arrive, delayed up to the poll interval)")
-	}
-}
-
-// connectAndRun dials one websocket connection, handshakes, resubscribes,
-// and runs the read/connect loops until either fails or the connection
-// drops. It always returns a non-nil error (Listen treats every return as
-// "reconnect after a backoff"); handshook reports whether the connection
-// got far enough to be genuinely up, so Listen can reset its backoff.
+// Run one native connection and join its workers before reconnecting.
+// A successful handshake lets Listen reset the reconnect backoff.
 func (c *WSFayeClient) connectAndRun(ctx context.Context) (handshook bool, err error) {
 	dialCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	conn, _, err := websocket.Dial(dialCtx, c.url, &websocket.DialOptions{
-		HTTPClient: wsDialHTTPClient,
-	})
+	conn, _, err := websocket.Dial(dialCtx, wsPushServer, nil)
 	cancel()
 	if err != nil {
-		return false, fmt.Errorf("dialing %s: %w", c.url, err)
+		return false, fmt.Errorf("dialing %s: %w", wsPushServer, err)
 	}
 	conn.SetReadLimit(1 << 20) // 1MiB; Bayeux/GroupMe push frames are small JSON
 
@@ -577,17 +436,18 @@ func (c *WSFayeClient) connectAndRun(ctx context.Context) (handshook bool, err e
 	var workers sync.WaitGroup
 
 	c.mu.Lock()
-	c.conn = conn
-	c.clientID = ""
+	c.conn, c.connCtx, c.connWorkers, c.clientID = conn, runCtx, &workers, ""
 	c.mu.Unlock()
 	defer func() {
 		cancelRun()
+		c.mu.Lock()
+		c.conn, c.clientID = nil, ""
+		for _, sub := range c.subs {
+			sub.subscribing, sub.ready, sub.held = false, false, nil
+		}
+		c.mu.Unlock()
 		conn.CloseNow()
 		workers.Wait()
-		c.mu.Lock()
-		c.conn = nil
-		c.clientID = ""
-		c.mu.Unlock()
 	}()
 
 	readErrCh := make(chan error, 1)
@@ -597,17 +457,7 @@ func (c *WSFayeClient) connectAndRun(ctx context.Context) (handshook bool, err e
 	if err := c.handshake(runCtx, conn); err != nil {
 		return false, fmt.Errorf("handshake: %w", err)
 	}
-	c.log.Info().Str("client_id", c.clientID).Msg("GroupMe push websocket handshake succeeded")
-	c.markConnected()
-	// The connection was up right until this returns, so that's when the
-	// "how long has this been down" clock should start -- not at the
-	// handshake. Without this, the first disconnect after hours of healthy
-	// uptime measured the whole uptime as downtime and fired the sustained
-	// degradation alert immediately (seen live: down_for of 4-8 hours logged
-	// the same millisecond as the disconnect itself).
-	defer c.markConnected()
-
-	c.resubscribeAll(runCtx, &workers)
+	c.log.Info().Str("client_id", c.getClientID()).Msg("GroupMe push websocket handshake succeeded")
 
 	connectErrCh := make(chan error, 1)
 	workers.Add(1)
@@ -641,13 +491,13 @@ func (c *WSFayeClient) Listen(ctx context.Context) {
 			return
 		}
 		if handshook {
-			// A connection that actually came up resets the backoff, so a
-			// routine drop after hours of uptime reconnects in ~1s rather
-			// than inheriting the 60s cap from some earlier failure streak.
+			// Reset backoff after an established connection drops.
 			backoff = time.Second
 		}
-		c.maybeLogSustainedDegradation()
 		c.log.Warn().Err(err).Dur("retry_in", backoff).Msg("GroupMe push websocket disconnected, reconnecting")
+		if c.onDisconnected != nil {
+			c.onDisconnected(err)
+		}
 		select {
 		case <-ctx.Done():
 			return
@@ -660,38 +510,28 @@ func (c *WSFayeClient) Listen(ctx context.Context) {
 	}
 }
 
-func (c *WSFayeClient) WaitSubscribe(ctx context.Context, channel, token string, msgChannel chan groupme.PushMessage) error {
+func (c *WSFayeClient) Subscribe(channel, token string, msgChannel chan groupme.PushMessage) {
 	c.mu.Lock()
-	c.subs[channel] = pushSubscription{messages: msgChannel, token: token}
-	c.mu.Unlock()
-	for {
-		attemptCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
-		err := c.waitConnectedAndSubscribe(attemptCtx, channel)
-		cancel()
-		if err == nil {
-			return nil
-		}
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		c.log.Warn().Err(err).Str("channel", channel).Msg("Failed to subscribe to GroupMe push channel, retrying")
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(time.Second):
-		}
+	defer c.mu.Unlock()
+	// Inventory and message discovery can name the same chat repeatedly. Keep
+	// its pending frames and readiness instead of starting another subscription.
+	if sub := c.subs[channel]; sub != nil && sub.token == token && sub.messages == msgChannel {
+		return
 	}
+	c.subs[channel] = &pushSubscription{messages: msgChannel, token: token}
+	c.subscribeLocked(channel)
 }
 
-func (c *WSFayeClient) waitConnectedAndSubscribe(ctx context.Context, channel string) error {
-	for {
-		if c.getConn() != nil && c.getClientID() != "" {
-			return c.subscribeOnce(ctx, channel)
-		}
-		select {
-		case <-ctx.Done():
-			return fmt.Errorf("timed out waiting for websocket connection: %w", ctx.Err())
-		case <-time.After(50 * time.Millisecond):
-		}
+func (c *WSFayeClient) Unsubscribe(ctx context.Context, channel string) error {
+	c.mu.Lock()
+	sub, ok := c.subs[channel]
+	delete(c.subs, channel)
+	conn, clientID := c.conn, c.clientID
+	subscribed := ok && sub.subscribing
+	c.mu.Unlock()
+	if !subscribed || clientID == "" {
+		return nil
 	}
+	_, err := c.request(ctx, conn, &bayeuxMessage{Chan: metaUnsubscribe, ClientID: clientID, Subscription: channel})
+	return err
 }

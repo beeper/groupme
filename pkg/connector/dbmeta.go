@@ -42,13 +42,18 @@ type PortalMetadata struct {
 	Type PortalType `json:"type"`
 }
 
+// MessageMetadata contains native protocol identifiers used by later actions.
+type MessageMetadata struct {
+	PollID string `json:"poll_id,omitempty"`
+}
+
 func (gc *GMConnector) GetDBMetaTypes() database.MetaTypes {
 	return database.MetaTypes{
 		Portal: func() any {
 			return &PortalMetadata{}
 		},
 		Ghost:    nil,
-		Message:  nil,
+		Message:  func() any { return &MessageMetadata{} },
 		Reaction: nil,
 		UserLogin: func() any {
 			return &UserLoginMetadata{}

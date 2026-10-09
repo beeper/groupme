@@ -29,6 +29,7 @@ type HandlerAll interface {
 	//of self
 	HandlerText
 	HandlerLike
+	HandlerReaction
 	HandlerMembership
 
 	//of group
@@ -50,6 +51,10 @@ type HandlerText interface {
 }
 type HandlerLike interface {
 	HandleLike(Message)
+}
+type HandlerReaction interface {
+	// A nil reaction removes this user's reaction, not the entire snapshot.
+	HandleReaction(Message, ID, *Reaction)
 }
 type HandlerMembership interface {
 	HandleJoin(ID)
@@ -92,7 +97,8 @@ type PushMessage interface {
 
 type FayeClient interface {
 	Listen(ctx context.Context)
-	WaitSubscribe(ctx context.Context, channel, token string, msgChannel chan PushMessage) error
+	Subscribe(channel, token string, msgChannel chan PushMessage)
+	Unsubscribe(ctx context.Context, channel string) error
 }
 
 type PushSubscription struct {
@@ -157,27 +163,38 @@ func (r *PushSubscription) StartListening(ctx context.Context, client FayeClient
 
 func (r *PushSubscription) Wait() { r.workers.Wait() }
 
+func UserChannel(id ID) string {
+	return userChannel + id.String()
+}
+
 // SubscribeToUser to users
-func (r *PushSubscription) SubscribeToUser(context context.Context, id ID, authToken string) error {
-	return r.subscribeWithPrefix(userChannel, context, id, authToken)
+func (r *PushSubscription) SubscribeToUser(id ID, authToken string) error {
+	return r.subscribe(UserChannel(id), authToken)
 }
 
-// SubscribeToGroup to groups for typing notification
-func (r *PushSubscription) SubscribeToGroup(context context.Context, id ID, authToken string) error {
-	return r.subscribeWithPrefix(groupChannel, context, id, authToken)
+// SubscribeToGroup to group events such as reactions and typing
+func (r *PushSubscription) SubscribeToGroup(id ID, authToken string) error {
+	return r.subscribe(groupChannel+id.String(), authToken)
 }
 
-// SubscribeToDM to users
-func (r *PushSubscription) SubscribeToDM(context context.Context, id ID, authToken string) error {
-	id = ID(strings.Replace(id.String(), "+", "_", 1))
-	return r.subscribeWithPrefix(dmChannel, context, id, authToken)
-}
-
-func (r *PushSubscription) subscribeWithPrefix(prefix string, ctx context.Context, groupID ID, authToken string) error {
+func (r *PushSubscription) UnsubscribeFromGroup(ctx context.Context, id ID) error {
 	if r.fayeClient == nil {
 		return ErrListenerNotStarted
 	}
-	return r.fayeClient.WaitSubscribe(ctx, prefix+groupID.String(), authToken, r.channel)
+	return r.fayeClient.Unsubscribe(ctx, groupChannel+id.String())
+}
+
+// SubscribeToDM to users
+func (r *PushSubscription) SubscribeToDM(id ID, authToken string) error {
+	return r.subscribe(dmChannel+strings.Replace(id.String(), "+", "_", 1), authToken)
+}
+
+func (r *PushSubscription) subscribe(channel, authToken string) error {
+	if r.fayeClient == nil {
+		return ErrListenerNotStarted
+	}
+	r.fayeClient.Subscribe(channel, authToken, r.channel)
+	return nil
 }
 
 func (r *PushSubscription) Connected() bool {

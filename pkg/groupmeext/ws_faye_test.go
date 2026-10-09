@@ -3,193 +3,159 @@ package groupmeext
 import (
 	"context"
 	"encoding/json"
-	"fmt"
-	"net/http"
-	"net/http/httptest"
-	"strings"
-	"sync"
-	"sync/atomic"
+	"reflect"
 	"testing"
-	"time"
 
 	"github.com/beeper/groupme-lib"
-	"github.com/coder/websocket"
-	"github.com/rs/zerolog"
 )
 
-type subscriptionSeen struct{ channel, token, connection string }
-
-func TestPushAccountIsolationAcrossReconnect(t *testing.T) {
-	seen := make(chan subscriptionSeen, 32)
-	var nextID atomic.Int64
-	var connections sync.Map
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		conn, err := websocket.Accept(w, r, nil)
-		if err != nil {
-			return
-		}
-		defer conn.CloseNow()
-		connectionID := fmt.Sprint(nextID.Add(1))
-		connections.Store(connectionID, conn)
-		defer connections.Delete(connectionID)
-		for {
-			_, data, err := conn.Read(r.Context())
-			if err != nil {
-				return
-			}
-			messages, err := decodeBayeuxFrame(data)
-			if err != nil {
-				t.Error(err)
-				return
-			}
-			for _, msg := range messages {
-				response := &bayeuxMessage{ReqID: msg.ReqID, Chan: msg.Chan, Successful: true, ClientID: connectionID}
-				if msg.Chan == metaSubscribe {
-					token, _ := msg.Ext()["access_token"].(string)
-					seen <- subscriptionSeen{msg.Subscription, token, connectionID}
-				}
-				if msg.Chan == metaConnect {
-					time.Sleep(10 * time.Millisecond)
-				}
-				out, _ := json.Marshal([]*bayeuxMessage{response})
-				if err := conn.Write(r.Context(), websocket.MessageText, out); err != nil {
-					return
-				}
-			}
-		}
-	}))
-	defer server.Close()
-	ctx, cancel := context.WithCancel(context.Background())
-	var workers sync.WaitGroup
-	defer func() { cancel(); workers.Wait() }()
-	for _, account := range []string{"alice", "bob"} {
-		client := NewWSFayeClient(zerolog.Nop())
-		client.url = "ws" + strings.TrimPrefix(server.URL, "http")
-		workers.Add(2)
-		go func() { defer workers.Done(); client.Listen(ctx) }()
-		go func() {
-			defer workers.Done()
-			_ = client.WaitSubscribe(ctx, "/user/"+account, account+"-token", make(chan groupme.PushMessage, 1))
-		}()
-	}
-	observed := map[string]map[string]bool{}
-	deadline := time.After(8 * time.Second)
-	for len(observed["/user/alice"]) < 2 || len(observed["/user/bob"]) < 2 {
-		select {
-		case sub := <-seen:
-			if sub.token != strings.TrimPrefix(sub.channel, "/user/")+"-token" {
-				t.Fatalf("cross-account token: %+v", sub)
-			}
-			if observed[sub.channel] == nil {
-				observed[sub.channel] = map[string]bool{}
-			}
-			if !observed[sub.channel][sub.connection] {
-				observed[sub.channel][sub.connection] = true
-				if len(observed[sub.channel]) == 1 {
-					if conn, ok := connections.Load(sub.connection); ok {
-						conn.(*websocket.Conn).CloseNow()
-					}
-				}
-			}
-		case <-deadline:
-			t.Fatalf("reconnect did not restore both accounts: %v", observed)
-		}
-	}
+type nativeReaction struct {
+	message  groupme.Message
+	userID   groupme.ID
+	reaction *groupme.Reaction
 }
 
-type pushHandler struct{ messages chan groupme.Message }
+type pushHandler struct {
+	messages  []groupme.Message
+	reactions []nativeReaction
+	snapshots []groupme.Message
+}
 
-func (h *pushHandler) HandleTextMessage(m groupme.Message) { h.messages <- m }
+func (h *pushHandler) HandleTextMessage(m groupme.Message) { h.messages = append(h.messages, m) }
 func (h *pushHandler) HandleError(error)                   {}
-
-type batchTransport struct {
-	client   *WSFayeClient
-	messages []*bayeuxMessage
-	ready    chan struct{}
+func (h *pushHandler) HandleLike(m groupme.Message)        { h.snapshots = append(h.snapshots, m) }
+func (h *pushHandler) HandleReaction(msg groupme.Message, userID groupme.ID, reaction *groupme.Reaction) {
+	h.reactions = append(h.reactions, nativeReaction{msg, userID, reaction})
 }
 
-func (b *batchTransport) Listen(ctx context.Context) {
-	select {
-	case <-b.ready:
-	case <-ctx.Done():
-		return
-	}
-	for _, msg := range b.messages {
-		b.client.handleIncoming(ctx, msg)
-	}
-	<-ctx.Done()
-}
-func (b *batchTransport) WaitSubscribe(ctx context.Context, channel, token string, messages chan groupme.PushMessage) error {
-	b.client.subs[channel] = pushSubscription{messages: messages, token: token}
-	close(b.ready)
-	return nil
-}
-
-func TestPushBatchOrderAndUnknownEvents(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	sub := groupme.NewPushSubscription(ctx)
-	handler := &pushHandler{messages: make(chan groupme.Message, 600)}
-	sub.AddHandler(handler)
-	transport := &batchTransport{client: NewWSFayeClient(zerolog.Nop()), ready: make(chan struct{})}
-	transport.messages = append(transport.messages,
-		&bayeuxMessage{Chan: "/user/alice", MsgData: map[string]interface{}{"type": 42}},
-		&bayeuxMessage{Chan: "/user/alice", MsgData: map[string]interface{}{"type": "future.event", "subject": map[string]interface{}{}}},
-	)
-	for i := 0; i < 600; i++ {
-		transport.messages = append(transport.messages, &bayeuxMessage{Chan: "/user/alice", MsgData: map[string]interface{}{"type": "line.create", "subject": map[string]interface{}{"id": fmt.Sprint(i), "group_id": "group", "user_id": "bob"}}})
-	}
-	sub.StartListening(ctx, transport)
-	defer func() { cancel(); sub.Wait() }()
-	if err := sub.SubscribeToUser(ctx, "alice", "alice-token"); err != nil {
-		t.Fatal(err)
-	}
-	for i := 0; i < 600; i++ {
-		select {
-		case msg := <-handler.messages:
-			if string(msg.ID) != fmt.Sprint(i) {
-				t.Fatalf("message %d arrived as %s", i, msg.ID)
+// Catches dropping DM favorites, reading stale nested reactions instead of the
+// authoritative sibling snapshot, and confusing missing state with removal.
+func TestPushFavoriteResponses(t *testing.T) {
+	for _, tc := range []struct {
+		name, body    string
+		wantCount     int
+		wantReactions []groupme.Reaction
+	}{
+		{"group", `{"line":{"id":"one","group_id":"88","user_id":"9","reactions":[{"type":"unicode","code":"❤️","user_ids":["9"]}]},"reactions":[{"type":"unicode","code":"👍","user_ids":["20","30"]}]}`, 1, []groupme.Reaction{{Type: "unicode", Code: "👍", UserIDs: []string{"20", "30"}}}},
+		{"DM", `{"direct_message":{"id":"one","chat_id":"9+20","user_id":"9"},"reactions":[{"type":"unicode","code":"🔥","user_ids":["20"]}]}`, 1, []groupme.Reaction{{Type: "unicode", Code: "🔥", UserIDs: []string{"20"}}}},
+		{"empty overrides stale likes", `{"line":{"id":"one","group_id":"88","favorited_by":["20"]},"reactions":[]}`, 1, []groupme.Reaction{}},
+		{"legacy nested reactions", `{"line":{"id":"one","group_id":"88","reactions":[{"type":"unicode","code":"👍","user_ids":["20"]}]}}`, 1, []groupme.Reaction{{Type: "unicode", Code: "👍", UserIDs: []string{"20"}}}},
+		{"legacy favorites", `{"line":{"id":"one","group_id":"88","favorited_by":["20"]}}`, 1, nil},
+		{"missing state", `{"line":{"id":"one","group_id":"88"}}`, 0, nil},
+		{"null state", `{"line":{"id":"one","group_id":"88"},"reactions":null}`, 0, nil},
+		{"missing message", `{"reactions":[]}`, 0, nil},
+		{"malformed state", `{"line":{"id":"one"},"reactions":{}}`, 0, nil},
+		{"malformed envelope", `[]`, 0, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var subject any
+			if err := json.Unmarshal([]byte(tc.body), &subject); err != nil {
+				t.Fatal(err)
 			}
-		case <-time.After(time.Second):
-			t.Fatalf("message %d missing", i)
-		}
+			handler := &pushHandler{}
+			sub := groupme.NewPushSubscription(context.Background())
+			sub.AddHandler(handler)
+			groupme.RealTimeHandlers["favorite"](sub, "/group/88", subject)
+			if len(handler.snapshots) != tc.wantCount {
+				t.Fatalf("got %d snapshots, want %d", len(handler.snapshots), tc.wantCount)
+			}
+			if tc.wantCount == 0 {
+				return
+			}
+			got := handler.snapshots[0]
+			if got.ID != "one" || !reflect.DeepEqual(got.Reactions, tc.wantReactions) {
+				t.Fatalf("incorrect snapshot: %+v", got)
+			}
+			if tc.name == "DM" {
+				if got.ChatID != "9+20" {
+					t.Fatal("lost DM conversation identity")
+				}
+			} else if got.GroupID != "88" {
+				t.Fatal("lost group identity")
+			}
+			if tc.name == "legacy favorites" && !reflect.DeepEqual(got.FavoritedBy, []string{"20"}) {
+				t.Fatal("lost legacy reactor")
+			}
+		})
 	}
 }
 
-func TestPushCancellationDuringRetryAndBlockedDelivery(t *testing.T) {
-	client := NewWSFayeClient(zerolog.Nop())
-	ctx, cancel := context.WithCancel(context.Background())
-	client.subs["blocked"] = pushSubscription{messages: make(chan groupme.PushMessage)}
-	done := make(chan struct{})
-	go func() { client.handleIncoming(ctx, &bayeuxMessage{Chan: "blocked"}); close(done) }()
-	cancel()
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("delivery ignored cancellation")
+// Catches dropping modern reaction pushes, using the message author as the
+// reactor, and treating removal as an empty snapshot for every participant.
+func TestPushReactionResponses(t *testing.T) {
+	for _, tc := range []struct {
+		name, eventType, body, wantEmoji string
+		wantCount                        int
+	}{
+		{"add", "like.create", `{"line":{"id":"one","group_id":"88","user_id":"9","favorited_by":["20","30"]},"user_id":"20","user_reaction":{"type":"unicode","code":"👍","user_ids":["20"]},"reactions":[{"type":"unicode","code":"🔥","user_ids":["30"]},{"type":"unicode","code":"👍","user_ids":["20"]}]}`, "👍", 1},
+		{"change DM", "like.create", `{"direct_message":{"id":"one","chat_id":"9+20","user_id":"9"},"user_id":"20","user_reaction":{"type":"unicode","code":"🔥","user_ids":["20"]}}`, "🔥", 1},
+		{"remove DM", "like.delete", `{"direct_message":{"id":"one","chat_id":"9+20","user_id":"9","favorited_by":["30"]},"user_id":"20"}`, "", 1},
+		{"remove only reactor", "like.delete", `{"line":{"id":"one","group_id":"88","user_id":"9","favorited_by":["30"]},"user_id":"20"}`, "", 1},
+		{"missing reactor", "like.create", `{"line":{"id":"one"},"user_reaction":{"type":"unicode","code":"👍"}}`, "", 0},
+		{"missing target", "like.delete", `{"user_id":"20"}`, "", 0},
+		{"missing reaction", "like.create", `{"line":{"id":"one"},"user_id":"20"}`, "", 0},
+		{"custom emoji", "like.create", `{"line":{"id":"one"},"user_id":"20","user_reaction":{"type":"emoji","pack_id":1,"pack_index":2}}`, "", 0},
+		{"malformed", "like.delete", `[]`, "", 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var subject any
+			if err := json.Unmarshal([]byte(tc.body), &subject); err != nil {
+				t.Fatal(err)
+			}
+			handler := &pushHandler{}
+			sub := groupme.NewPushSubscription(context.Background())
+			sub.AddHandler(handler)
+			groupme.RealTimeHandlers[tc.eventType](sub, "/user/9", subject)
+			if len(handler.reactions) != tc.wantCount {
+				t.Fatalf("got %d reaction changes, want %d", len(handler.reactions), tc.wantCount)
+			}
+			if tc.wantCount == 0 {
+				return
+			}
+			got := handler.reactions[0]
+			if got.userID != "20" || got.message.ID != "one" || got.message.UserID != "9" {
+				t.Fatalf("lost native reactor or target identity: %+v", got)
+			}
+			if tc.wantEmoji == "" {
+				if got.reaction != nil || len(got.message.FavoritedBy) != 1 || got.message.FavoritedBy[0] != "30" {
+					t.Fatal("removal lost the remaining reactor or was parsed as an addition")
+				}
+			} else if got.reaction == nil || got.reaction.Code != tc.wantEmoji {
+				t.Fatalf("lost native emoji: %+v", got.reaction)
+			}
+			if (tc.name == "change DM" || tc.name == "remove DM") && got.message.ChatID != "9+20" {
+				t.Fatal("lost DM conversation identity")
+			}
+		})
 	}
-	if err := client.WaitSubscribe(ctx, "/user/alice", "alice-token", make(chan groupme.PushMessage)); err != context.Canceled {
-		t.Fatalf("subscription ignored cancellation: %v", err)
-	}
+}
 
-	attempt := make(chan struct{}, 1)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		select {
-		case attempt <- struct{}{}:
-		default:
-		}
-		w.WriteHeader(http.StatusServiceUnavailable)
-	}))
-	defer server.Close()
-	client.url = "ws" + strings.TrimPrefix(server.URL, "http")
-	ctx, cancel = context.WithCancel(context.Background())
-	defer cancel()
-	done = make(chan struct{})
-	go func() { client.Listen(ctx); close(done) }()
-	<-attempt
-	cancel()
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("retry loop ignored cancellation")
+func TestPushMessageResponses(t *testing.T) {
+	for _, tc := range []struct {
+		name, body   string
+		wantMessages int
+	}{
+		{"message", `{"id":"one","user_id":"9","group_id":"88","text":"hello"}`, 1},
+		{"DM", `{"id":"two","user_id":"9","chat_id":"9+20","text":"hello"}`, 1},
+		{"system poll", `{"id":"three","user_id":"system","group_id":"88","event":{"type":"poll.created","data":{}}}`, 1},
+		{"missing identity", `{"text":"invalid"}`, 0},
+		{"malformed payload", `[]`, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var subject any
+			if err := json.Unmarshal([]byte(tc.body), &subject); err != nil {
+				t.Fatal(err)
+			}
+			handler := &pushHandler{}
+			sub := groupme.NewPushSubscription(context.Background())
+			sub.AddHandler(handler)
+			groupme.RealTimeHandlers["line.create"](sub, "/user/20", subject)
+			if len(handler.messages) != tc.wantMessages {
+				t.Fatalf("got %d native messages", len(handler.messages))
+			}
+			if tc.name == "DM" && handler.messages[0].ConversationID != "9+20" {
+				t.Fatal("lost native DM conversation")
+			}
+		})
 	}
 }

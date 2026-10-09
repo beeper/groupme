@@ -11,10 +11,12 @@ repos:
   - repo: https://github.com/tekwizely/pre-commit-golang
     rev: v1.0.0-rc.1
     hooks:
-      - id: go-imports-repo
+      - id: go-imports
+        exclude: ^thirdparty/
         args:
           - "-local"
           - "github.com/beeper/groupme"
           - "-w"
-      - id: go-vet-repo-mod
+      - id: go-vet-mod
+        exclude: ^thirdparty/
       # - id: go-staticcheck-repo-mod

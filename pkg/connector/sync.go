@@ -20,76 +20,134 @@ import (
 	"context"
 	"time"
 
+	"github.com/rs/zerolog"
 	"maunium.net/go/mautrix/bridgev2"
+	"maunium.net/go/mautrix/bridgev2/database"
 	"maunium.net/go/mautrix/bridgev2/networkid"
 	"maunium.net/go/mautrix/bridgev2/simplevent"
+
+	"github.com/beeper/groupme-lib"
 )
 
-// This file implements an initial sync of a user's existing GroupMe groups
-// and direct-message chats, run once per Connect. Without this, portals are
-// only ever created reactively in response to live push events arriving
-// over the Faye/Bayeux connection (see handlegroupme.go), which means a
-// freshly logged-in user who never gets a live push (e.g. because the push
-// connection itself is down, or simply because nobody messaged them yet)
-// never gets any portal rooms at all, even for chats they've had for years.
-//
-// This mirrors the "list everything from the REST API, then resync each
-// chat" pattern used by other bridgev2 network connectors (e.g.
-// mautrix/gmessages) for their equivalent of a startup conversation list
-// sync.
+type nativeChat struct {
+	portalKey networkid.PortalKey
+	latestID  groupme.ID
+	dmPartner *groupme.User
+}
 
-// syncChats lists the user's GroupMe groups and DM chats via the REST API
-// and queues a ChatResync remote event (with CreatePortal set) for each one,
-// so bridgev2 creates/updates a portal for every existing chat rather than
-// only ones that happen to receive a live push event after this point.
-//
-// Errors fetching one list (groups or chats) don't prevent the other from
-// being synced; both are best-effort since this is a background convenience
-// sync, not something the rest of Connect should fail over.
-func (gc *GMClient) syncChats(ctx context.Context) {
-	log := gc.UserLogin.Log.With().Str("action", "initial chat sync").Logger()
+// A failed listing does not prevent returning the other conversation type.
+func (gc *GMClient) listChats(ctx context.Context) []nativeChat {
+	log := zerolog.Ctx(ctx)
+	var chats []nativeChat
 
 	groups, err := gc.Client.IndexAllGroups(ctx)
 	if err != nil {
-		log.Err(err).Msg("Failed to list GroupMe groups for initial sync")
-	} else {
-		log.Info().Int("group_count", len(groups)).Msg("Syncing GroupMe groups")
-		for _, group := range groups {
-			if len(group.ID) == 0 {
-				continue
-			}
-			gc.queueChatResync(gc.portalKeyForGroup(group.ID))
+		log.Err(err).Msg("Failed to list GroupMe groups")
+	}
+	for _, group := range groups {
+		if group != nil && len(group.ID) > 0 {
+			chats = append(chats, nativeChat{portalKey: gc.portalKeyForGroup(group.ID), latestID: group.Messages.LastMessageID})
 		}
 	}
 
-	chats, err := gc.Client.IndexAllChats(ctx)
+	dms, err := gc.Client.IndexAllChats(ctx)
 	if err != nil {
-		log.Err(err).Msg("Failed to list GroupMe DM chats for initial sync")
-	} else {
-		log.Info().Int("chat_count", len(chats)).Msg("Syncing GroupMe DM chats")
-		for _, chat := range chats {
-			if len(chat.OtherUser.ID) == 0 {
-				continue
-			}
-			gc.queueChatResync(gc.portalKeyForDM(chat.OtherUser.ID))
+		log.Err(err).Msg("Failed to list GroupMe DM chats")
+	}
+	for _, dm := range dms {
+		if dm == nil || len(dm.OtherUser.ID) == 0 {
+			continue
 		}
+		var latestID groupme.ID
+		if dm.LastMessage != nil {
+			latestID = dm.LastMessage.ID
+		}
+		chats = append(chats, nativeChat{portalKey: gc.portalKeyForDM(dm.OtherUser.ID), latestID: latestID, dmPartner: &dm.OtherUser})
+	}
+	return chats
+}
+
+// catchUp runs on user-channel subscription, including reconnects, while that
+// channel's live pushes are held. It only queues work so they are not held for
+// long. DM info reuses the listing rather than paging it again for every DM.
+func (gc *GMClient) catchUp(ctx context.Context) []nativeChat {
+	ctx = gc.UserLogin.Log.With().Str("action", "catch up").Logger().WithContext(ctx)
+	chats := gc.listChats(ctx)
+	zerolog.Ctx(ctx).Info().Int("chat_count", len(chats)).Msg("Syncing GroupMe chats")
+	for _, chat := range chats {
+		if ctx.Err() != nil {
+			return nil
+		}
+		getChatInfo := gc.GetChatInfo
+		if chat.dmPartner != nil {
+			getChatInfo = func(ctx context.Context, portal *bridgev2.Portal) (*bridgev2.ChatInfo, error) {
+				return gc.dmChatInfo(ctx, chat.dmPartner.ID, chat.dmPartner), nil
+			}
+		}
+		gc.Main.br.QueueRemoteEvent(gc.UserLogin, &simplevent.ChatResync{
+			EventMeta: simplevent.EventMeta{
+				Type:         bridgev2.RemoteEventChatResync,
+				PortalKey:    chat.portalKey,
+				CreatePortal: true,
+				Timestamp:    time.Now(),
+			},
+			GetChatInfoFunc: getChatInfo,
+			CheckNeedsBackfillFunc: func(ctx context.Context, latest *database.Message) (bool, error) {
+				latest, err := gc.nearestNativeMessage(ctx, chat.portalKey, latest, false)
+				if err != nil {
+					return false, err
+				}
+				return chat.latestID != "" && (latest == nil || compareMessageIDs(chat.latestID, ParseMessageID(latest.ID)) > 0), nil
+			},
+		})
+		gc.subscribeToChat(chat.portalKey.ID)
+	}
+	return chats
+}
+
+// Appservices never receive chat-view notifications. Keep the native group and
+// DM channels subscribed for all discovered chats instead of depending on UI
+// focus. WSFayeClient retains these subscriptions across reconnects.
+func (gc *GMClient) subscribeToChat(portalID networkid.PortalID) {
+	gc.pushMu.Lock()
+	defer gc.pushMu.Unlock()
+	if gc.push == nil {
+		return
+	}
+	var err error
+	kind, chatID := ParsePortalID(portalID)
+	switch kind {
+	case PortalTypeGroup:
+		err = gc.push.SubscribeToGroup(chatID, gc.Meta.Token)
+	case PortalTypeDM:
+		err = gc.push.SubscribeToDM(DMConversationID(groupme.ID(gc.Meta.GMID), chatID), gc.Meta.Token)
+	}
+	if err != nil {
+		gc.UserLogin.Log.Err(err).Str("portal_id", string(portalID)).Msg("Failed to subscribe to GroupMe chat channel")
 	}
 }
 
-// queueChatResync queues a ChatResync remote event for the given portal,
-// creating the portal if it doesn't exist yet. This reuses the same
-// GetChatInfo-based resync used for live push-triggered resyncs (see
-// resyncGroup in handlegroupme.go); the only functional difference is that
-// CreatePortal is set here, since a chat found only by this initial sync
-// may not have a portal yet at all.
-func (gc *GMClient) queueChatResync(portalKey networkid.PortalKey) {
-	gc.Main.br.QueueRemoteEvent(gc.UserLogin, &simplevent.ChatResync{
-		EventMeta: simplevent.EventMeta{
-			Type:         bridgev2.RemoteEventChatResync,
-			PortalKey:    portalKey,
-			CreatePortal: true,
-			Timestamp:    time.Now(),
-		},
-		GetChatInfoFunc: gc.GetChatInfo,
-	})
+// The native stream does not replay missed reactions, and an unchanged newest
+// message ID says nothing about reaction changes. Refresh one recent page per
+// chat as Web does on connection recovery, independently of message backfill.
+func (gc *GMClient) refreshRecentReactions(ctx context.Context, chats []nativeChat) {
+	ctx = gc.UserLogin.Log.With().Str("action", "refresh reactions").Logger().WithContext(ctx)
+	for _, chat := range chats {
+		if ctx.Err() != nil {
+			return
+		}
+		portalID := chat.portalKey.ID
+		// Groups support 100 messages; DMs return their native page of 20.
+		messages, err := gc.fetchMessagePage(ctx, portalID, "", "", 100)
+		if err != nil {
+			zerolog.Ctx(ctx).Err(err).Str("portal_id", string(portalID)).Msg("Failed to refresh recent GroupMe reactions")
+			continue
+		}
+		for _, msg := range messages {
+			if msg.Reactions != nil || msg.FavoritedBy != nil {
+				gc.HandleLike(*msg)
+			}
+		}
+		zerolog.Ctx(ctx).Debug().Str("portal_id", string(portalID)).Int("message_count", len(messages)).Msg("Refreshed recent GroupMe reactions")
+	}
 }

@@ -3,9 +3,7 @@ package groupmeext
 import (
 	"bytes"
 	"context"
-	"database/sql/driver"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -15,169 +13,107 @@ import (
 	"github.com/beeper/groupme-lib"
 )
 
-type Message struct{ groupme.Message }
-
-func (m *Message) Scan(value interface{}) error {
-	bytes, ok := value.(string)
-	if !ok {
-		return errors.New(fmt.Sprint("Failed to unmarshal json value:", value))
-	}
-
-	message := Message{}
-	err := json.Unmarshal([]byte(bytes), &message)
-
-	*m = Message(message)
-	return err
+// DownloadImage fetches an unauthenticated image or avatar from GroupMe.
+func DownloadImage(ctx context.Context, imageURL string) ([]byte, string, error) {
+	return downloadMediaURL(ctx, imageURL, "")
 }
 
-func (m *Message) Value() (driver.Value, error) {
-	e, err := json.Marshal(m)
-	if err != nil {
-		return nil, err
-	}
-	return e, nil
+// DownloadVideo uses the native token-cookie authentication contract.
+func DownloadVideo(ctx context.Context, videoURL, token string) ([]byte, string, error) {
+	return downloadMediaURL(ctx, videoURL, token)
 }
 
-// DownloadImage downloads an image attachment from GroupMe's image CDN
-// (i.groupme.com), a plain unauthenticated GET.
-func DownloadImage(url string) (data *[]byte, mime string, err error) {
-	resp, err := http.Get(url)
+func downloadMediaURL(ctx context.Context, mediaURL, token string) ([]byte, string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, mediaURL, nil)
 	if err != nil {
-		return nil, "", fmt.Errorf("failed to download image: %w", err)
+		return nil, "", fmt.Errorf("invalid GroupMe media URL")
+	}
+	if token != "" {
+		req.AddCookie(&http.Cookie{Name: "token", Value: token})
+	}
+	resp, err := mediaRequest(req)
+	if err != nil {
+		return nil, "", err
 	}
 	defer resp.Body.Close()
-	// Without this, an error response was uploaded to Matrix as if it were
-	// the image: 2,825 S3 "AccessDenied" XML pages (from expired/removed
-	// GroupMe image URLs, mostly old avatars) ended up in the media store
-	// on 2026-09-18..21, showing as broken pictures.
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, "", fmt.Errorf("failed to download image: HTTP %d", resp.StatusCode)
-	}
-
-	body, err := io.ReadAll(resp.Body)
+	data, err := readMedia(resp)
 	if err != nil {
-		return nil, "", fmt.Errorf("failed to read downloaded image: %w", err)
+		return nil, "", err
 	}
-
-	mime = resp.Header.Get("Content-Type")
-	if mime == "" {
-		mime = http.DetectContentType(body)
-	}
-	return &body, mime, nil
-}
-
-// DownloadVideo downloads a video attachment. Unlike images (a plain
-// public GET) and files (a signed X-Access-Token API call, see
-// DownloadFile), GroupMe's video CDN authenticates via a "token" cookie
-// carrying the account's access token -- ported as-is from the pre-2023
-// bridge (the only place this was ever verified to work against the real
-// API); not separately re-verified live in this revival, see NOTES.md.
-func DownloadVideo(videoURL, token string) (data []byte, mime string, err error) {
-	req, err := http.NewRequest(http.MethodGet, videoURL, nil)
-	if err != nil {
-		return nil, "", fmt.Errorf("failed to build video request: %w", err)
-	}
-	req.AddCookie(&http.Cookie{Name: "token", Value: token})
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, "", fmt.Errorf("failed to download video: %w", err)
-	}
-	defer resp.Body.Close()
-
-	data, err = io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, "", fmt.Errorf("failed to read downloaded video: %w", err)
-	}
-
-	mime = resp.Header.Get("Content-Type")
+	mime := resp.Header.Get("Content-Type")
 	if mime == "" {
 		mime = http.DetectContentType(data)
 	}
 	return data, mime, nil
 }
 
-// fileMetadata is the response shape of file.groupme.com's "fileData"
-// lookup endpoint (see DownloadFile).
-type fileMetadata struct {
-	FileData struct {
-		FileName string `json:"file_name"`
-		FileSize int    `json:"file_size"`
-		Mime     string `json:"mime_type"`
-	} `json:"file_data"`
+// FileMetadata describes a group file without downloading its bytes.
+type FileMetadata struct {
+	FileName string `json:"file_name"`
+	FileSize int    `json:"file_size"`
+	Mime     string `json:"mime_type"`
 }
 
-// DownloadFile downloads a "file" attachment (GroupMe's group file-sharing
-// feature, distinct from image/video message attachments) via
-// file.groupme.com. This is a two-step API, both authenticated via
-// X-Access-Token: one call resolves the file's name/mime type, a second
-// fetches its bytes. groupID is the containing group's ID -- GroupMe's
-// file-sharing feature is group-only, so this isn't expected to be called
-// for a DM attachment.
-//
-// Ported from the pre-2023 bridge's equivalent, which used to panic() on
-// any request error here -- a network hiccup on a single file attachment
-// would have taken down the entire bridge process. Rewritten to return an
-// error instead, same as every other attachment download path.
-func DownloadFile(groupID groupme.ID, fileID, token string) (data []byte, filename, mime string, err error) {
-	reqBody, err := json.Marshal(struct {
-		FileIDs []string `json:"file_ids"`
-	}{FileIDs: []string{fileID}})
+// DownloadFile resolves a group file's metadata, then fetches its bytes. Both
+// native endpoints use X-Access-Token authentication.
+func DownloadFile(ctx context.Context, groupID groupme.ID, fileID, token string) (data []byte, filename, mime string, err error) {
+	meta, err := GetFileMetadata(ctx, groupID, fileID, token)
 	if err != nil {
-		return nil, "", "", fmt.Errorf("failed to build file metadata request body: %w", err)
+		return nil, "", "", err
 	}
-
-	metaReq, err := http.NewRequest(http.MethodPost, fmt.Sprintf("https://file.groupme.com/v1/%s/fileData", groupID), bytes.NewReader(reqBody))
+	dlReq, err := http.NewRequestWithContext(ctx, http.MethodPost, fmt.Sprintf("https://file.groupme.com/v1/%s/files/%s", url.PathEscape(string(groupID)), url.PathEscape(fileID)), nil)
 	if err != nil {
-		return nil, "", "", fmt.Errorf("failed to build file metadata request: %w", err)
-	}
-	metaReq.Header.Set("X-Access-Token", token)
-	metaReq.Header.Set("Content-Type", "application/json")
-
-	metaResp, err := http.DefaultClient.Do(metaReq)
-	if err != nil {
-		return nil, "", "", fmt.Errorf("failed to fetch file metadata: %w", err)
-	}
-	defer metaResp.Body.Close()
-
-	var meta []fileMetadata
-	if err := json.NewDecoder(metaResp.Body).Decode(&meta); err != nil {
-		return nil, "", "", fmt.Errorf("failed to decode file metadata: %w", err)
-	}
-	if len(meta) == 0 {
-		return nil, "", "", fmt.Errorf("GroupMe returned no metadata for file %s", fileID)
-	}
-
-	dlReq, err := http.NewRequest(http.MethodPost, fmt.Sprintf("https://file.groupme.com/v1/%s/files/%s", groupID, fileID), nil)
-	if err != nil {
-		return nil, "", "", fmt.Errorf("failed to build file download request: %w", err)
+		return nil, "", "", fmt.Errorf("failed to build file download request")
 	}
 	dlReq.Header.Set("X-Access-Token", token)
 
-	dlResp, err := http.DefaultClient.Do(dlReq)
+	dlResp, err := mediaRequest(dlReq)
 	if err != nil {
 		return nil, "", "", fmt.Errorf("failed to download file: %w", err)
 	}
 	defer dlResp.Body.Close()
 
-	data, err = io.ReadAll(dlResp.Body)
+	data, err = readMedia(dlResp)
 	if err != nil {
 		return nil, "", "", fmt.Errorf("failed to read downloaded file: %w", err)
 	}
-
-	return data, meta[0].FileData.FileName, meta[0].FileData.Mime, nil
+	return data, meta.FileName, meta.Mime, nil
 }
 
-// createUploadRequest is the body of the m.groupme.com/uploads call that
-// begins an outgoing video upload (see UploadVideo). Reverse-engineered
-// live: dev.groupme.com's docs don't cover outgoing video at all, and
-// there was no existing implementation (incoming or outgoing) to work
-// from. The exact field set and required-ness was determined by reading
-// the endpoint's own ASP.NET model-validation error messages (it replies
-// with e.g. {"errors":{"FileSize":["The FileSize field is required."]}}
-// for a missing/wrong field) rather than guessing blind -- GroupId and
-// RecipientId aren't both required, but at least one is ("You must
-// provide either recipientId or groupId").
+func GetFileMetadata(ctx context.Context, groupID groupme.ID, fileID, token string) (*FileMetadata, error) {
+	reqBody, err := json.Marshal(struct {
+		FileIDs []string `json:"file_ids"`
+	}{FileIDs: []string{fileID}})
+	if err != nil {
+		return nil, fmt.Errorf("failed to build file metadata request body: %w", err)
+	}
+
+	metaReq, err := http.NewRequestWithContext(ctx, http.MethodPost, fmt.Sprintf("https://file.groupme.com/v1/%s/fileData", url.PathEscape(string(groupID))), bytes.NewReader(reqBody))
+	if err != nil {
+		return nil, fmt.Errorf("failed to build file metadata request")
+	}
+	metaReq.Header.Set("X-Access-Token", token)
+	metaReq.Header.Set("Content-Type", "application/json")
+
+	metaResp, err := mediaRequest(metaReq)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch file metadata: %w", err)
+	}
+	defer metaResp.Body.Close()
+
+	var meta []struct {
+		FileData FileMetadata `json:"file_data"`
+	}
+	if err := json.NewDecoder(io.LimitReader(metaResp.Body, 1024*1024)).Decode(&meta); err != nil {
+		return nil, fmt.Errorf("failed to decode file metadata: %w", err)
+	}
+	if len(meta) != 1 || meta[0].FileData.FileName == "" || meta[0].FileData.FileSize < 0 || meta[0].FileData.FileSize > MaxMediaSize {
+		return nil, fmt.Errorf("GroupMe returned invalid file metadata")
+	}
+	return &meta[0].FileData, nil
+}
+
+// Video sessions require a group ID or recipient ID, plus size and extension.
 type createUploadRequest struct {
 	FileSize    int64  `json:"FileSize"`
 	SenderId    string `json:"SenderId"`
@@ -186,37 +122,16 @@ type createUploadRequest struct {
 	RecipientId string `json:"recipientId,omitempty"`
 }
 
-// createUploadResponse is m.groupme.com/uploads' response: a short-lived
-// SAS-signed Azure Blob Storage URL to PUT the actual video bytes to, plus
-// the public (unsigned, permanent) URLs to reference once that PUT
-// completes. TranscriptURL is unused here (presumably for closed
-// captions/transcription, unconfirmed) and always observed null live.
+// UploadURL is a temporary signed upload destination. RenderURL and ThumbnailURL
+// are attachment URLs; no expiry parameter was observed in those URLs.
 type createUploadResponse struct {
-	UploadURL     string `json:"uploadUrl"`
-	RenderURL     string `json:"renderUrl"`
-	ThumbnailURL  string `json:"thumbnailUrl"`
-	TranscriptURL string `json:"transcriptUrl"`
+	UploadURL    string `json:"uploadUrl"`
+	RenderURL    string `json:"renderUrl"`
+	ThumbnailURL string `json:"thumbnailUrl"`
 }
 
-// UploadVideo uploads an outgoing video to GroupMe, returning the URLs to
-// use as a "video" attachment's url/preview_url (see convertGroupMeMessage
-// in pkg/connector for the incoming equivalent, and NOTES.md "Outgoing
-// video/file attachments" for how this was reverse-engineered).
-//
-// Two real HTTP calls, not one: first m.groupme.com/uploads is asked to
-// create an upload session for a video of this size/extension belonging
-// to this group or DM conversation, which hands back a one-time SAS URL
-// scoped to Azure Blob Storage (cdn2.groupme.com) -- GroupMe's own
-// X-Access-Token auth doesn't apply to that second request at all, unlike
-// every other call in this file; the SAS signature in the URL itself is
-// the only auth Azure wants, and a real attempt to PUT directly to
-// cdn2.groupme.com with just X-Access-Token (no SAS) was confirmed live
-// to fail with Azure's own "PublicAccessNotPermitted" error.
-//
-// groupID and recipientID are mutually exclusive -- exactly one should be
-// non-empty, matching whether this is a group or DM send (see the "You
-// must provide either recipientId or groupId" validation error mentioned
-// on createUploadRequest).
+// UploadVideo creates a session, then PUTs bytes to its signed URL without
+// GroupMe credentials. Exactly one of groupID and recipientID must be set.
 func UploadVideo(ctx context.Context, token, senderID, groupID, recipientID string, data []byte, extension, mimeType string) (renderURL, thumbnailURL string, err error) {
 	reqBody, err := json.Marshal(createUploadRequest{
 		FileSize:    int64(len(data)),
@@ -236,23 +151,23 @@ func UploadVideo(ctx context.Context, token, senderID, groupID, recipientID stri
 	sessionReq.Header.Set("X-Access-Token", token)
 	sessionReq.Header.Set("Content-Type", "application/json")
 
-	sessionResp, err := http.DefaultClient.Do(sessionReq)
+	sessionResp, err := mediaRequest(sessionReq)
 	if err != nil {
 		return "", "", fmt.Errorf("failed to create upload session: %w", err)
 	}
 	defer sessionResp.Body.Close()
 
 	var session createUploadResponse
-	if err := json.NewDecoder(sessionResp.Body).Decode(&session); err != nil {
+	if err := json.NewDecoder(io.LimitReader(sessionResp.Body, 1024*1024)).Decode(&session); err != nil {
 		return "", "", fmt.Errorf("failed to decode upload session response: %w", err)
 	}
-	if session.UploadURL == "" {
+	if session.UploadURL == "" || session.RenderURL == "" {
 		return "", "", fmt.Errorf("GroupMe did not return an upload URL for the video session")
 	}
 
 	putReq, err := http.NewRequestWithContext(ctx, http.MethodPut, session.UploadURL, bytes.NewReader(data))
 	if err != nil {
-		return "", "", fmt.Errorf("failed to build video upload request: %w", err)
+		return "", "", fmt.Errorf("invalid GroupMe video upload URL")
 	}
 	putReq.Header.Set("Content-Type", mimeType)
 	// Required by Azure Blob Storage for a PUT that creates a new blob
@@ -260,15 +175,11 @@ func UploadVideo(ctx context.Context, token, senderID, groupID, recipientID stri
 	// X-Access-Token and no SAS URL at all, both fail).
 	putReq.Header.Set("x-ms-blob-type", "BlockBlob")
 
-	putResp, err := http.DefaultClient.Do(putReq)
+	putResp, err := mediaRequest(putReq)
 	if err != nil {
 		return "", "", fmt.Errorf("failed to upload video bytes: %w", err)
 	}
 	defer putResp.Body.Close()
-	if putResp.StatusCode >= 300 {
-		body, _ := io.ReadAll(putResp.Body)
-		return "", "", fmt.Errorf("uploading video bytes failed with status %d: %s", putResp.StatusCode, body)
-	}
 
 	return session.RenderURL, session.ThumbnailURL, nil
 }
@@ -329,14 +240,14 @@ func UploadFile(ctx context.Context, groupID groupme.ID, token, filename string,
 		createReq.Header.Set("Content-Type", mimeType)
 	}
 
-	createResp, err := http.DefaultClient.Do(createReq)
+	createResp, err := mediaRequest(createReq)
 	if err != nil {
 		return "", fmt.Errorf("failed to start file upload: %w", err)
 	}
 	defer createResp.Body.Close()
 
 	var created createFileResponse
-	if err := json.NewDecoder(createResp.Body).Decode(&created); err != nil {
+	if err := json.NewDecoder(io.LimitReader(createResp.Body, 1024*1024)).Decode(&created); err != nil {
 		return "", fmt.Errorf("failed to decode file upload response: %w", err)
 	}
 	if created.StatusURL == "" {
@@ -354,23 +265,32 @@ func UploadFile(ctx context.Context, groupID groupme.ID, token, filename string,
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		statusReq, err := http.NewRequestWithContext(ctx, http.MethodGet, created.StatusURL, nil)
 		if err != nil {
-			return "", fmt.Errorf("failed to build file upload status request: %w", err)
+			return "", fmt.Errorf("invalid GroupMe file status URL")
+		}
+		if statusReq.URL.Host != "file.groupme.com" {
+			return "", fmt.Errorf("invalid GroupMe file status host")
 		}
 		statusReq.Header.Set("X-Access-Token", token)
 
-		statusResp, err := http.DefaultClient.Do(statusReq)
+		statusResp, err := mediaRequest(statusReq)
 		if err != nil {
 			return "", fmt.Errorf("failed to check file upload status: %w", err)
 		}
 		var status fileUploadStatus
-		decodeErr := json.NewDecoder(statusResp.Body).Decode(&status)
+		decodeErr := json.NewDecoder(io.LimitReader(statusResp.Body, 1024*1024)).Decode(&status)
 		statusResp.Body.Close()
 		if decodeErr != nil {
 			return "", fmt.Errorf("failed to decode file upload status: %w", decodeErr)
 		}
 
-		if status.Status == "completed" && status.FileID != "" {
+		if status.Status == "completed" {
+			if status.FileID == "" {
+				return "", fmt.Errorf("GroupMe completed file upload without a file ID")
+			}
 			return status.FileID, nil
+		}
+		if status.Status == "failed" {
+			return "", fmt.Errorf("GroupMe could not process the uploaded file")
 		}
 
 		select {

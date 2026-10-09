@@ -19,8 +19,8 @@ package connector
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
-	"time"
 
 	"maunium.net/go/mautrix/bridgev2"
 	"maunium.net/go/mautrix/bridgev2/networkid"
@@ -44,35 +44,8 @@ type GMClient struct {
 	sessionCancel context.CancelFunc
 	sessionDone   chan struct{}
 
-	// pollBackoff tracks, per chat ID, when polling may resume after that
-	// chat got a 429 (rate limited) from GroupMe. See poll.go. Guarded by
-	// pollBackoffMu since multiple chats' polls can be in flight
-	// concurrently... actually they aren't (pollOnce is sequential/
-	// staggered, see poll.go), but the mutex costs nothing and removes any
-	// doubt if that ever changes.
-	pollBackoffMu sync.Mutex
-	pollBackoff   map[string]time.Time
-
-	// ghostRefreshedAt tracks, per sender GroupMe ID, the last time
-	// HandleTextMessage's opportunistic ghost name/avatar refresh actually
-	// ran for them (see handlegroupme.go). Guarded by ghostRefreshMu.
-	//
-	// Needed because HandleTextMessage is called for every message polling
-	// re-fetches every tick (poll.go), not just genuinely new ones -- see
-	// its "safe to call unconditionally" reasoning, which is true for
-	// message bridging (bridgev2 core dedupes by message ID) but was NOT
-	// true for this refresh, which ran as a direct side effect before
-	// bridgev2 ever got a chance to dedupe anything. Confirmed live: a
-	// chat's most-recent ~20 messages can span a real nickname/avatar
-	// change, so replaying that same page every poll tick made the
-	// refresh flip back and forth between the old and new name/avatar
-	// forever, once per message per tick, generating a real, ever-growing
-	// stream of Matrix profile-change events (and, for avatars
-	// specifically, real re-uploads to the media repo) for any active
-	// sender -- see NOTES.md "Live incident: avatar flicker/reupload
-	// storm" for the first (avatar-only, still incomplete) fix attempt.
-	ghostRefreshMu   sync.Mutex
-	ghostRefreshedAt map[string]time.Time
+	pushMu sync.Mutex
+	push   *groupme.PushSubscription
 }
 
 var _ bridgev2.NetworkAPI = (*GMClient)(nil)
@@ -141,23 +114,46 @@ func (gc *GMClient) runSession(ctx context.Context) {
 		gc.UserLogin.BridgeState.Send(status.BridgeState{StateEvent: status.StateBadCredentials, Error: "groupme-account-mismatch"})
 		return
 	}
+	// Live pushes wait until catch-up is queued, so a gap is filled before
+	// newer messages move the bridged history past it. Live messages only
+	// arrive over push, so the login is connected only while the user channel is.
+	userChannel := groupme.UserChannel(me.ID)
+	var reactionRefreshes sync.WaitGroup
 	sub := groupme.NewPushSubscription(ctx)
 	sub.AddFullHandler(gc)
-	sub.StartListening(ctx, groupmeext.NewWSFayeClient(gc.UserLogin.Log))
-	var workers sync.WaitGroup
-	workers.Add(3)
-	go func() {
-		defer workers.Done()
-		if err := sub.SubscribeToUser(ctx, groupme.ID(gc.Meta.GMID), gc.Meta.Token); err != nil && ctx.Err() == nil {
-			gc.UserLogin.Log.Err(err).Msg("Failed to subscribe to GroupMe push channel")
+	sub.StartListening(ctx, groupmeext.NewWSFayeClient(gc.UserLogin.Log, func(ctx context.Context, channel string) {
+		if channel != userChannel {
+			return
 		}
-	}()
-	go func() { defer workers.Done(); gc.syncChats(ctx) }()
-	go func() { defer workers.Done(); gc.pollMessages(ctx) }()
-	gc.UserLogin.BridgeState.Send(status.BridgeState{StateEvent: status.StateConnected})
+		chats := gc.catchUp(ctx)
+		if ctx.Err() != nil {
+			return
+		}
+		gc.UserLogin.BridgeState.Send(status.BridgeState{StateEvent: status.StateConnected})
+		reactionRefreshes.Add(1)
+		go func() {
+			defer reactionRefreshes.Done()
+			gc.refreshRecentReactions(ctx, chats)
+		}()
+	}, func(err error) {
+		gc.UserLogin.BridgeState.Send(status.BridgeState{
+			StateEvent: status.StateTransientDisconnect,
+			Error:      "groupme-push-disconnected",
+			Message:    err.Error(),
+		})
+	}))
+	gc.pushMu.Lock()
+	gc.push = sub
+	gc.pushMu.Unlock()
+	if err := sub.SubscribeToUser(me.ID, gc.Meta.Token); err != nil {
+		gc.UserLogin.Log.Err(err).Msg("Failed to subscribe to GroupMe push channel")
+	}
 	<-ctx.Done()
+	gc.pushMu.Lock()
+	gc.push = nil
+	gc.pushMu.Unlock()
 	sub.Wait()
-	workers.Wait()
+	reactionRefreshes.Wait()
 }
 
 func (gc *GMClient) disconnectLocked() {
@@ -213,17 +209,28 @@ func (gc *GMClient) portalKeyForMessage(msg *groupme.Message) networkid.PortalKe
 	if len(msg.GroupID) > 0 {
 		return gc.portalKeyForGroup(msg.GroupID)
 	}
-	other := msg.RecipientID
-	if msg.UserID != groupme.ID(gc.Meta.GMID) {
-		other = msg.UserID
+	self := groupme.ID(gc.Meta.GMID)
+	conversationID := msg.ConversationID
+	if conversationID == "" {
+		conversationID = msg.ChatID
 	}
-	return gc.portalKeyForDM(other)
-}
-
-func (gc *GMClient) fatalError(err error, code status.BridgeStateErrorCode) {
-	gc.UserLogin.BridgeState.Send(status.BridgeState{
-		StateEvent: status.StateUnknownError,
-		Error:      code,
-		Message:    err.Error(),
-	})
+	if conversationID != "" {
+		participants := strings.Split(string(conversationID), "+")
+		if len(participants) == 2 && participants[0] != "" && participants[1] != "" {
+			if participants[0] == string(self) {
+				return gc.portalKeyForDM(groupme.ID(participants[1]))
+			}
+			if participants[1] == string(self) {
+				return gc.portalKeyForDM(groupme.ID(participants[0]))
+			}
+		}
+		return networkid.PortalKey{}
+	}
+	if msg.UserID == self && msg.RecipientID != "" {
+		return gc.portalKeyForDM(msg.RecipientID)
+	}
+	if msg.RecipientID == self && msg.UserID != "" {
+		return gc.portalKeyForDM(msg.UserID)
+	}
+	return networkid.PortalKey{}
 }
