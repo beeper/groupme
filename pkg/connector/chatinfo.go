@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/rs/zerolog"
 	"go.mau.fi/util/ptr"
 	"maunium.net/go/mautrix/bridgev2"
 	"maunium.net/go/mautrix/bridgev2/database"
@@ -40,6 +41,13 @@ func (gc *GMClient) avatarFor(ctx context.Context, url string) *bridgev2.Avatar 
 			data, _, err := groupmeext.DownloadImage(ctx, url)
 			return data, err
 		},
+	}
+	if gc.Main.useDirectMedia {
+		var err error
+		avatar.MXC, err = gc.Main.directMediaURI(ctx, "1i", url)
+		if err != nil {
+			zerolog.Ctx(ctx).Warn().Err(err).Msg("Failed to generate GroupMe avatar media URI")
+		}
 	}
 	return avatar
 }
