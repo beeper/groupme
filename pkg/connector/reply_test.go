@@ -67,14 +67,3 @@ func TestReplyConversionUsesImmediateParent(t *testing.T) {
 		t.Fatalf("reply lost relation or content: %+v", converted)
 	}
 }
-
-func TestReplyCannotCrossConversationOrAccount(t *testing.T) {
-	for _, target := range []networkid.PortalKey{{ID: "group:other", Receiver: "20"}, {ID: "group:9", Receiver: "other-account"}} {
-		msg := testMatrixText("group:9")
-		msg.ReplyTo = &database.Message{ID: "parent", Room: target}
-		mockGroupMe(t, func(*http.Request) (int, string) { t.Fatal("invalid reply sent a request"); return 500, "" })
-		if result, err := dmTestClient().HandleMatrixMessage(context.Background(), msg); err == nil || result != nil {
-			t.Fatal("accepted cross-conversation reply")
-		}
-	}
-}

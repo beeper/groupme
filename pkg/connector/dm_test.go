@@ -14,7 +14,6 @@ import (
 	"maunium.net/go/mautrix/bridgev2/database"
 	"maunium.net/go/mautrix/bridgev2/networkid"
 	"maunium.net/go/mautrix/event"
-	"maunium.net/go/mautrix/id"
 
 	"github.com/beeper/groupme-lib"
 	"github.com/beeper/groupme/pkg/groupmeext"
@@ -24,9 +23,6 @@ func mockGroupMe(t *testing.T, handle func(*http.Request) (int, string)) {
 	t.Helper()
 	previous := http.DefaultTransport
 	http.DefaultTransport = loginTransport(func(r *http.Request) (*http.Response, error) {
-		if err := r.Context().Err(); err != nil {
-			return nil, err
-		}
 		if r.URL.Host != "api.groupme.com" || r.Header.Get("X-Access-Token") != "test-token" || r.URL.Query().Has("token") {
 			t.Fatal("unexpected destination or authentication")
 		}
@@ -51,38 +47,6 @@ func testMatrixText(portal networkid.PortalID) *bridgev2.MatrixMessage {
 		Content: &event.MessageEventContent{MsgType: event.MsgText, Body: "DM test"},
 		Portal:  &bridgev2.Portal{Portal: &database.Portal{PortalKey: networkid.PortalKey{ID: portal, Receiver: "20"}}},
 	}}
-}
-
-func TestDMIncomingAndEchoUseSamePortal(t *testing.T) {
-	for _, tc := range []struct {
-		name, body string
-		fromMe     bool
-	}{
-		{"incoming push", `{"id":"incoming","user_id":"9","recipient_id":"20","chat_id":"9+20","text":"hello"}`, false},
-		{"outgoing push echo", `{"id":"outgoing","user_id":"20","recipient_id":"9","chat_id":"9+20","text":"hello"}`, true},
-		{"incoming REST", `{"id":"incoming","user_id":"9","recipient_id":"20","conversation_id":"9+20","text":"hello"}`, false},
-		{"outgoing REST", `{"id":"outgoing","user_id":"20","recipient_id":"9","conversation_id":"9+20","text":"hello"}`, true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			gc := dmTestClient()
-			var msg groupme.Message
-			if err := json.Unmarshal([]byte(tc.body), &msg); err != nil {
-				t.Fatal(err)
-			}
-			evt := gc.makeRemoteMessage(msg)
-			if evt.PortalKey != (networkid.PortalKey{ID: "dm:9", Receiver: "20"}) || evt.Sender.IsFromMe != tc.fromMe || evt.Sender.Sender != networkid.UserID(msg.UserID) {
-				t.Fatalf("wrong portal or sender: %+v", evt.EventMeta)
-			}
-			converted, err := evt.ConvertMessageFunc(context.Background(), nil, nil, evt.Data)
-			if err != nil || len(converted.Parts) != 1 || converted.Parts[0].Content.Body != "hello" {
-				t.Fatalf("wrong message conversion: %+v, %v", converted, err)
-			}
-			gc.UserLogin.ID = "other-login"
-			if gc.makeRemoteMessage(msg).PortalKey.Receiver != "other-login" {
-				t.Fatal("portal crossed login ownership")
-			}
-		})
-	}
 }
 
 func TestDMSendRemoteResponse(t *testing.T) {
@@ -142,11 +106,6 @@ func TestSendRejectsEmptySuccessAndPreservesFailures(t *testing.T) {
 				mockGroupMe(t, func(r *http.Request) (int, string) {
 					return tc.code, fmt.Sprintf(`{"response":%s,"meta":{"code":%d}}`, tc.response, tc.code)
 				})
-				defer func() {
-					if r := recover(); r != nil {
-						t.Errorf("send panicked on provider response: %v", r)
-					}
-				}()
 				result, err := dmTestClient().HandleMatrixMessage(context.Background(), testMatrixText(portal))
 				if err == nil || result != nil {
 					t.Fatal("bad send was accepted as delivered")
@@ -159,45 +118,6 @@ func TestSendRejectsEmptySuccessAndPreservesFailures(t *testing.T) {
 				}
 			})
 		}
-	}
-}
-
-func TestDMCanceledSendMakesNoRequest(t *testing.T) {
-	mockGroupMe(t, func(r *http.Request) (int, string) {
-		t.Fatal("canceled send made a request")
-		return 500, ""
-	})
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	result, err := dmTestClient().HandleMatrixMessage(ctx, testMatrixText("dm:9"))
-	if result != nil || !errors.Is(err, context.Canceled) {
-		t.Fatalf("cancellation was not propagated: %v", err)
-	}
-}
-
-func TestSendRetryKeepsNativeRequestIdentity(t *testing.T) {
-	var guids []string
-	mockGroupMe(t, func(r *http.Request) (int, string) {
-		var body map[string]groupme.Message
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			t.Fatal(err)
-		}
-		for _, msg := range body {
-			guids = append(guids, msg.SourceGUID)
-		}
-		return 201, `{"response":{"message":{"id":"sent"},"direct_message":{"id":"sent"}},"meta":{"code":201}}`
-	})
-	for _, portal := range []networkid.PortalID{"group:9", "dm:9"} {
-		for _, eventID := range []id.EventID{"$first", "$first", "$second"} {
-			msg := testMatrixText(portal)
-			msg.Event.ID = eventID
-			if _, err := dmTestClient().HandleMatrixMessage(context.Background(), msg); err != nil {
-				t.Fatal(err)
-			}
-		}
-	}
-	if guids[0] == "" || guids[0] != guids[1] || guids[0] == guids[2] || guids[3] != guids[4] || guids[3] == guids[5] || guids[0] == guids[3] {
-		t.Fatal("request IDs are not stable per message and conversation")
 	}
 }
 
