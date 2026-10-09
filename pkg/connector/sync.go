@@ -93,6 +93,10 @@ func (gc *GMClient) catchUp(ctx context.Context) []nativeChat {
 			},
 			GetChatInfoFunc: getChatInfo,
 			CheckNeedsBackfillFunc: func(ctx context.Context, latest *database.Message) (bool, error) {
+				latest, err := gc.nearestNativeMessage(ctx, chat.portalKey, latest, false)
+				if err != nil {
+					return false, err
+				}
 				return chat.latestID != "" && (latest == nil || compareMessageIDs(chat.latestID, ParseMessageID(latest.ID)) > 0), nil
 			},
 		})

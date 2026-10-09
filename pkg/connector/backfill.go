@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"maunium.net/go/mautrix/bridgev2"
+	"maunium.net/go/mautrix/bridgev2/database"
 	"maunium.net/go/mautrix/bridgev2/networkid"
 
 	"github.com/beeper/groupme-lib"
@@ -24,6 +26,23 @@ func compareMessageIDs(a, b groupme.ID) int {
 		return 1
 	}
 	return strings.Compare(string(a), string(b))
+}
+
+// Poll votes are stored under their Matrix event ID, dated just before their
+// poll. Step over them to the nearest native message in the given direction.
+func (gc *GMClient) nearestNativeMessage(ctx context.Context, portal networkid.PortalKey, msg *database.Message, newer bool) (*database.Message, error) {
+	var err error
+	for msg != nil && isPollVoteID(msg.ID) {
+		if newer {
+			msg, err = gc.Main.br.DB.Message.GetFirstNonFakePartAfterTime(ctx, portal, msg.Timestamp)
+		} else {
+			msg, err = gc.Main.br.DB.Message.GetLastNonFakePartAtOrBeforeTime(ctx, portal, msg.Timestamp.Add(-time.Nanosecond))
+		}
+		if err != nil {
+			return nil, fmt.Errorf("failed to find GroupMe message near poll vote: %w", err)
+		}
+	}
+	return msg, nil
 }
 
 // fetchMessagePage normalizes GroupMe's empty-page response and returns newest
@@ -75,9 +94,13 @@ func (gc *GMClient) FetchMessages(ctx context.Context, params bridgev2.FetchMess
 	}
 	count := max(params.Count, 1)
 	kind, _ := ParsePortalID(params.Portal.ID)
+	anchorMsg, err := gc.nearestNativeMessage(ctx, params.Portal.PortalKey, params.AnchorMessage, !params.Forward)
+	if err != nil {
+		return nil, err
+	}
 	var anchor, before, after groupme.ID
-	if params.AnchorMessage != nil {
-		anchor = ParseMessageID(params.AnchorMessage.ID)
+	if anchorMsg != nil {
+		anchor = ParseMessageID(anchorMsg.ID)
 	}
 	if !params.Forward {
 		before = groupme.ID(params.Cursor)

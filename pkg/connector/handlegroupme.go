@@ -100,13 +100,7 @@ func (gc *GMClient) convertMessage(ctx context.Context, portal *bridgev2.Portal,
 }
 
 // convertGroupMeMessage builds the Matrix message parts for an incoming
-// GroupMe message, including any attachments or poll event. token is the
-// account's own GroupMe access token, needed by the video/file download
-// paths (see groupmeext.DownloadVideo/DownloadFile) -- image attachments
-// don't need it, GroupMe's image CDN is a plain public GET. client is
-// needed separately to fetch a poll's full definition (see
-// convertGroupMePollEvent/groupme.Client.GetPoll) -- unlike the raw HTTP
-// download helpers, that's a normal authenticated groupme-lib API call.
+// GroupMe message, including any attachments or poll event.
 func (gc *GMClient) convertGroupMeMessage(ctx context.Context, portal *bridgev2.Portal, intent bridgev2.MatrixAPI, msg *groupme.Message) (*bridgev2.ConvertedMessage, error) {
 	cm := &bridgev2.ConvertedMessage{}
 	log := zerolog.Ctx(ctx)
@@ -241,22 +235,8 @@ func failedAttachment(partID networkid.PartID) *bridgev2.ConvertedMessagePart {
 	}}
 }
 
-// convertGroupMePollEvent renders a poll.created/poll.reminder/
-// poll.finished event (see json.go's Event/PollEventData) as a single
-// readable text message part. Returns nil if the event's Data couldn't be
-// parsed or its Type isn't one of the three handled here, so the caller
-// can fall back to GroupMe's own plain-text notice instead of dropping
-// the message.
-//
-// Matrix has a native poll event type (MSC3381) that Element and some
-// other clients render as an interactive, votable widget; this
-// deliberately doesn't use it. Two-way vote sync (a Matrix poll vote ->
-// GroupMe's vote API, and GroupMe vote changes -> updating the Matrix
-// poll's state) would be a substantially bigger feature -- tracking poll
-// state across both sides, handling a poll closing on either end, etc --
-// and hasn't been attempted here; this only makes the poll's
-// question/options/results legible as a normal message, matching the
-// scope of every other attachment type this bridge bridges one-way.
+// Active group polls use the framework's interactive poll event. Reminders,
+// final anonymous tallies, and unsupported definitions retain readable text.
 func convertGroupMePollEvent(ctx context.Context, client *groupmeext.Client, msg *groupme.Message) *bridgev2.ConvertedMessagePart {
 	log := zerolog.Ctx(ctx)
 
@@ -269,6 +249,9 @@ func convertGroupMePollEvent(ctx context.Context, client *groupmeext.Client, msg
 	var body string
 	switch msg.Event.Type {
 	case "poll.created":
+		if data.Conversation.ID == "" || data.Poll.ID == "" || data.Conversation.ID != string(msg.GroupID) {
+			return nil
+		}
 		poll, err := client.GetPoll(ctx, data.Conversation.ID, data.Poll.ID)
 		if err != nil {
 			// Best-effort: GroupMe's own notice text already mentions the
@@ -288,13 +271,16 @@ func convertGroupMePollEvent(ctx context.Context, client *groupmeext.Client, msg
 		if visibility == "" {
 			visibility = "anonymous"
 		}
-		fmt.Fprintf(&b, "\nVote in the GroupMe app (%s voting)", visibility)
+		fmt.Fprintf(&b, "\n%s voting", visibility)
 		if poll.Expiration > 0 {
 			fmt.Fprintf(&b, ". Closes %s.", poll.Expiration.ToTime().Local().Format("Jan 2, 3:04 PM"))
 		} else {
 			b.WriteString(".")
 		}
 		body = b.String()
+		if part := interactivePollPart(poll, body); part != nil {
+			return part
+		}
 
 	case "poll.finished":
 		var b strings.Builder

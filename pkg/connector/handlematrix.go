@@ -79,6 +79,9 @@ func (gc *GMClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.Matri
 	if msg.ReplyTo != nil && (msg.ReplyTo.ID == "" || msg.ReplyTo.Room != msg.Portal.PortalKey) {
 		return nil, fmt.Errorf("GroupMe replies must target a message in the same conversation")
 	}
+	if msg.ReplyTo != nil && isPollVoteID(msg.ReplyTo.ID) {
+		return nil, fmt.Errorf("GroupMe replies cannot target poll votes")
+	}
 	content := msg.Content
 	text := content.Body
 	if content.Format == event.FormatHTML && content.FormattedBody != "" {
@@ -282,6 +285,9 @@ func (gc *GMClient) HandleMatrixReaction(ctx context.Context, msg *bridgev2.Matr
 	conversationID := gmid
 	if portalType == PortalTypeDM {
 		conversationID = DMConversationID(groupme.ID(gc.Meta.GMID), gmid)
+	}
+	if isPollVoteID(msg.TargetMessage.ID) {
+		return nil, fmt.Errorf("GroupMe reactions cannot target poll votes")
 	}
 	messageID := ParseMessageID(msg.TargetMessage.ID)
 	err := gc.Client.CreateLike(ctx, conversationID, messageID, msg.PreHandleResp.Emoji)
