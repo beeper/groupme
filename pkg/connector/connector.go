@@ -17,9 +17,7 @@
 // Package connector implements the GroupMe network connector for the
 // bridgev2 framework in maunium.net/go/mautrix.
 //
-// It is a port of the pre-bridgev2 mautrix-groupme bridge logic (see the
-// pkg/groupmeext package and NOTES.md at the repository root for details
-// about what has and has not been ported yet).
+// It is a port of the pre-bridgev2 mautrix-groupme bridge logic.
 package connector
 
 import (

@@ -205,7 +205,7 @@ type fileUploadStatus struct {
 // UploadFile uploads an outgoing file (GroupMe's group file-sharing
 // feature -- see DownloadFile's doc comment) and returns its file_id, for
 // use as a "file" attachment's file_id. Reverse-engineered live the same
-// way as UploadVideo; see NOTES.md "Outgoing video/file attachments".
+// way as UploadVideo.
 //
 // Unlike video, this doesn't need a separate SAS-signed upload step --
 // file.groupme.com is GroupMe's own file-service (confirmed via its

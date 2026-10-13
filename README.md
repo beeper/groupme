@@ -5,9 +5,7 @@ A GroupMe puppeting bridge using [mautrix-go bridgev2](https://github.com/mautri
 This is a development bridge. The October 8, 2026 candidate builds and passes
 focused remote-response checks. A dedicated self-hosted connection on a production
 Beeper account has verified group/DM text, replies, reactions, and initial history
-with two GroupMe accounts. Media validation is incomplete. Earlier live results in
-[NOTES.md](NOTES.md) describe
-earlier versions unless explicitly dated October 8.
+with two GroupMe accounts. Media validation is incomplete.
 
 ## Supported connector behavior
 
@@ -174,4 +172,3 @@ media and WebSocket/Bayeux transport helpers. The GroupMe API client is
 Imported from [realtofuine/groupme revival-2026](https://github.com/realtofuine/groupme/tree/56998b82223b7a4850bf2f5bf9cea607fe713230),
 continuing the original Beeper bridge and
 [karmanyaahm/matrix-groupme-go](https://github.com/karmanyaahm/matrix-groupme-go).
-See [NOTES.md](NOTES.md) for historical implementation and operating observations.
