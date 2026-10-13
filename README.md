@@ -5,8 +5,8 @@ A GroupMe puppeting bridge using [mautrix-go bridgev2](https://github.com/mautri
 This is a development bridge. The October 8, 2026 candidate builds and passes
 focused remote-response checks. A dedicated self-hosted connection on a production
 Beeper account has verified group/DM text, replies, reactions, and initial history
-with two GroupMe accounts. Media validation is incomplete; see
-[ROADMAP.md](ROADMAP.md). Earlier live results in [NOTES.md](NOTES.md) describe
+with two GroupMe accounts. Media validation is incomplete. Earlier live results in
+[NOTES.md](NOTES.md) describe
 earlier versions unless explicitly dated October 8.
 
 ## Supported connector behavior
@@ -26,7 +26,7 @@ earlier versions unless explicitly dated October 8.
   disconnected, through bridgev2's standard backfill interface. Historical
   reactions and replies are included in converted history.
 
-[ROADMAP.md](ROADMAP.md) lists the remaining functionality and validation gaps.
+[ROADMAP.md](ROADMAP.md) lists functionality in each direction.
 Message edits, message deletion, typing, read receipts, poll creation, vote
 withdrawal, live vote-result synchronization, and outgoing group management are
 not advertised as supported.
