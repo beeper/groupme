@@ -168,9 +168,8 @@ been implemented.
 ## Architecture and credits
 
 `pkg/connector` implements bridgev2 interfaces. `pkg/groupmeext` supplies GroupMe
-media and WebSocket/Bayeux transport helpers. `thirdparty/groupme-lib` is the
-locally patched API library. `thirdparty/wray` is retained as its compile-time
-legacy dependency; the connector uses the WebSocket transport.
+media and WebSocket/Bayeux transport helpers. The GroupMe API client is
+[beeper/groupme-lib](https://github.com/beeper/groupme-lib).
 
 Imported from [realtofuine/groupme revival-2026](https://github.com/realtofuine/groupme/tree/56998b82223b7a4850bf2f5bf9cea607fe713230),
 continuing the original Beeper bridge and

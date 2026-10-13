@@ -322,9 +322,7 @@ func convertGroupMePollEvent(ctx context.Context, client *groupmeext.Client, msg
 // GroupMe now supports full per-emoji reactions (confirmed live against
 // the real API: msg.Reactions is a list of {emoji code, user_ids} pairs,
 // e.g. a "\U0001F44D" (👍) entry with its own reactor list, separate from
-// any "❤️" (❤️) entry on the same message). msg.Reactions is a
-// local addition to the pinned groupme-lib dependency, which predates this
-// GroupMe feature entirely -- see thirdparty/groupme-lib/json.go.
+// any "❤️" (❤️) entry on the same message).
 // FavoritedBy (the older, single-undifferentiated-like field) is kept only
 // as a fallback for payloads that might not carry the newer field (e.g.
 // possibly some live-push payload shapes, unverified) so a like is never
