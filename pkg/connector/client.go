@@ -135,6 +135,7 @@ func (gc *GMClient) runSession(ctx context.Context) {
 		go func() {
 			defer reactionRefreshes.Done()
 			gc.refreshRecentReactions(ctx, chats)
+			gc.syncReadCheckpoints(ctx)
 		}()
 	}, func(err error) {
 		gc.UserLogin.BridgeState.Send(status.BridgeState{

@@ -7,14 +7,17 @@ import (
 	"strings"
 	"time"
 
-	"github.com/beeper/groupme-lib"
 	"maunium.net/go/mautrix/bridgev2"
 	"maunium.net/go/mautrix/bridgev2/networkid"
 	"maunium.net/go/mautrix/bridgev2/simplevent"
+
+	"github.com/beeper/groupme-lib"
+	"github.com/beeper/groupme/pkg/groupmeext"
 )
 
 var (
-	_ bridgev2.TypingHandlingNetworkAPI = (*GMClient)(nil)
+	_ bridgev2.TypingHandlingNetworkAPI      = (*GMClient)(nil)
+	_ bridgev2.ReadReceiptHandlingNetworkAPI = (*GMClient)(nil)
 )
 
 func (gc *GMClient) conversationID(portalID networkid.PortalID) (groupme.ID, error) {
@@ -64,6 +67,65 @@ func (gc *GMClient) HandleMatrixTyping(ctx context.Context, msg *bridgev2.Matrix
 	return transport.SendTyping(ctx, channel, gc.Meta.Token, gc.Meta.GMID)
 }
 
+func (gc *GMClient) HandleMatrixReadReceipt(ctx context.Context, msg *bridgev2.MatrixReadReceipt) error {
+	target := msg.ExactMessage
+	var err error
+	if target == nil {
+		target, err = gc.Main.br.DB.Message.GetLastNonFakePartAtOrBeforeTime(ctx, msg.Portal.PortalKey, msg.ReadUpTo)
+		if err != nil {
+			return err
+		}
+	}
+	if target != nil && target.Room != msg.Portal.PortalKey {
+		return fmt.Errorf("receipt target belongs to another conversation")
+	}
+	target, err = gc.nearestNativeMessage(ctx, msg.Portal.PortalKey, target, false)
+	if err != nil || target == nil {
+		return err
+	}
+	if target.Timestamp.Before(msg.LastRead) {
+		return nil
+	}
+	conversation, err := gc.conversationID(msg.Portal.ID)
+	if err != nil {
+		return err
+	}
+	if err = groupmeext.MarkRead(ctx, gc.Meta.Token, conversation, ParseMessageID(target.ID)); err != nil {
+		return err
+	}
+	// bridgev2 invokes this for public m.read only. Implicit receipts from
+	// sending a message update our checkpoint without publishing a seen event.
+	if kind, _ := ParsePortalID(msg.Portal.ID); kind == PortalTypeDM && !msg.Implicit {
+		return groupmeext.SendDMReadReceipt(ctx, gc.Meta.Token, conversation)
+	}
+	return nil
+}
+
+func (gc *GMClient) readCheckpointEvent(receipt groupmeext.ReadCheckpoint) *nativeReceipt {
+	key := gc.portalForConversation(receipt.ConversationID)
+	if key.ID == "" || receipt.LastReadMessageID == "" {
+		return nil
+	}
+	return &nativeReceipt{client: gc, Receipt: &simplevent.Receipt{
+		EventMeta: simplevent.EventMeta{Type: bridgev2.RemoteEventReadReceipt, PortalKey: key,
+			Sender: bridgev2.EventSender{IsFromMe: true, Sender: MakeUserID(groupme.ID(gc.Meta.GMID))}},
+		LastTarget: MakeMessageID(receipt.LastReadMessageID),
+	}}
+}
+
+func (gc *GMClient) syncReadCheckpoints(ctx context.Context) {
+	receipts, err := groupmeext.GetReadCheckpoints(ctx, gc.Meta.Token)
+	if err != nil {
+		gc.UserLogin.Log.Warn().Err(err).Msg("Failed to sync GroupMe read checkpoints")
+		return
+	}
+	for _, receipt := range receipts {
+		if evt := gc.readCheckpointEvent(receipt); evt != nil {
+			gc.Main.br.QueueRemoteEvent(gc.UserLogin, evt)
+		}
+	}
+}
+
 // These native events have no groupme-lib handler. Decode only their typed
 // fields and keep routing, room creation, and Matrix delivery in bridgev2.
 func (gc *GMClient) handleActivity(ctx context.Context, msg groupme.PushMessage) bool {
@@ -76,7 +138,7 @@ func (gc *GMClient) handleActivity(ctx context.Context, msg groupme.PushMessage)
 
 func (gc *GMClient) parseActivity(msg groupme.PushMessage) ([]bridgev2.RemoteEvent, bool) {
 	typ, _ := msg.Data()["type"].(string)
-	if typ != "typing" {
+	if typ != "typing" && typ != "read_receipt.create" && typ != "read_receipt.sync" {
 		return nil, false
 	}
 	raw, err := json.Marshal(msg.Data())
@@ -86,6 +148,13 @@ func (gc *GMClient) parseActivity(msg groupme.PushMessage) ([]bridgev2.RemoteEve
 	var data struct {
 		UserID  groupme.ID `json:"user_id"`
 		Started int64      `json:"started"`
+		Subject struct {
+			ChatID    groupme.ID                  `json:"chat_id"`
+			MessageID groupme.ID                  `json:"message_id"`
+			UserID    groupme.ID                  `json:"user_id"`
+			ReadAt    groupme.Timestamp           `json:"read_at"`
+			Receipts  []groupmeext.ReadCheckpoint `json:"receipts"`
+		} `json:"subject"`
 	}
 	if json.Unmarshal(raw, &data) != nil {
 		return nil, true
@@ -117,7 +186,78 @@ func (gc *GMClient) parseActivity(msg groupme.PushMessage) ([]bridgev2.RemoteEve
 			EventMeta: simplevent.EventMeta{Type: bridgev2.RemoteEventTyping, PortalKey: key, Sender: bridgev2.EventSender{Sender: MakeUserID(data.UserID)}},
 			Timeout:   timeout, Type: bridgev2.TypingTypeText,
 		})
-
+	case "read_receipt.create":
+		subject := data.Subject
+		key := gc.portalKeyForMessage(&groupme.Message{ChatID: subject.ChatID})
+		_, peer := ParsePortalID(key.ID)
+		if key.ID == "" || subject.MessageID == "" || (subject.UserID != peer && string(subject.UserID) != gc.Meta.GMID) {
+			return nil, true
+		}
+		events = append(events, &nativeReceipt{client: gc, Receipt: &simplevent.Receipt{
+			EventMeta: simplevent.EventMeta{Type: bridgev2.RemoteEventReadReceipt, PortalKey: key,
+				Sender: bridgev2.EventSender{IsFromMe: string(subject.UserID) == gc.Meta.GMID, Sender: MakeUserID(subject.UserID)}, Timestamp: subject.ReadAt.ToTime()},
+			LastTarget: MakeMessageID(subject.MessageID),
+		}})
+	case "read_receipt.sync":
+		if msg.Channel() != groupme.UserChannel(groupme.ID(gc.Meta.GMID)) {
+			return nil, true
+		}
+		for _, receipt := range data.Subject.Receipts {
+			if evt := gc.readCheckpointEvent(receipt); evt != nil {
+				events = append(events, evt)
+			}
+		}
 	}
 	return events, true
+}
+
+type nativeReceipt struct {
+	*simplevent.Receipt
+	client *GMClient
+}
+
+// Web's read cursor includes hidden message.update system records. Translate
+// that native cursor to the preceding visible message inside the portal queue;
+// don't create a second Matrix message or mapping for an edit notification.
+func (r *nativeReceipt) PreHandle(ctx context.Context, portal *bridgev2.Portal) {
+	lookup := func(id groupme.ID) bool {
+		mapped, err := portal.Bridge.DB.Message.GetLastPartByID(ctx, portal.Receiver, MakeMessageID(id))
+		return err == nil && mapped != nil && !mapped.HasFakeMXID() && mapped.Room == portal.PortalKey
+	}
+	if lookup(ParseMessageID(r.LastTarget)) {
+		return
+	}
+	var before groupme.ID
+	foundEdit := false
+	for page := 0; page < 2; page++ {
+		messages, err := r.client.fetchMessagePage(ctx, portal.ID, before, "", 100)
+		if err != nil {
+			r.client.UserLogin.Log.Warn().Err(err).Msg("Failed to resolve GroupMe edit receipt")
+			return
+		}
+		if len(messages) == 0 {
+			return
+		}
+		for _, msg := range messages {
+			if !foundEdit {
+				comparison := compareMessageIDs(msg.ID, ParseMessageID(r.LastTarget))
+				if comparison > 0 {
+					continue
+				}
+				if comparison < 0 || msg.Event == nil || msg.Event.Type != "message.update" {
+					return
+				}
+				foundEdit = true
+				continue
+			}
+			if msg.Event != nil && msg.Event.Type == "message.update" {
+				continue
+			}
+			if lookup(msg.ID) {
+				r.LastTarget = MakeMessageID(msg.ID)
+				return
+			}
+		}
+		before = messages[len(messages)-1].ID
+	}
 }
