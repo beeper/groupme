@@ -6,8 +6,50 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/rs/zerolog"
+
 	"github.com/beeper/groupme-lib"
 )
+
+func TestActivityHookRespectsSubscriptionGate(t *testing.T) {
+	ctx := context.Background()
+	client := NewWSFayeClient(zerolog.Nop(), nil, nil)
+	sub := &pushSubscription{messages: make(chan groupme.PushMessage, 1)}
+	client.subs["/user/20"] = sub
+	var handled []groupme.PushMessage
+	client.OnEvent = func(_ context.Context, msg groupme.PushMessage) bool {
+		handled = append(handled, msg)
+		return msg.Data()["type"] == "typing"
+	}
+	typing := &bayeuxMessage{Chan: "/user/20", MsgData: map[string]interface{}{"type": "typing"}}
+	client.handleIncoming(ctx, typing)
+	client.handleIncoming(ctx, &bayeuxMessage{Chan: "/user/99"})
+	if len(handled) != 0 || len(sub.held) != 1 || len(sub.messages) != 0 {
+		t.Fatal("activity bypassed subscription gating")
+	}
+	client.deliver(ctx, sub, sub.held[0])
+	if len(handled) != 1 || handled[0] != typing || len(sub.messages) != 0 {
+		t.Fatal("consumed activity reached the library dispatcher")
+	}
+	sub.ready = true
+	message := &bayeuxMessage{Chan: "/user/20", MsgData: map[string]interface{}{"type": "line.create"}}
+	client.handleIncoming(ctx, message)
+	select {
+	case got := <-sub.messages:
+		if got != message {
+			t.Fatal("forwarded the wrong event")
+		}
+	default:
+		t.Fatal("unhandled activity did not reach the library dispatcher")
+	}
+}
+
+func TestTypingRequiresPushConnection(t *testing.T) {
+	client := NewWSFayeClient(zerolog.Nop(), nil, nil)
+	if err := client.SendTyping(context.Background(), "/group/88", "test-token", "20"); err == nil {
+		t.Fatal("typing succeeded without a push connection")
+	}
+}
 
 type nativeReaction struct {
 	message  groupme.Message

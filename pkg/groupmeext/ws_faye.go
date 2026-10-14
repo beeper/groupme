@@ -79,6 +79,9 @@ func (m *bayeuxMessage) Error() string { return m.MsgError }
 
 // WSFayeClient implements GroupMe's Bayeux protocol over WebSocket.
 type WSFayeClient struct {
+	// OnEvent handles native events absent from groupme-lib's dispatcher. Set
+	// before Listen; returning true consumes the event after subscription gating.
+	OnEvent        func(context.Context, groupme.PushMessage) bool
 	log            zerolog.Logger
 	onSubscribed   func(ctx context.Context, channel string)
 	onDisconnected func(err error)
@@ -212,11 +215,33 @@ func (c *WSFayeClient) handleIncoming(ctx context.Context, m *bayeuxMessage) {
 	if held {
 		return
 	}
+	c.deliver(ctx, sub, m)
+}
+
+func (c *WSFayeClient) deliver(ctx context.Context, sub *pushSubscription, m *bayeuxMessage) {
+	if c.OnEvent != nil && c.OnEvent(ctx, m) {
+		return
+	}
 	select {
 	case sub.messages <- m:
 	case <-ctx.Done():
 	}
+}
 
+// Native typing is a five-second pulse, with no separate stop publication.
+func (c *WSFayeClient) SendTyping(ctx context.Context, channel, token, userID string) error {
+	c.mu.Lock()
+	conn, clientID := c.conn, c.clientID
+	c.mu.Unlock()
+	if conn == nil || clientID == "" {
+		return fmt.Errorf("GroupMe push is disconnected")
+	}
+	_, err := c.request(ctx, conn, &bayeuxMessage{
+		Chan: channel, ClientID: clientID,
+		MsgData: map[string]interface{}{"type": "typing", "user_id": userID, "started": time.Now().UnixMilli()},
+		MsgExt:  map[string]interface{}{"access_token": token},
+	})
+	return err
 }
 
 func (c *WSFayeClient) readLoop(ctx context.Context, conn *websocket.Conn) error {
@@ -345,9 +370,8 @@ func (c *WSFayeClient) subscribe(ctx context.Context, conn *websocket.Conn, clie
 		}
 		c.mu.Unlock()
 		for _, m := range batch {
-			select {
-			case sub.messages <- m:
-			case <-ctx.Done():
+			c.deliver(ctx, sub, m)
+			if ctx.Err() != nil {
 				return
 			}
 		}
