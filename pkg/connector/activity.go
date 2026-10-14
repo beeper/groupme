@@ -138,7 +138,7 @@ func (gc *GMClient) handleActivity(ctx context.Context, msg groupme.PushMessage)
 
 func (gc *GMClient) parseActivity(msg groupme.PushMessage) ([]bridgev2.RemoteEvent, bool) {
 	typ, _ := msg.Data()["type"].(string)
-	if typ != "typing" && typ != "read_receipt.create" && typ != "read_receipt.sync" {
+	if typ != "typing" && typ != "read_receipt.create" && typ != "read_receipt.sync" && typ != "chat.deleted" && typ != "membership.destroy" {
 		return nil, false
 	}
 	raw, err := json.Marshal(msg.Data())
@@ -149,6 +149,7 @@ func (gc *GMClient) parseActivity(msg groupme.PushMessage) ([]bridgev2.RemoteEve
 		UserID  groupme.ID `json:"user_id"`
 		Started int64      `json:"started"`
 		Subject struct {
+			ID        groupme.ID                  `json:"id"`
 			ChatID    groupme.ID                  `json:"chat_id"`
 			MessageID groupme.ID                  `json:"message_id"`
 			UserID    groupme.ID                  `json:"user_id"`
@@ -161,6 +162,16 @@ func (gc *GMClient) parseActivity(msg groupme.PushMessage) ([]bridgev2.RemoteEve
 	}
 	var events []bridgev2.RemoteEvent
 	switch typ {
+	case "chat.deleted":
+		if msg.Channel() == groupme.UserChannel(groupme.ID(gc.Meta.GMID)) {
+			if evt := chatDeleteEvent(gc.portalKeyForMessage(&groupme.Message{ChatID: data.Subject.ChatID})); evt != nil {
+				events = append(events, evt)
+			}
+		}
+	case "membership.destroy":
+		if msg.Channel() == groupme.UserChannel(groupme.ID(gc.Meta.GMID)) && data.Subject.ID != "" {
+			events = append(events, chatDeleteEvent(gc.portalKeyForGroup(data.Subject.ID)))
+		}
 	case "typing":
 		if data.UserID == "" || string(data.UserID) == gc.Meta.GMID {
 			return nil, true
