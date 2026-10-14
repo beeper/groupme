@@ -63,7 +63,7 @@ var fileMimes = map[string]event.CapabilitySupportLevel{
 }
 
 var roomCaps = &event.RoomFeatures{
-	ID: "fi.mau.groupme.capabilities.2026_10_14.1",
+	ID: "fi.mau.groupme.capabilities.2026_10_14.2",
 	File: event.FileFeatureMap{
 		event.MsgImage: {
 			MimeTypes: imageMimes,
@@ -81,14 +81,15 @@ var roomCaps = &event.RoomFeatures{
 			MaxSize:   MaxDocumentSize,
 		},
 	},
-	MaxTextLength:    1000,
-	Edit:             event.CapLevelPartialSupport,
-	EditMaxAge:       ptr.Ptr(jsontime.S(15 * time.Minute)),
-	Reply:            event.CapLevelFullySupported,
-	Reaction:         event.CapLevelFullySupported,
-	ReactionCount:    1,
-	AllowedReactions: slices.Sorted(maps.Keys(groupme.UnicodeLikeIcons)),
-	LocationMessage:  event.CapLevelPartialSupport,
+	MaxTextLength:       1000,
+	Edit:                event.CapLevelPartialSupport,
+	EditMaxAge:          ptr.Ptr(jsontime.S(15 * time.Minute)),
+	TypingNotifications: true,
+	Reply:               event.CapLevelFullySupported,
+	Reaction:            event.CapLevelFullySupported,
+	ReactionCount:       1,
+	AllowedReactions:    slices.Sorted(maps.Keys(groupme.UnicodeLikeIcons)),
+	LocationMessage:     event.CapLevelPartialSupport,
 	// Beeper also uses this capability to enable voting on received polls.
 	Poll: event.CapLevelPartialSupport,
 }

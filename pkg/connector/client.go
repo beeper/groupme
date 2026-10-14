@@ -44,8 +44,9 @@ type GMClient struct {
 	sessionCancel context.CancelFunc
 	sessionDone   chan struct{}
 
-	pushMu sync.Mutex
-	push   *groupme.PushSubscription
+	pushMu        sync.Mutex
+	push          *groupme.PushSubscription
+	pushTransport *groupmeext.WSFayeClient
 }
 
 var _ bridgev2.NetworkAPI = (*GMClient)(nil)
@@ -121,7 +122,7 @@ func (gc *GMClient) runSession(ctx context.Context) {
 	var reactionRefreshes sync.WaitGroup
 	sub := groupme.NewPushSubscription(ctx)
 	sub.AddFullHandler(gc)
-	sub.StartListening(ctx, groupmeext.NewWSFayeClient(gc.UserLogin.Log, func(ctx context.Context, channel string) {
+	transport := groupmeext.NewWSFayeClient(gc.UserLogin.Log, func(ctx context.Context, channel string) {
 		if channel != userChannel {
 			return
 		}
@@ -141,9 +142,12 @@ func (gc *GMClient) runSession(ctx context.Context) {
 			Error:      "groupme-push-disconnected",
 			Message:    err.Error(),
 		})
-	}))
+	})
+	transport.OnEvent = gc.handleActivity
+	sub.StartListening(ctx, transport)
 	gc.pushMu.Lock()
 	gc.push = sub
+	gc.pushTransport = transport
 	gc.pushMu.Unlock()
 	if err := sub.SubscribeToUser(me.ID, gc.Meta.Token); err != nil {
 		gc.UserLogin.Log.Err(err).Msg("Failed to subscribe to GroupMe push channel")
@@ -151,6 +155,7 @@ func (gc *GMClient) runSession(ctx context.Context) {
 	<-ctx.Done()
 	gc.pushMu.Lock()
 	gc.push = nil
+	gc.pushTransport = nil
 	gc.pushMu.Unlock()
 	sub.Wait()
 	reactionRefreshes.Wait()
