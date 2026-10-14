@@ -18,6 +18,7 @@ package connector
 
 import (
 	"context"
+	"slices"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -143,7 +144,13 @@ func (gc *GMClient) refreshRecentReactions(ctx context.Context, chats []nativeCh
 			zerolog.Ctx(ctx).Err(err).Str("portal_id", string(portalID)).Msg("Failed to refresh recent GroupMe reactions")
 			continue
 		}
-		for _, msg := range messages {
+		for _, evt := range gc.recentEditEvents(messages) {
+			gc.Main.br.QueueRemoteEvent(gc.UserLogin, evt)
+		}
+		for _, msg := range slices.Backward(messages) {
+			if msg.Event != nil && msg.Event.Type == "message.update" {
+				continue
+			}
 			if msg.Reactions != nil || msg.FavoritedBy != nil {
 				gc.HandleLike(*msg)
 			}

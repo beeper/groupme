@@ -44,6 +44,9 @@ func (gc *GMClient) HandleError(err error) {
 }
 
 func (gc *GMClient) HandleTextMessage(msg groupme.Message) {
+	if gc.handleMessageUpdate(msg) {
+		return
+	}
 	if msg.ID == "" || msg.UserID == "" || gc.portalKeyForMessage(&msg).ID == "" {
 		gc.UserLogin.Log.Warn().Msg("Ignoring malformed GroupMe push message")
 		return
@@ -103,6 +106,16 @@ func (gc *GMClient) convertMessage(ctx context.Context, portal *bridgev2.Portal,
 // GroupMe message, including any attachments or poll event.
 func (gc *GMClient) convertGroupMeMessage(ctx context.Context, portal *bridgev2.Portal, intent bridgev2.MatrixAPI, msg *groupme.Message) (*bridgev2.ConvertedMessage, error) {
 	cm := &bridgev2.ConvertedMessage{}
+	defer func() {
+		for _, part := range cm.Parts {
+			meta, _ := part.DBMetadata.(*MessageMetadata)
+			if meta == nil {
+				meta = &MessageMetadata{}
+				part.DBMetadata = meta
+			}
+			meta.NativeContent = nativeContent(msg)
+		}
+	}()
 	log := zerolog.Ctx(ctx)
 	for _, att := range msg.Attachments {
 		if att != nil && att.Type == groupme.Reply && att.ReplyID != "" {

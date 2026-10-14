@@ -20,6 +20,10 @@ import (
 	"context"
 	"maps"
 	"slices"
+	"time"
+
+	"go.mau.fi/util/jsontime"
+	"go.mau.fi/util/ptr"
 
 	"github.com/beeper/groupme-lib"
 	"github.com/beeper/groupme/pkg/groupmeext"
@@ -59,7 +63,7 @@ var fileMimes = map[string]event.CapabilitySupportLevel{
 }
 
 var roomCaps = &event.RoomFeatures{
-	ID: "fi.mau.groupme.capabilities.2026_10_08.3",
+	ID: "fi.mau.groupme.capabilities.2026_10_14.1",
 	File: event.FileFeatureMap{
 		event.MsgImage: {
 			MimeTypes: imageMimes,
@@ -78,6 +82,8 @@ var roomCaps = &event.RoomFeatures{
 		},
 	},
 	MaxTextLength:    1000,
+	Edit:             event.CapLevelPartialSupport,
+	EditMaxAge:       ptr.Ptr(jsontime.S(15 * time.Minute)),
 	Reply:            event.CapLevelFullySupported,
 	Reaction:         event.CapLevelFullySupported,
 	ReactionCount:    1,

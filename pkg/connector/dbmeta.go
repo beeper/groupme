@@ -19,6 +19,9 @@ package connector
 
 import (
 	"maunium.net/go/mautrix/bridgev2/database"
+
+	"github.com/beeper/groupme-lib"
+	"github.com/beeper/groupme/pkg/groupmeext"
 )
 
 // UserLoginMetadata is stored on the bridgev2 UserLogin row and holds the
@@ -44,7 +47,10 @@ type PortalMetadata struct {
 
 // MessageMetadata contains native protocol identifiers used by later actions.
 type MessageMetadata struct {
-	PollID string `json:"poll_id,omitempty"`
+	EditRevisionID groupme.ID                 `json:"edit_revision_id,omitempty"`
+	PollID         string                     `json:"poll_id,omitempty"`
+	NativeContent  *groupmeext.MessageContent `json:"native_content,omitempty"`
+	EditedAt       groupme.Timestamp          `json:"edited_at,omitempty"`
 }
 
 func (gc *GMConnector) GetDBMetaTypes() database.MetaTypes {

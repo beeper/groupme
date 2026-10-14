@@ -62,5 +62,5 @@ func (gc *GMConnector) GetName() bridgev2.BridgeName {
 }
 
 func (gc *GMConnector) GetBridgeInfoVersion() (info, caps int) {
-	return 1, 4
+	return 1, 5
 }

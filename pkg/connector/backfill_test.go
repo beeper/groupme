@@ -8,10 +8,58 @@ import (
 	"strings"
 	"testing"
 
+	"maunium.net/go/mautrix/bridgev2"
+	"maunium.net/go/mautrix/bridgev2/database"
 	"maunium.net/go/mautrix/bridgev2/networkid"
 
 	"github.com/beeper/groupme-lib"
 )
+
+func TestBackfillContinuesPastEditOnlyPages(t *testing.T) {
+	for _, portalID := range []networkid.PortalID{"group:7", "dm:9"} {
+		for _, forward := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/forward=%v", portalID, forward), func(t *testing.T) {
+				calls := 0
+				field, identity, pageSize := "messages", `"group_id":"7"`, 2
+				if portalID == "dm:9" {
+					field, identity, pageSize = "direct_messages", `"chat_id":"9+20"`, 20
+				}
+				mockGroupMe(t, func(r *http.Request) (int, string) {
+					calls++
+					if calls == 2 {
+						cursor, want := "before_id", "101"
+						if forward && portalID == "group:7" {
+							cursor, want = "after_id", "102"
+						}
+						if r.URL.Query().Get(cursor) != want {
+							t.Fatalf("edit page did not advance %s to %s: %s", cursor, want, r.URL.RawQuery)
+						}
+						return 304, `{"meta":{"code":304}}`
+					}
+					if calls > 2 {
+						t.Fatal("continued beyond the end of history")
+					}
+					var messages []string
+					for i := 1; i <= pageSize; i++ {
+						messages = append(messages, fmt.Sprintf(`{"id":"%d","user_id":"system",%s,"event":{"type":"message.update","data":{}}}`, 100+i, identity))
+					}
+					return 200, fmt.Sprintf(`{"response":{"%s":[%s]},"meta":{"code":200}}`, field, strings.Join(messages, ","))
+				})
+				params := bridgev2.FetchMessagesParams{Portal: testMatrixText(portalID).Portal, Forward: forward, Count: 2}
+				if forward {
+					params.AnchorMessage = &database.Message{ID: "100"}
+				}
+				resp, err := dmTestClient().FetchMessages(context.Background(), params)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if calls != 2 || len(resp.Messages) != 0 || resp.HasMore {
+					t.Fatalf("stopped at hidden edit records: calls=%d response=%+v", calls, resp)
+				}
+			})
+		}
+	}
+}
 
 func TestHistoryRemoteResponses(t *testing.T) {
 	for _, dm := range []bool{false, true} {

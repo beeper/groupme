@@ -168,6 +168,7 @@ func (gc *GMClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.Matri
 	}
 	dbMessage := &database.Message{
 		ID:       MakeMessageID(sent.ID),
+		Metadata: &MessageMetadata{NativeContent: nativeContent(out)},
 		SenderID: MakeUserID(groupme.ID(gc.Meta.GMID)),
 	}
 	if sent.CreatedAt > 0 {
