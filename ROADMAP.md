@@ -20,8 +20,12 @@
 | History backfill and catch-up | ✅ | N/A |
 | Contacts and new DMs | ✅ | ✅ Known contacts |
 | DM message requests | ✅ | ✅ |
-| Edits | ❌ | ❌ |
-| Deletions | ❌ | ❌ |
-| Typing notifications | ❌ | ❌ |
-| Read receipts | ❌ | ❌ |
-| Conversation deletion | ❌ | ❌ |
+| Edits | ✅ Live and recent reconnect updates | ✅ Groups and DMs; 15-minute window; text/captions only |
+| Individual message deletion | ❌ Not implemented | ❌ Not implemented |
+| Typing notifications | ✅ Groups and DMs | ⚠️ Start pulses; SDK does not refresh sustained typing |
+| Read receipts | ✅ Own checkpoints and DM seen | ✅ Public reads and DM seen; private reads need SDK support |
+| Whole DM conversation deletion | ✅ Deletion and reappearance | ✅ Deletion and reappearance |
+
+Whole-chat deletion is implemented for DMs. Deleting an individual message is a
+separate feature and remains unimplemented. Groups have no delete-for-self
+operation equivalent to deleting a DM conversation.

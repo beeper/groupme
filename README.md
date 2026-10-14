@@ -2,10 +2,11 @@
 
 A GroupMe puppeting bridge using [mautrix-go bridgev2](https://github.com/mautrix/go).
 
-This is a development bridge. The October 8, 2026 candidate builds and passes
-focused remote-response checks. A dedicated self-hosted connection on a production
-Beeper account has verified group/DM text, replies, reactions, and initial history
-with two GroupMe accounts. Media validation is incomplete.
+This is a development bridge. The October 14, 2026 candidate builds and passes
+native request, conversion, history, and activity-routing checks. A dedicated
+self-hosted connection on a production Beeper account has verified group/DM text,
+replies, reactions, and initial history with two GroupMe accounts. Media validation
+is incomplete.
 
 ## Supported connector behavior
 
@@ -25,9 +26,8 @@ with two GroupMe accounts. Media validation is incomplete.
   reactions and replies are included in converted history.
 
 [ROADMAP.md](ROADMAP.md) lists functionality in each direction.
-Message edits, message deletion, typing, read receipts, poll creation, vote
-withdrawal, live vote-result synchronization, and outgoing group management are
-not advertised as supported.
+Individual message deletion, poll creation, vote withdrawal, live vote-result
+synchronization, and outgoing group management are not advertised as supported.
 
 ## Login
 
@@ -101,6 +101,46 @@ existing state before changing versions. The October 9 push-only candidate was
 tested on the preserved dedicated self-hosted registration and authenticated
 runtime; broader production rollout remains unverified.
 
+## Edits, typing, receipts, and chat deletion
+
+The connector implements group and DM edits in both directions, with GroupMe's
+15-minute edit window and 1000-character text limit. Native update events edit
+the original Matrix message; native history's separate edit notifications are
+not imported as new messages. Hidden edit records advance history pagination
+without consuming the requested visible-message count. Outbound edits retain
+native media and reply attachments; replacing media is rejected. Text-relative
+native mention and emoji offsets are removed when editing plaintext. Recent edit notifications are replayed
+alongside the existing reaction refresh after reconnect (100 group messages or
+20 DM messages); this is not unlimited recovery of old edits.
+
+Group and DM typing use GroupMe's five-second native pulses. Incoming pulses
+expire normally. The pinned standalone bridgev2 version only forwards outgoing
+start/stop transitions, so sustained typing may disappear after five seconds.
+
+Public Matrix read receipts update the native account's unread checkpoint;
+explicit DM reads also publish the native peer-visible seen receipt. GroupMe
+only exposes peer seen receipts in DMs. Native account checkpoints and DM seen
+receipts are bridged back to Matrix, including cursors pointing at hidden edit
+notifications. Private Matrix receipts are not forwarded by the pinned SDK.
+
+DM conversation deletion uses the account-local `Delete chat` operation, separate
+from clearing history or blocking the other user. Native `chat.deleted` and group
+`membership.destroy` events remove the account-scoped portal. Groups do not offer
+the same delete-for-self operation; leaving or ending a group must be done in
+GroupMe. Delete-for-everyone is rejected. The DM delete capability is enabled;
+an incoming message after deletion restores the chat as a new Matrix room.
+
+The October 13 candidate ran directly as a local binary on a dedicated self-hosted
+connection. Live native-to-Matrix text edits and typing were observed in
+both group and DM chats; DM own/peer receipts also passed after editing. Beeper
+group and DM edits and DM typing were received by the native peer. DM deletion
+was verified in both directions: the deleting account's chat disappeared,
+the peer retained its history, and a new peer message restored the chat and
+created a fresh Matrix room. An isolated Beeper read also produced the native
+peer-visible DM seen receipt, with both native sessions of the reading account
+kept away from the DM. These are local validation results, not production
+readiness claims.
+
 ## Media limits
 
 The connector retains its 25 MiB image/video send limit and supports the
@@ -146,9 +186,10 @@ go vet -tags goolm ./...
 go test -race -tags goolm ./pkg/connector ./pkg/groupmeext
 ```
 
-Tests cover native request/response handling and GroupMe conversion rules.
-Framework mapping, capability enforcement, media routing, and lifecycle tests
-are outside this connector's test scope.
+Tests cover native request/response handling, GroupMe conversion rules, history
+pagination across hidden edits, activity routing, and receipt target resolution.
+Full framework delivery, capability enforcement, media routing, and chat lifecycle
+tests are outside this connector's test scope.
 
 Use libolm instead of `goolm` for the shipped container:
 
