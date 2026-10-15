@@ -44,6 +44,30 @@ Developer tokens from `dev.groupme.com` also work. Keep credentials out of logs,
 chat messages, and source control. The bridge stores its session in the normal
 bridgev2 login metadata; protect the runtime directory and database accordingly.
 
+## Push notification registration
+
+The connector implements bridgev2's `PushableNetworkAPI` for FCM, using GroupMe's
+sender ID `836136099376`. A wrapper with push relay support obtains the FCM token
+and passes it to the connector for registration. This allows the wrapper to
+request wake-up notifications; message delivery and reconnect catch-up still use
+the existing GroupMe connection. APNs and Web Push registration are not exposed.
+
+The request was recovered from the GroupMe Android 16.25.9 APK (version code
+262790904): `PushRegistrationHelper` posts to
+`https://v2.groupme.com/push_registrations` with `X-Access-Token` authentication
+and this JSON body:
+
+```json
+{"push_registration":{"service":"google_cloud_messaging","registration_id":"<FCM token>"}}
+```
+
+`Configuration.getVersion2Host()` supplies the host, `HttpClient` supplies the
+authentication header, and `gcm_defaultSenderId` supplies the sender ID. Local
+tests cover that contract, returned registration validation, cancellation, and
+provider failures. End-to-end relay delivery and background wake-up have not
+been verified with a live FCM token. Registration does not change the account's
+notification preferences.
+
 ## History and delivery
 
 The connector supplies native IDs, messages, reactions, and pagination cursors.
