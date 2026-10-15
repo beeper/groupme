@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"testing"
+	"time"
 
 	"maunium.net/go/mautrix/bridgev2"
 	"maunium.net/go/mautrix/bridgev2/networkid"
@@ -67,14 +68,14 @@ func TestNativeBlockListChangesIncludeHiddenDMs(t *testing.T) {
 		{UserID: "30", BlockedUserID: "20"},
 		{UserID: "20"},
 		nil,
-	}, previous)
+	}, previous, time.Now())
 	want := map[networkid.PortalID]bool{"dm:8": false, "dm:9": true, "dm:10": true}
 	if len(events) != len(want) {
 		t.Fatalf("expected %d changes, got %d", len(want), len(events))
 	}
 	for _, evt := range events {
 		blocked, ok := want[evt.PortalKey.ID]
-		state := evt.ChatInfoChange.ChatInfo.UserBlocked
+		state := evt.ChatInfoChange.ChatInfoChange.ChatInfo.UserBlocked
 		if !ok || evt.PortalKey.Receiver != "20" || state == nil || *state != blocked || evt.CreatePortal {
 			t.Fatalf("incorrect native block conversion: %+v", evt)
 		}
@@ -143,5 +144,28 @@ func TestBlockedStateUsesOutgoingBlockList(t *testing.T) {
 				t.Fatalf("blocked=%v want blocked=%v unknown=%v", got, tc.blocked, tc.unknown)
 			}
 		})
+	}
+}
+
+func TestNativeBlockListChangeYieldsToLaterMatrixChange(t *testing.T) {
+	gc := dmTestClient()
+	since := time.Now().Add(-time.Second)
+	events := gc.blockListEvents([]*groupme.Block{{UserID: "20", BlockedUserID: "9"}}, []networkid.PortalKey{gc.portalKeyForDM("8")}, since)
+	gc.markBlockChanged("8")
+	for _, evt := range events {
+		change, err := evt.GetChatInfoChange(context.Background(), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		switch evt.PortalKey.ID {
+		case "dm:8":
+			if change != nil {
+				t.Fatalf("stale snapshot overrode a later Matrix block change: %+v", change)
+			}
+		case "dm:9":
+			if change == nil || change.ChatInfo.UserBlocked == nil || !*change.ChatInfo.UserBlocked {
+				t.Fatalf("unrelated snapshot change was dropped: %+v", change)
+			}
+		}
 	}
 }

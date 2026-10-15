@@ -131,15 +131,16 @@ func (gc *GMClient) GetChatInfo(ctx context.Context, portal *bridgev2.Portal) (*
 				}
 			}
 		}
-		return gc.dmChatInfo(ctx, gmid, partner), nil
+		return gc.dmChatInfo(ctx, gmid, partner, gc.userBlocked(ctx, gmid)), nil
 	default:
 		return nil, fmt.Errorf("unknown portal type for %s", portal.ID)
 	}
 }
 
 // partner is the DM listing's entry for gmid, or nil when the listing lacks it;
-// personal contacts are then the fallback.
-func (gc *GMClient) dmChatInfo(ctx context.Context, gmid groupme.ID, partner *groupme.User) *bridgev2.ChatInfo {
+// personal contacts are then the fallback. blocked is nil when the block state
+// should be left unchanged.
+func (gc *GMClient) dmChatInfo(ctx context.Context, gmid groupme.ID, partner *groupme.User, blocked *bool) *bridgev2.ChatInfo {
 	if partner == nil {
 		if relations, err := gc.Client.IndexRelations(ctx); err == nil {
 			for _, u := range relations {
@@ -189,7 +190,7 @@ func (gc *GMClient) dmChatInfo(ctx context.Context, gmid groupme.ID, partner *gr
 	}
 	return &bridgev2.ChatInfo{
 		MessageRequest: messageRequest,
-		UserBlocked:    gc.userBlocked(ctx, gmid),
+		UserBlocked:    blocked,
 		Name:           ptr.Ptr(name),
 		Avatar:         gc.avatarIfSet(ctx, avatarURL),
 		Members:        members,
