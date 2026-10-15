@@ -74,6 +74,7 @@ func (gc *GMClient) listChats(ctx context.Context) []nativeChat {
 func (gc *GMClient) catchUp(ctx context.Context) []nativeChat {
 	ctx = gc.UserLogin.Log.With().Str("action", "catch up").Logger().WithContext(ctx)
 	chats := gc.listChats(ctx)
+	gc.syncBlockedUsers(ctx)
 	zerolog.Ctx(ctx).Info().Int("chat_count", len(chats)).Msg("Syncing GroupMe chats")
 	for _, chat := range chats {
 		if ctx.Err() != nil {

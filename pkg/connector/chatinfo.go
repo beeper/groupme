@@ -189,6 +189,7 @@ func (gc *GMClient) dmChatInfo(ctx context.Context, gmid groupme.ID, partner *gr
 	}
 	return &bridgev2.ChatInfo{
 		MessageRequest: messageRequest,
+		UserBlocked:    gc.userBlocked(ctx, gmid),
 		Name:           ptr.Ptr(name),
 		Avatar:         gc.avatarIfSet(ctx, avatarURL),
 		Members:        members,
