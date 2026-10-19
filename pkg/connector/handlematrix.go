@@ -48,9 +48,7 @@ var (
 func (gc *GMClient) PreHandleMatrixReaction(ctx context.Context, msg *bridgev2.MatrixReaction) (bridgev2.MatrixReactionPreResponse, error) {
 	emoji := variationselector.FullyQualify(msg.Content.RelatesTo.Key)
 	if !groupme.UnicodeLikeIcons[emoji] {
-		return bridgev2.MatrixReactionPreResponse{}, bridgev2.WrapErrorInStatus(
-			fmt.Errorf("GroupMe does not support the %q reaction", emoji),
-		).WithIsCertain(true).WithErrorAsMessage().WithErrorReason(event.MessageStatusUnsupported)
+		return bridgev2.MatrixReactionPreResponse{}, permanentFailure(event.MessageStatusUnsupported, "GroupMe does not support the %q reaction", emoji)
 	}
 	return bridgev2.MatrixReactionPreResponse{
 		SenderID:     MakeUserID(groupme.ID(gc.Meta.GMID)),
