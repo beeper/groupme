@@ -25,7 +25,10 @@ func (gc *GMClient) HandleMatrixDeleteChat(ctx context.Context, msg *bridgev2.Ma
 	if err != nil {
 		return err
 	}
-	return groupmeext.DeleteDM(ctx, gc.Meta.Token, conversation)
+	if err = groupmeext.DeleteDM(ctx, gc.Meta.Token, conversation); err != nil {
+		return wrapGroupMeError(err, "failed to delete chat")
+	}
+	return nil
 }
 
 func chatDeleteEvent(key networkid.PortalKey) *simplevent.ChatDelete {

@@ -18,9 +18,11 @@ package connector
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"mime"
+	"net/http"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -59,6 +61,35 @@ func (gc *GMClient) PreHandleMatrixReaction(ctx context.Context, msg *bridgev2.M
 
 func permanentFailure(reason event.MessageStatusReason, message string, args ...any) bridgev2.MessageStatus {
 	return bridgev2.WrapErrorInStatus(fmt.Errorf(message, args...)).WithIsCertain(true).WithErrorAsMessage().WithErrorReason(reason).WithStatus(event.MessageStatusFail)
+}
+
+func groupMeHTTPStatus(err error) int {
+	var meta *groupme.Meta
+	if errors.As(err, &meta) {
+		return int(meta.Code)
+	}
+	var httpErr *groupmeext.HTTPError
+	if errors.As(err, &httpErr) {
+		return httpErr.StatusCode
+	}
+	return 0
+}
+
+// A GroupMe error response means the request was rejected; transport errors and
+// 5xx responses leave the outcome unknown.
+func wrapGroupMeError(err error, message string) bridgev2.MessageStatus {
+	status, reason, certain := event.MessageStatusRetriable, event.MessageStatusNetworkError, false
+	switch code := groupMeHTTPStatus(err); {
+	case code == http.StatusTooManyRequests:
+		message, certain = "GroupMe is rate limiting requests, try again later", true
+	case code == http.StatusUnauthorized:
+		message, certain = "your GroupMe session expired, please log in again", true
+	case code == http.StatusForbidden:
+		status, reason, message, certain = event.MessageStatusFail, event.MessageStatusNoPermission, "GroupMe doesn't allow this", true
+	case code >= 400 && code < 500:
+		status, message, certain = event.MessageStatusFail, "GroupMe rejected the request", true
+	}
+	return bridgev2.WrapErrorInStatus(err).WithStatus(status).WithErrorReason(reason).WithIsCertain(certain).WithMessage(message)
 }
 
 func unformattedText(text string, _ format.Context) string { return text }
@@ -160,15 +191,15 @@ func (gc *GMClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.Matri
 		return nil, fmt.Errorf("unknown portal type for %s", msg.Portal.ID)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("failed to send message to GroupMe: %w", err)
+		return nil, wrapGroupMeError(err, "failed to send message")
 	}
 	if sent == nil || sent.ID == "" {
-		return nil, fmt.Errorf("GroupMe send response did not include a message ID")
+		return nil, wrapGroupMeError(errors.New("GroupMe send response did not include a message ID"), "unexpected response from GroupMe")
 	}
 	if (sent.UserID != "" && string(sent.UserID) != gc.Meta.GMID) ||
 		(sent.GroupID != "" && sent.GroupID != out.GroupID) ||
 		(sent.RecipientID != "" && sent.RecipientID != out.RecipientID) {
-		return nil, fmt.Errorf("GroupMe send response belongs to another sender or conversation")
+		return nil, wrapGroupMeError(errors.New("GroupMe send response belongs to another sender or conversation"), "unexpected response from GroupMe")
 	}
 	dbMessage := &database.Message{
 		ID:       MakeMessageID(sent.ID),
@@ -202,7 +233,10 @@ func (gc *GMClient) uploadMatrixMedia(ctx context.Context, content *event.Messag
 	switch content.MsgType {
 	case event.MsgImage:
 		url, err := gc.Client.UploadImage(ctx, data, mimeType)
-		return &groupme.Attachment{Type: groupme.Image, URL: url}, err
+		if err != nil {
+			return nil, wrapGroupMeError(err, "failed to upload media").WithIsCertain(true)
+		}
+		return &groupme.Attachment{Type: groupme.Image, URL: url}, nil
 	case event.MsgVideo:
 		if mimeType == "" {
 			mimeType = "video/mp4"
@@ -214,10 +248,16 @@ func (gc *GMClient) uploadMatrixMedia(ctx context.Context, content *event.Messag
 			groupID = string(gmid)
 		}
 		url, preview, err := groupmeext.UploadVideo(ctx, gc.Meta.Token, gc.Meta.GMID, groupID, recipientID, data, videoExtension(content, mimeType), mimeType)
-		return &groupme.Attachment{Type: groupme.Video, URL: url, VideoPreviewURL: preview}, err
+		if err != nil {
+			return nil, wrapGroupMeError(err, "failed to upload media").WithIsCertain(true)
+		}
+		return &groupme.Attachment{Type: groupme.Video, URL: url, VideoPreviewURL: preview}, nil
 	case event.MsgFile:
 		fileID, err := groupmeext.UploadFile(ctx, gmid, gc.Meta.Token, content.GetFileName(), data, mimeType)
-		return &groupme.Attachment{Type: groupme.File, FileID: fileID}, err
+		if err != nil {
+			return nil, wrapGroupMeError(err, "failed to upload media").WithIsCertain(true)
+		}
+		return &groupme.Attachment{Type: groupme.File, FileID: fileID}, nil
 	default:
 		return nil, bridgev2.ErrUnsupportedMessageType
 	}
@@ -281,7 +321,10 @@ func (gc *GMClient) HandleMatrixAcceptMessageRequest(ctx context.Context, msg *b
 		return permanentFailure(event.MessageStatusUnsupported, "GroupMe message requests are only supported in DMs")
 	}
 	conversationID := DMConversationID(groupme.ID(gc.Meta.GMID), otherUser)
-	return groupmeext.ApproveChat(ctx, gc.Meta.Token, string(conversationID))
+	if err := groupmeext.ApproveChat(ctx, gc.Meta.Token, string(conversationID)); err != nil {
+		return wrapGroupMeError(err, "failed to accept message request")
+	}
+	return nil
 }
 
 // HandleMatrixReaction bridges a Matrix reaction to a GroupMe "like".
@@ -297,7 +340,7 @@ func (gc *GMClient) HandleMatrixReaction(ctx context.Context, msg *bridgev2.Matr
 	messageID := ParseMessageID(msg.TargetMessage.ID)
 	err := gc.Client.CreateLike(ctx, conversationID, messageID, msg.PreHandleResp.Emoji)
 	if err != nil {
-		return nil, fmt.Errorf("failed to like GroupMe message: %w", err)
+		return nil, wrapGroupMeError(err, "failed to send reaction")
 	}
 	return &database.Reaction{}, nil
 }
@@ -313,7 +356,7 @@ func (gc *GMClient) HandleMatrixReactionRemove(ctx context.Context, msg *bridgev
 	messageID := ParseMessageID(msg.TargetReaction.MessageID)
 	err := gc.Client.DestroyLike(ctx, conversationID, messageID)
 	if err != nil {
-		return fmt.Errorf("failed to unlike GroupMe message: %w", err)
+		return wrapGroupMeError(err, "failed to remove reaction")
 	}
 	return nil
 }
