@@ -57,6 +57,10 @@ func (gc *GMClient) PreHandleMatrixReaction(ctx context.Context, msg *bridgev2.M
 	}, nil
 }
 
+func permanentFailure(reason event.MessageStatusReason, message string, args ...any) bridgev2.MessageStatus {
+	return bridgev2.WrapErrorInStatus(fmt.Errorf(message, args...)).WithIsCertain(true).WithErrorAsMessage().WithErrorReason(reason).WithStatus(event.MessageStatusFail)
+}
+
 func unformattedText(text string, _ format.Context) string { return text }
 
 var groupmeHTMLParser = &format.HTMLParser{
@@ -77,10 +81,10 @@ var groupmeHTMLParser = &format.HTMLParser{
 // HandleMatrixMessage converts and sends a native GroupMe message.
 func (gc *GMClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.MatrixMessage) (*bridgev2.MatrixMessageResponse, error) {
 	if msg.ReplyTo != nil && (msg.ReplyTo.ID == "" || msg.ReplyTo.Room != msg.Portal.PortalKey) {
-		return nil, fmt.Errorf("GroupMe replies must target a message in the same conversation")
+		return nil, permanentFailure(event.MessageStatusUnsupported, "GroupMe replies must target a message in the same conversation").WithSendNotice(true)
 	}
 	if msg.ReplyTo != nil && isPollVoteID(msg.ReplyTo.ID) {
-		return nil, fmt.Errorf("GroupMe replies cannot target poll votes")
+		return nil, permanentFailure(event.MessageStatusUnsupported, "GroupMe replies cannot target poll votes").WithSendNotice(true)
 	}
 	content := msg.Content
 	text := content.Body
@@ -102,7 +106,7 @@ func (gc *GMClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.Matri
 		}
 	}
 	if utf8.RuneCountInString(text) > 1000 {
-		return nil, fmt.Errorf("GroupMe messages are limited to 1000 characters")
+		return nil, permanentFailure(event.MessageStatusUnsupported, "GroupMe messages are limited to 1000 characters").WithSendNotice(true)
 	}
 	out := &groupme.Message{
 		Text: text,
@@ -125,7 +129,7 @@ func (gc *GMClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.Matri
 	case event.MsgLocation:
 		attachment, err := matrixLocationToAttachment(content)
 		if err != nil {
-			return nil, err
+			return nil, bridgev2.WrapErrorInStatus(err).WithMessage("invalid location").WithIsCertain(true).WithSendNotice(true).WithErrorReason(event.MessageStatusUnsupported).WithStatus(event.MessageStatusFail)
 		}
 		out.Attachments = []*groupme.Attachment{attachment}
 		out.Text = "" // The pin's name already contains the description.
@@ -182,14 +186,14 @@ func (gc *GMClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.Matri
 func (gc *GMClient) uploadMatrixMedia(ctx context.Context, content *event.MessageEventContent, portalType PortalType, gmid groupme.ID) (*groupme.Attachment, error) {
 	data, err := gc.Main.br.Bot.DownloadMedia(ctx, content.URL, content.File)
 	if err != nil {
-		return nil, fmt.Errorf("failed to download media from Matrix: %w", err)
+		return nil, fmt.Errorf("%w from Matrix: %w", bridgev2.ErrMediaDownloadFailed, err)
 	}
 	limit := MaxFileSize
 	if content.MsgType == event.MsgFile {
 		limit = MaxDocumentSize
 	}
 	if len(data) > limit {
-		return nil, fmt.Errorf("GroupMe attachment exceeds the %d-byte limit", limit)
+		return nil, permanentFailure(event.MessageStatusUnsupported, "GroupMe attachments are limited to %.0f MB", float64(limit)/1e6).WithSendNotice(true)
 	}
 	mimeType := ""
 	if content.Info != nil {
@@ -274,7 +278,7 @@ func matrixLocationToAttachment(content *event.MessageEventContent) (*groupme.At
 func (gc *GMClient) HandleMatrixAcceptMessageRequest(ctx context.Context, msg *bridgev2.MatrixAcceptMessageRequest) error {
 	portalType, otherUser := ParsePortalID(msg.Portal.ID)
 	if portalType != PortalTypeDM {
-		return fmt.Errorf("GroupMe message requests are only supported in DMs")
+		return permanentFailure(event.MessageStatusUnsupported, "GroupMe message requests are only supported in DMs")
 	}
 	conversationID := DMConversationID(groupme.ID(gc.Meta.GMID), otherUser)
 	return groupmeext.ApproveChat(ctx, gc.Meta.Token, string(conversationID))
@@ -288,7 +292,7 @@ func (gc *GMClient) HandleMatrixReaction(ctx context.Context, msg *bridgev2.Matr
 		conversationID = DMConversationID(groupme.ID(gc.Meta.GMID), gmid)
 	}
 	if isPollVoteID(msg.TargetMessage.ID) {
-		return nil, fmt.Errorf("GroupMe reactions cannot target poll votes")
+		return nil, permanentFailure(event.MessageStatusUnsupported, "GroupMe reactions cannot target poll votes").WithSendNotice(true)
 	}
 	messageID := ParseMessageID(msg.TargetMessage.ID)
 	err := gc.Client.CreateLike(ctx, conversationID, messageID, msg.PreHandleResp.Emoji)

@@ -33,10 +33,10 @@ func nativeContent(msg *groupme.Message) *groupmeext.MessageContent {
 func (gc *GMClient) HandleMatrixEdit(ctx context.Context, msg *bridgev2.MatrixEdit) error {
 	target := msg.EditTarget
 	if target.Room != msg.Portal.PortalKey || string(target.SenderID) != gc.Meta.GMID || isPollVoteID(target.ID) {
-		return fmt.Errorf("only your own messages in this GroupMe conversation can be edited")
+		return permanentFailure(event.MessageStatusNoPermission, "only your own messages in this GroupMe conversation can be edited")
 	}
 	if time.Since(target.Timestamp) > 15*time.Minute {
-		return fmt.Errorf("GroupMe messages can only be edited for 15 minutes")
+		return bridgev2.ErrEditTargetTooOld
 	}
 	kind, chatID := ParsePortalID(msg.Portal.ID)
 	if chatID == "" || (kind != PortalTypeGroup && kind != PortalTypeDM) {
@@ -47,7 +47,7 @@ func (gc *GMClient) HandleMatrixEdit(ctx context.Context, msg *bridgev2.MatrixEd
 		meta = &MessageMetadata{}
 	}
 	if meta.PollID != "" {
-		return fmt.Errorf("GroupMe polls cannot be edited as messages")
+		return permanentFailure(event.MessageStatusUnsupported, "GroupMe polls cannot be edited as messages")
 	}
 	original := meta.NativeContent
 	if original == nil {
@@ -89,7 +89,7 @@ func (gc *GMClient) HandleMatrixEdit(ctx context.Context, msg *bridgev2.MatrixEd
 		}
 		old := previous.Content.AsMessage()
 		if old.MsgType != msg.Content.MsgType || old.URL != msg.Content.URL || !reflect.DeepEqual(old.File, msg.Content.File) {
-			return fmt.Errorf("GroupMe supports editing captions, not replacing media")
+			return permanentFailure(event.MessageStatusUnsupported, "GroupMe supports editing captions, not replacing media")
 		}
 		text = msg.Content.GetCaption()
 	default:
@@ -103,10 +103,10 @@ func (gc *GMClient) HandleMatrixEdit(ctx context.Context, msg *bridgev2.MatrixEd
 	}
 	text = strings.TrimSpace(text)
 	if utf8.RuneCountInString(text) > 1000 {
-		return fmt.Errorf("GroupMe messages are limited to 1000 characters")
+		return permanentFailure(event.MessageStatusUnsupported, "GroupMe messages are limited to 1000 characters")
 	}
 	if text == "" {
-		return fmt.Errorf("GroupMe edits require non-empty text")
+		return permanentFailure(event.MessageStatusUnsupported, "GroupMe edits require non-empty text")
 	}
 	content := groupmeext.MessageContent{Text: text, Attachments: []*groupme.Attachment{}}
 	for _, attachment := range original.Attachments {

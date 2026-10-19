@@ -18,14 +18,19 @@ package connector
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"sync"
 
+	"github.com/rs/zerolog"
+	"maunium.net/go/mautrix"
 	"maunium.net/go/mautrix/bridgev2"
 	"maunium.net/go/mautrix/bridgev2/database"
 	"maunium.net/go/mautrix/bridgev2/networkid"
 
+	"github.com/beeper/groupme-lib"
 	"github.com/beeper/groupme/pkg/groupmeext"
 )
 
@@ -116,11 +121,24 @@ func (gl *GMLogin) SubmitCookies(ctx context.Context, cookies map[string]string)
 	return gl.submitToken(ctx, cookies["token"])
 }
 
+func wrapTokenValidationError(err error) error {
+	var meta *groupme.Meta
+	if errors.As(err, &meta) {
+		switch meta.Code {
+		case 401, 403:
+			return bridgev2.RespError(mautrix.MForbidden.WithMessage("GroupMe rejected that access token"))
+		case 429:
+			return bridgev2.RespError(mautrix.MLimitExceeded.WithMessage("GroupMe is rate limiting sign-ins, try again later"))
+		}
+	}
+	return bridgev2.RespError(mautrix.MUnknown.WithMessage("could not validate your GroupMe session; try signing in again").WithStatus(http.StatusBadGateway))
+}
+
 func (gl *GMLogin) submitToken(ctx context.Context, token string) (*bridgev2.LoginStep, error) {
 	gl.mu.Lock()
 	defer gl.mu.Unlock()
 	if gl.complete {
-		return nil, fmt.Errorf("login already completed")
+		return nil, bridgev2.RespError(mautrix.MBadState.WithMessage("login already completed").WithStatus(http.StatusBadRequest))
 	}
 	if err := gl.ctx.Err(); err != nil {
 		return nil, err
@@ -131,7 +149,7 @@ func (gl *GMLogin) submitToken(ctx context.Context, token string) (*bridgev2.Log
 	defer stop()
 	token = strings.TrimSpace(token)
 	if token == "" {
-		return nil, fmt.Errorf("access token is required")
+		return nil, bridgev2.RespError(mautrix.MInvalidParam.WithMessage("access token is required"))
 	}
 	client := groupmeext.NewClient(token)
 	defer client.Close()
@@ -140,7 +158,8 @@ func (gl *GMLogin) submitToken(ctx context.Context, token string) (*bridgev2.Log
 		return nil, ctx.Err()
 	}
 	if err != nil {
-		return nil, fmt.Errorf("could not validate your GroupMe session; try signing in again")
+		zerolog.Ctx(ctx).Err(err).Msg("Failed to validate GroupMe token")
+		return nil, wrapTokenValidationError(err)
 	}
 	if me == nil || me.ID == "" {
 		return nil, fmt.Errorf("GroupMe did not return an account ID")

@@ -2,11 +2,11 @@ package connector
 
 import (
 	"context"
-	"fmt"
 
 	"maunium.net/go/mautrix/bridgev2"
 	"maunium.net/go/mautrix/bridgev2/networkid"
 	"maunium.net/go/mautrix/bridgev2/simplevent"
+	"maunium.net/go/mautrix/event"
 
 	"github.com/beeper/groupme/pkg/groupmeext"
 )
@@ -15,11 +15,11 @@ var _ bridgev2.DeleteChatHandlingNetworkAPI = (*GMClient)(nil)
 
 func (gc *GMClient) HandleMatrixDeleteChat(ctx context.Context, msg *bridgev2.MatrixDeleteChat) error {
 	if msg.Content.DeleteForEveryone {
-		return fmt.Errorf("GroupMe does not support deleting a DM for everyone")
+		return permanentFailure(event.MessageStatusUnsupported, "GroupMe does not support deleting a DM for everyone")
 	}
 	kind, _ := ParsePortalID(msg.Portal.ID)
 	if kind != PortalTypeDM {
-		return fmt.Errorf("GroupMe groups must be left or ended in GroupMe; they cannot be deleted for yourself")
+		return permanentFailure(event.MessageStatusUnsupported, "GroupMe groups must be left or ended in GroupMe; they cannot be deleted for yourself")
 	}
 	conversation, err := gc.conversationID(msg.Portal.ID)
 	if err != nil {
