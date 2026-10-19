@@ -114,11 +114,12 @@ func (gc *GMClient) GetChatInfo(ctx context.Context, portal *bridgev2.Portal) (*
 		}
 		roomType := database.RoomTypeDefault
 		return &bridgev2.ChatInfo{
-			Name:    ptr.Ptr(group.Name),
-			Topic:   ptr.Ptr(group.Description),
-			Avatar:  gc.avatarFor(ctx, group.ImageURL),
-			Members: members,
-			Type:    &roomType,
+			Name:        ptr.Ptr(group.Name),
+			Topic:       ptr.Ptr(group.Description),
+			Avatar:      gc.avatarFor(ctx, group.ImageURL),
+			Members:     members,
+			Type:        &roomType,
+			CanBackfill: true,
 		}, nil
 	case PortalTypeDM:
 		// Existing DM partners may be absent from personal contacts.
@@ -193,6 +194,7 @@ func (gc *GMClient) dmChatInfo(ctx context.Context, gmid groupme.ID, partner *gr
 		Avatar:         gc.avatarIfSet(ctx, avatarURL),
 		Members:        members,
 		Type:           &roomType,
+		CanBackfill:    true,
 	}
 }
 
