@@ -2,9 +2,11 @@ package connector
 
 import (
 	"context"
-	"fmt"
+	"net/http"
 
+	"github.com/rs/zerolog"
 	"go.mau.fi/util/ptr"
+	"maunium.net/go/mautrix"
 	"maunium.net/go/mautrix/bridgev2"
 
 	"github.com/beeper/groupme-lib"
@@ -18,7 +20,8 @@ var (
 func (gc *GMClient) GetContactList(ctx context.Context) ([]*bridgev2.ResolveIdentifierResponse, error) {
 	users, err := gc.Client.IndexRelations(ctx)
 	if err != nil {
-		return nil, err
+		zerolog.Ctx(ctx).Err(err).Msg("Failed to fetch GroupMe contacts")
+		return nil, wrapGroupMeRespError(err, "failed to fetch your GroupMe contacts")
 	}
 	contacts := make([]*bridgev2.ResolveIdentifierResponse, 0, len(users))
 	for _, user := range users {
@@ -49,5 +52,15 @@ func (gc *GMClient) ResolveIdentifier(ctx context.Context, identifier string, cr
 		}
 		return contact, nil
 	}
-	return nil, fmt.Errorf("no GroupMe contact found with that user ID")
+	return nil, bridgev2.RespError(mautrix.MNotFound.WithMessage("no GroupMe contact found with that user ID"))
+}
+
+func wrapGroupMeRespError(err error, message string) error {
+	switch groupMeHTTPStatus(err) {
+	case http.StatusUnauthorized, http.StatusForbidden:
+		return bridgev2.RespError(mautrix.MForbidden.WithMessage("your GroupMe session expired, please log in again"))
+	case http.StatusTooManyRequests:
+		return bridgev2.RespError(mautrix.MLimitExceeded.WithMessage("GroupMe is rate limiting requests, try again later"))
+	}
+	return bridgev2.RespError(mautrix.MUnknown.WithMessage(message).WithStatus(http.StatusBadGateway))
 }

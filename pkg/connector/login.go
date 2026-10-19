@@ -53,7 +53,7 @@ func (gc *GMConnector) GetLoginFlows() []bridgev2.LoginFlow {
 
 func (gc *GMConnector) CreateLogin(ctx context.Context, user *bridgev2.User, flowID string) (bridgev2.LoginProcess, error) {
 	if flowID != LoginFlowIDToken && flowID != LoginFlowIDWeb {
-		return nil, fmt.Errorf("unknown login flow ID %q", flowID)
+		return nil, bridgev2.ErrInvalidLoginFlowID
 	}
 	loginCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	return &GMLogin{User: user, Main: gc, FlowID: flowID, ctx: loginCtx, cancel: cancel}, nil
@@ -162,7 +162,7 @@ func (gl *GMLogin) submitToken(ctx context.Context, token string) (*bridgev2.Log
 		return nil, wrapTokenValidationError(err)
 	}
 	if me == nil || me.ID == "" {
-		return nil, fmt.Errorf("GroupMe did not return an account ID")
+		return nil, bridgev2.RespError(mautrix.MUnknown.WithMessage("GroupMe did not return an account ID").WithStatus(http.StatusBadGateway))
 	}
 	if err = ctx.Err(); err != nil {
 		return nil, err
