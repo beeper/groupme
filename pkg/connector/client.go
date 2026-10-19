@@ -81,6 +81,7 @@ func (gc *GMClient) Connect(ctx context.Context) {
 		gc.UserLogin.BridgeState.Send(status.BridgeState{
 			StateEvent: status.StateBadCredentials,
 			Error:      "groupme-not-logged-in",
+			Message:    "you're not logged in to GroupMe",
 		})
 		return
 	}
@@ -107,12 +108,18 @@ func (gc *GMClient) runSession(ctx context.Context) {
 		if errors.As(err, &meta) && (meta.Code == 401 || meta.Code == 403) {
 			state.StateEvent = status.StateBadCredentials
 			state.Error = "groupme-session-expired"
+			state.Message = "your GroupMe session expired, please log in again"
+			state.Info = map[string]any{"go_error": err.Error()}
 		}
 		gc.UserLogin.BridgeState.Send(state)
 		return
 	}
 	if me == nil || string(me.ID) != gc.Meta.GMID || string(me.ID) != string(gc.UserLogin.ID) {
-		gc.UserLogin.BridgeState.Send(status.BridgeState{StateEvent: status.StateBadCredentials, Error: "groupme-account-mismatch"})
+		gc.UserLogin.BridgeState.Send(status.BridgeState{
+			StateEvent: status.StateBadCredentials,
+			Error:      "groupme-account-mismatch",
+			Message:    "the saved token belongs to a different GroupMe account, please log in again",
+		})
 		return
 	}
 	// Live pushes wait until catch-up is queued, so a gap is filled before
