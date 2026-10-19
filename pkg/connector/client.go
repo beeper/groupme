@@ -182,7 +182,9 @@ func (gc *GMClient) IsLoggedIn() bool {
 }
 
 func (gc *GMClient) LogoutRemote(ctx context.Context) {
-	gc.Disconnect()
+	gc.sessionMu.Lock()
+	defer gc.sessionMu.Unlock()
+	gc.disconnectLocked()
 	gc.Meta.Token = ""
 	gc.Client = nil
 }
