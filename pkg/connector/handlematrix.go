@@ -189,7 +189,7 @@ func (gc *GMClient) uploadMatrixMedia(ctx context.Context, content *event.Messag
 		limit = MaxDocumentSize
 	}
 	if len(data) > limit {
-		return nil, fmt.Errorf("GroupMe attachment exceeds the %d-byte limit", limit)
+		return nil, bridgev2.WrapErrorInStatus(fmt.Errorf("GroupMe attachments are limited to %.0f MB", float64(limit)/1e6)).WithIsCertain(true).WithErrorAsMessage().WithSendNotice(true).WithErrorReason(event.MessageStatusUnsupported).WithStatus(event.MessageStatusFail)
 	}
 	mimeType := ""
 	if content.Info != nil {
