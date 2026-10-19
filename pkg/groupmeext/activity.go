@@ -64,7 +64,7 @@ func activityRequest(ctx context.Context, token, method, path string, body, resu
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("GroupMe activity request returned HTTP %d", resp.StatusCode)
+		return &HTTPError{Request: "GroupMe activity request", StatusCode: resp.StatusCode}
 	}
 	if result != nil {
 		if err = json.NewDecoder(io.LimitReader(resp.Body, 8*1024*1024)).Decode(result); err != nil {

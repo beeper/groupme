@@ -56,6 +56,17 @@ func mediaError(err error) error {
 	return err
 }
 
+// HTTPError is a non-2xx response from a GroupMe endpoint that groupme-lib
+// doesn't cover, so callers can tell rate limits from rejections and outages.
+type HTTPError struct {
+	Request    string
+	StatusCode int
+}
+
+func (e *HTTPError) Error() string {
+	return fmt.Sprintf("%s: HTTP %d", e.Request, e.StatusCode)
+}
+
 func mediaRequest(req *http.Request) (*http.Response, error) {
 	if err := validateMediaURL(req.URL); err != nil {
 		return nil, err
@@ -66,7 +77,7 @@ func mediaRequest(req *http.Request) (*http.Response, error) {
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		resp.Body.Close()
-		return nil, fmt.Errorf("GroupMe media request returned HTTP %d", resp.StatusCode)
+		return nil, &HTTPError{Request: "GroupMe media request", StatusCode: resp.StatusCode}
 	}
 	return resp, nil
 }

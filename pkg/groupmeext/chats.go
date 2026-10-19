@@ -31,13 +31,13 @@ func ChatRequiresApproval(ctx context.Context, token, conversationID string) (bo
 		return false, err
 	}
 	req.Header.Set("X-Access-Token", token)
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := activityHTTPClient.Do(req)
 	if err != nil {
 		return false, fmt.Errorf("fetching chat: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return false, fmt.Errorf("fetching chat: HTTP %d", resp.StatusCode)
+		return false, &HTTPError{Request: "fetching chat", StatusCode: resp.StatusCode}
 	}
 	var parsed struct {
 		Response struct {
@@ -57,13 +57,13 @@ func ApproveChat(ctx context.Context, token, conversationID string) error {
 		return err
 	}
 	req.Header.Set("X-Access-Token", token)
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := activityHTTPClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("approving chat: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("approving chat: HTTP %d", resp.StatusCode)
+		return &HTTPError{Request: "approving chat", StatusCode: resp.StatusCode}
 	}
 	return nil
 }
