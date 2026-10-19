@@ -148,7 +148,8 @@ func (gc *GMClient) runSession(ctx context.Context) {
 		gc.UserLogin.BridgeState.Send(status.BridgeState{
 			StateEvent: status.StateTransientDisconnect,
 			Error:      "groupme-push-disconnected",
-			Message:    err.Error(),
+			Message:    "lost connection to GroupMe, reconnecting",
+			Info:       map[string]any{"go_error": err.Error()},
 		})
 	})
 	transport.OnEvent = gc.handleActivity
