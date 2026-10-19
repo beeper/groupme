@@ -126,19 +126,19 @@ func wrapTokenValidationError(err error) error {
 	if errors.As(err, &meta) {
 		switch meta.Code {
 		case 401, 403:
-			return bridgev2.RespError{ErrCode: mautrix.MForbidden.ErrCode, Err: "GroupMe rejected that access token", StatusCode: http.StatusForbidden}
+			return bridgev2.RespError(mautrix.MForbidden.WithMessage("GroupMe rejected that access token"))
 		case 429:
-			return bridgev2.RespError{ErrCode: mautrix.MLimitExceeded.ErrCode, Err: "GroupMe is rate limiting sign-ins, try again later", StatusCode: http.StatusTooManyRequests}
+			return bridgev2.RespError(mautrix.MLimitExceeded.WithMessage("GroupMe is rate limiting sign-ins, try again later"))
 		}
 	}
-	return bridgev2.RespError{ErrCode: "M_UNKNOWN", Err: "could not validate your GroupMe session; try signing in again", StatusCode: http.StatusBadGateway}
+	return bridgev2.RespError(mautrix.MUnknown.WithMessage("could not validate your GroupMe session; try signing in again").WithStatus(http.StatusBadGateway))
 }
 
 func (gl *GMLogin) submitToken(ctx context.Context, token string) (*bridgev2.LoginStep, error) {
 	gl.mu.Lock()
 	defer gl.mu.Unlock()
 	if gl.complete {
-		return nil, bridgev2.RespError{ErrCode: mautrix.MBadState.ErrCode, Err: "login already completed", StatusCode: http.StatusBadRequest}
+		return nil, bridgev2.RespError(mautrix.MBadState.WithMessage("login already completed").WithStatus(http.StatusBadRequest))
 	}
 	if err := gl.ctx.Err(); err != nil {
 		return nil, err
@@ -149,7 +149,7 @@ func (gl *GMLogin) submitToken(ctx context.Context, token string) (*bridgev2.Log
 	defer stop()
 	token = strings.TrimSpace(token)
 	if token == "" {
-		return nil, bridgev2.WrapRespErr(errors.New("access token is required"), mautrix.MInvalidParam)
+		return nil, bridgev2.RespError(mautrix.MInvalidParam.WithMessage("access token is required"))
 	}
 	client := groupmeext.NewClient(token)
 	defer client.Close()

@@ -18,7 +18,6 @@ package connector
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"math"
 	"mime"
@@ -58,8 +57,8 @@ func (gc *GMClient) PreHandleMatrixReaction(ctx context.Context, msg *bridgev2.M
 	}, nil
 }
 
-func unsupportedTarget(message string) error {
-	return bridgev2.WrapErrorInStatus(errors.New(message)).WithIsCertain(true).WithErrorAsMessage().WithSendNotice(true).WithErrorReason(event.MessageStatusUnsupported).WithStatus(event.MessageStatusFail)
+func permanentFailure(reason event.MessageStatusReason, message string, args ...any) bridgev2.MessageStatus {
+	return bridgev2.WrapErrorInStatus(fmt.Errorf(message, args...)).WithIsCertain(true).WithErrorAsMessage().WithErrorReason(reason).WithStatus(event.MessageStatusFail)
 }
 
 func unformattedText(text string, _ format.Context) string { return text }
@@ -82,10 +81,10 @@ var groupmeHTMLParser = &format.HTMLParser{
 // HandleMatrixMessage converts and sends a native GroupMe message.
 func (gc *GMClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.MatrixMessage) (*bridgev2.MatrixMessageResponse, error) {
 	if msg.ReplyTo != nil && (msg.ReplyTo.ID == "" || msg.ReplyTo.Room != msg.Portal.PortalKey) {
-		return nil, unsupportedTarget("GroupMe replies must target a message in the same conversation")
+		return nil, permanentFailure(event.MessageStatusUnsupported, "GroupMe replies must target a message in the same conversation").WithSendNotice(true)
 	}
 	if msg.ReplyTo != nil && isPollVoteID(msg.ReplyTo.ID) {
-		return nil, unsupportedTarget("GroupMe replies cannot target poll votes")
+		return nil, permanentFailure(event.MessageStatusUnsupported, "GroupMe replies cannot target poll votes").WithSendNotice(true)
 	}
 	content := msg.Content
 	text := content.Body
@@ -107,7 +106,7 @@ func (gc *GMClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.Matri
 		}
 	}
 	if utf8.RuneCountInString(text) > 1000 {
-		return nil, errMessageTooLong
+		return nil, permanentFailure(event.MessageStatusUnsupported, "GroupMe messages are limited to 1000 characters").WithSendNotice(true)
 	}
 	out := &groupme.Message{
 		Text: text,
@@ -194,7 +193,7 @@ func (gc *GMClient) uploadMatrixMedia(ctx context.Context, content *event.Messag
 		limit = MaxDocumentSize
 	}
 	if len(data) > limit {
-		return nil, bridgev2.WrapErrorInStatus(fmt.Errorf("GroupMe attachments are limited to %.0f MB", float64(limit)/1e6)).WithIsCertain(true).WithErrorAsMessage().WithSendNotice(true).WithErrorReason(event.MessageStatusUnsupported).WithStatus(event.MessageStatusFail)
+		return nil, permanentFailure(event.MessageStatusUnsupported, "GroupMe attachments are limited to %.0f MB", float64(limit)/1e6).WithSendNotice(true)
 	}
 	mimeType := ""
 	if content.Info != nil {
@@ -279,7 +278,7 @@ func matrixLocationToAttachment(content *event.MessageEventContent) (*groupme.At
 func (gc *GMClient) HandleMatrixAcceptMessageRequest(ctx context.Context, msg *bridgev2.MatrixAcceptMessageRequest) error {
 	portalType, otherUser := ParsePortalID(msg.Portal.ID)
 	if portalType != PortalTypeDM {
-		return bridgev2.WrapErrorInStatus(fmt.Errorf("GroupMe message requests are only supported in DMs")).WithIsCertain(true).WithErrorAsMessage().WithErrorReason(event.MessageStatusUnsupported).WithStatus(event.MessageStatusFail)
+		return permanentFailure(event.MessageStatusUnsupported, "GroupMe message requests are only supported in DMs")
 	}
 	conversationID := DMConversationID(groupme.ID(gc.Meta.GMID), otherUser)
 	return groupmeext.ApproveChat(ctx, gc.Meta.Token, string(conversationID))
@@ -293,7 +292,7 @@ func (gc *GMClient) HandleMatrixReaction(ctx context.Context, msg *bridgev2.Matr
 		conversationID = DMConversationID(groupme.ID(gc.Meta.GMID), gmid)
 	}
 	if isPollVoteID(msg.TargetMessage.ID) {
-		return nil, unsupportedTarget("GroupMe reactions cannot target poll votes")
+		return nil, permanentFailure(event.MessageStatusUnsupported, "GroupMe reactions cannot target poll votes").WithSendNotice(true)
 	}
 	messageID := ParseMessageID(msg.TargetMessage.ID)
 	err := gc.Client.CreateLike(ctx, conversationID, messageID, msg.PreHandleResp.Emoji)

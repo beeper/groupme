@@ -2,7 +2,6 @@ package connector
 
 import (
 	"context"
-	"errors"
 
 	"maunium.net/go/mautrix/bridgev2"
 	"maunium.net/go/mautrix/bridgev2/networkid"
@@ -16,21 +15,17 @@ var _ bridgev2.DeleteChatHandlingNetworkAPI = (*GMClient)(nil)
 
 func (gc *GMClient) HandleMatrixDeleteChat(ctx context.Context, msg *bridgev2.MatrixDeleteChat) error {
 	if msg.Content.DeleteForEveryone {
-		return unsupportedChatDelete("GroupMe does not support deleting a DM for everyone")
+		return permanentFailure(event.MessageStatusUnsupported, "GroupMe does not support deleting a DM for everyone")
 	}
 	kind, _ := ParsePortalID(msg.Portal.ID)
 	if kind != PortalTypeDM {
-		return unsupportedChatDelete("GroupMe groups must be left or ended in GroupMe; they cannot be deleted for yourself")
+		return permanentFailure(event.MessageStatusUnsupported, "GroupMe groups must be left or ended in GroupMe; they cannot be deleted for yourself")
 	}
 	conversation, err := gc.conversationID(msg.Portal.ID)
 	if err != nil {
 		return err
 	}
 	return groupmeext.DeleteDM(ctx, gc.Meta.Token, conversation)
-}
-
-func unsupportedChatDelete(message string) error {
-	return bridgev2.WrapErrorInStatus(errors.New(message)).WithIsCertain(true).WithErrorAsMessage().WithErrorReason(event.MessageStatusUnsupported).WithStatus(event.MessageStatusFail)
 }
 
 func chatDeleteEvent(key networkid.PortalKey) *simplevent.ChatDelete {

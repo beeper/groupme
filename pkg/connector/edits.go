@@ -3,7 +3,6 @@ package connector
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"reflect"
 	"strings"
@@ -31,19 +30,10 @@ func nativeContent(msg *groupme.Message) *groupmeext.MessageContent {
 	return &groupmeext.MessageContent{Text: msg.Text, Attachments: attachments}
 }
 
-var (
-	errMessageTooLong = bridgev2.WrapErrorInStatus(errors.New("GroupMe messages are limited to 1000 characters")).WithIsCertain(true).WithErrorAsMessage().WithSendNotice(true).WithErrorReason(event.MessageStatusUnsupported).WithStatus(event.MessageStatusFail)
-	errEmptyEdit      = bridgev2.WrapErrorInStatus(errors.New("GroupMe edits require non-empty text")).WithIsCertain(true).WithErrorAsMessage().WithErrorReason(event.MessageStatusUnsupported).WithStatus(event.MessageStatusFail)
-)
-
-func unsupportedEdit(message string) error {
-	return bridgev2.WrapErrorInStatus(errors.New(message)).WithIsCertain(true).WithErrorAsMessage().WithErrorReason(event.MessageStatusUnsupported).WithStatus(event.MessageStatusFail)
-}
-
 func (gc *GMClient) HandleMatrixEdit(ctx context.Context, msg *bridgev2.MatrixEdit) error {
 	target := msg.EditTarget
 	if target.Room != msg.Portal.PortalKey || string(target.SenderID) != gc.Meta.GMID || isPollVoteID(target.ID) {
-		return bridgev2.WrapErrorInStatus(fmt.Errorf("only your own messages in this GroupMe conversation can be edited")).WithIsCertain(true).WithErrorAsMessage().WithErrorReason(event.MessageStatusNoPermission).WithStatus(event.MessageStatusFail)
+		return permanentFailure(event.MessageStatusNoPermission, "only your own messages in this GroupMe conversation can be edited")
 	}
 	if time.Since(target.Timestamp) > 15*time.Minute {
 		return bridgev2.ErrEditTargetTooOld
@@ -57,7 +47,7 @@ func (gc *GMClient) HandleMatrixEdit(ctx context.Context, msg *bridgev2.MatrixEd
 		meta = &MessageMetadata{}
 	}
 	if meta.PollID != "" {
-		return unsupportedEdit("GroupMe polls cannot be edited as messages")
+		return permanentFailure(event.MessageStatusUnsupported, "GroupMe polls cannot be edited as messages")
 	}
 	original := meta.NativeContent
 	if original == nil {
@@ -99,7 +89,7 @@ func (gc *GMClient) HandleMatrixEdit(ctx context.Context, msg *bridgev2.MatrixEd
 		}
 		old := previous.Content.AsMessage()
 		if old.MsgType != msg.Content.MsgType || old.URL != msg.Content.URL || !reflect.DeepEqual(old.File, msg.Content.File) {
-			return unsupportedEdit("GroupMe supports editing captions, not replacing media")
+			return permanentFailure(event.MessageStatusUnsupported, "GroupMe supports editing captions, not replacing media")
 		}
 		text = msg.Content.GetCaption()
 	default:
@@ -113,10 +103,10 @@ func (gc *GMClient) HandleMatrixEdit(ctx context.Context, msg *bridgev2.MatrixEd
 	}
 	text = strings.TrimSpace(text)
 	if utf8.RuneCountInString(text) > 1000 {
-		return errMessageTooLong
+		return permanentFailure(event.MessageStatusUnsupported, "GroupMe messages are limited to 1000 characters")
 	}
 	if text == "" {
-		return errEmptyEdit
+		return permanentFailure(event.MessageStatusUnsupported, "GroupMe edits require non-empty text")
 	}
 	content := groupmeext.MessageContent{Text: text, Attachments: []*groupme.Attachment{}}
 	for _, attachment := range original.Attachments {
