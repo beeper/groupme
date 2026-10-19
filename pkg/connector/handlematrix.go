@@ -125,7 +125,7 @@ func (gc *GMClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.Matri
 	case event.MsgLocation:
 		attachment, err := matrixLocationToAttachment(content)
 		if err != nil {
-			return nil, err
+			return nil, bridgev2.WrapErrorInStatus(err).WithMessage("invalid location").WithIsCertain(true).WithSendNotice(true).WithErrorReason(event.MessageStatusUnsupported).WithStatus(event.MessageStatusFail)
 		}
 		out.Attachments = []*groupme.Attachment{attachment}
 		out.Text = "" // The pin's name already contains the description.
