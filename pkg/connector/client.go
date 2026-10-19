@@ -19,8 +19,10 @@ package connector
 import (
 	"context"
 	"errors"
+	"math/rand/v2"
 	"strings"
 	"sync"
+	"time"
 
 	"maunium.net/go/mautrix/bridgev2"
 	"maunium.net/go/mautrix/bridgev2/networkid"
@@ -97,10 +99,36 @@ func (gc *GMClient) Connect(ctx context.Context) {
 	}()
 }
 
+const (
+	connectRetryMin = 5 * time.Second
+	connectRetryMax = 5 * time.Minute
+)
+
 func (gc *GMClient) runSession(ctx context.Context) {
-	me, err := gc.Client.MyUser(ctx)
-	if ctx.Err() != nil {
-		return
+	var me *groupme.User
+	var err error
+	for delay := connectRetryMin; ; delay = min(delay*2, connectRetryMax) {
+		me, err = gc.Client.MyUser(ctx)
+		if ctx.Err() != nil {
+			return
+		}
+		var meta *groupme.Meta
+		if err == nil || (errors.As(err, &meta) && (meta.Code == 401 || meta.Code == 403)) {
+			break
+		}
+		wait := delay/2 + rand.N(delay/2)
+		gc.UserLogin.Log.Warn().Err(err).Dur("retry_in", wait).Msg("Failed to fetch GroupMe user, retrying")
+		gc.UserLogin.BridgeState.Send(status.BridgeState{
+			StateEvent: status.StateTransientDisconnect,
+			Error:      "groupme-connect-failed",
+			Message:    "couldn't reach GroupMe, retrying",
+			Info:       map[string]any{"go_error": err.Error()},
+		})
+		select {
+		case <-time.After(wait):
+		case <-ctx.Done():
+			return
+		}
 	}
 	if err != nil {
 		state := status.BridgeState{StateEvent: status.StateUnknownError, Error: "groupme-connect-failed"}
