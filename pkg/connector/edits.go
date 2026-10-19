@@ -36,6 +36,10 @@ var (
 	errEmptyEdit      = bridgev2.WrapErrorInStatus(errors.New("GroupMe edits require non-empty text")).WithIsCertain(true).WithErrorAsMessage().WithErrorReason(event.MessageStatusUnsupported).WithStatus(event.MessageStatusFail)
 )
 
+func unsupportedEdit(message string) error {
+	return bridgev2.WrapErrorInStatus(errors.New(message)).WithIsCertain(true).WithErrorAsMessage().WithErrorReason(event.MessageStatusUnsupported).WithStatus(event.MessageStatusFail)
+}
+
 func (gc *GMClient) HandleMatrixEdit(ctx context.Context, msg *bridgev2.MatrixEdit) error {
 	target := msg.EditTarget
 	if target.Room != msg.Portal.PortalKey || string(target.SenderID) != gc.Meta.GMID || isPollVoteID(target.ID) {
@@ -53,7 +57,7 @@ func (gc *GMClient) HandleMatrixEdit(ctx context.Context, msg *bridgev2.MatrixEd
 		meta = &MessageMetadata{}
 	}
 	if meta.PollID != "" {
-		return fmt.Errorf("GroupMe polls cannot be edited as messages")
+		return unsupportedEdit("GroupMe polls cannot be edited as messages")
 	}
 	original := meta.NativeContent
 	if original == nil {
@@ -95,7 +99,7 @@ func (gc *GMClient) HandleMatrixEdit(ctx context.Context, msg *bridgev2.MatrixEd
 		}
 		old := previous.Content.AsMessage()
 		if old.MsgType != msg.Content.MsgType || old.URL != msg.Content.URL || !reflect.DeepEqual(old.File, msg.Content.File) {
-			return fmt.Errorf("GroupMe supports editing captions, not replacing media")
+			return unsupportedEdit("GroupMe supports editing captions, not replacing media")
 		}
 		text = msg.Content.GetCaption()
 	default:
