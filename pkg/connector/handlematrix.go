@@ -274,7 +274,7 @@ func matrixLocationToAttachment(content *event.MessageEventContent) (*groupme.At
 func (gc *GMClient) HandleMatrixAcceptMessageRequest(ctx context.Context, msg *bridgev2.MatrixAcceptMessageRequest) error {
 	portalType, otherUser := ParsePortalID(msg.Portal.ID)
 	if portalType != PortalTypeDM {
-		return fmt.Errorf("GroupMe message requests are only supported in DMs")
+		return bridgev2.WrapErrorInStatus(fmt.Errorf("GroupMe message requests are only supported in DMs")).WithIsCertain(true).WithErrorAsMessage().WithErrorReason(event.MessageStatusUnsupported).WithStatus(event.MessageStatusFail)
 	}
 	conversationID := DMConversationID(groupme.ID(gc.Meta.GMID), otherUser)
 	return groupmeext.ApproveChat(ctx, gc.Meta.Token, string(conversationID))
