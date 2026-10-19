@@ -43,10 +43,10 @@ func unsupportedEdit(message string) error {
 func (gc *GMClient) HandleMatrixEdit(ctx context.Context, msg *bridgev2.MatrixEdit) error {
 	target := msg.EditTarget
 	if target.Room != msg.Portal.PortalKey || string(target.SenderID) != gc.Meta.GMID || isPollVoteID(target.ID) {
-		return fmt.Errorf("only your own messages in this GroupMe conversation can be edited")
+		return bridgev2.WrapErrorInStatus(fmt.Errorf("only your own messages in this GroupMe conversation can be edited")).WithIsCertain(true).WithErrorAsMessage().WithErrorReason(event.MessageStatusNoPermission).WithStatus(event.MessageStatusFail)
 	}
 	if time.Since(target.Timestamp) > 15*time.Minute {
-		return fmt.Errorf("GroupMe messages can only be edited for 15 minutes")
+		return bridgev2.ErrEditTargetTooOld
 	}
 	kind, chatID := ParsePortalID(msg.Portal.ID)
 	if chatID == "" || (kind != PortalTypeGroup && kind != PortalTypeDM) {
