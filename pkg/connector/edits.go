@@ -3,6 +3,7 @@ package connector
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"strings"
@@ -29,6 +30,11 @@ func nativeContent(msg *groupme.Message) *groupmeext.MessageContent {
 	}
 	return &groupmeext.MessageContent{Text: msg.Text, Attachments: attachments}
 }
+
+var (
+	errMessageTooLong = bridgev2.WrapErrorInStatus(errors.New("GroupMe messages are limited to 1000 characters")).WithIsCertain(true).WithErrorAsMessage().WithSendNotice(true).WithErrorReason(event.MessageStatusUnsupported).WithStatus(event.MessageStatusFail)
+	errEmptyEdit      = bridgev2.WrapErrorInStatus(errors.New("GroupMe edits require non-empty text")).WithIsCertain(true).WithErrorAsMessage().WithErrorReason(event.MessageStatusUnsupported).WithStatus(event.MessageStatusFail)
+)
 
 func (gc *GMClient) HandleMatrixEdit(ctx context.Context, msg *bridgev2.MatrixEdit) error {
 	target := msg.EditTarget
@@ -103,10 +109,10 @@ func (gc *GMClient) HandleMatrixEdit(ctx context.Context, msg *bridgev2.MatrixEd
 	}
 	text = strings.TrimSpace(text)
 	if utf8.RuneCountInString(text) > 1000 {
-		return fmt.Errorf("GroupMe messages are limited to 1000 characters")
+		return errMessageTooLong
 	}
 	if text == "" {
-		return fmt.Errorf("GroupMe edits require non-empty text")
+		return errEmptyEdit
 	}
 	content := groupmeext.MessageContent{Text: text, Attachments: []*groupme.Attachment{}}
 	for _, attachment := range original.Attachments {

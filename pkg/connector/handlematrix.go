@@ -102,7 +102,7 @@ func (gc *GMClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.Matri
 		}
 	}
 	if utf8.RuneCountInString(text) > 1000 {
-		return nil, fmt.Errorf("GroupMe messages are limited to 1000 characters")
+		return nil, errMessageTooLong
 	}
 	out := &groupme.Message{
 		Text: text,
