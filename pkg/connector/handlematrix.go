@@ -84,6 +84,7 @@ func wrapGroupMeError(err error, message string) bridgev2.MessageStatus {
 		message, certain = "your GroupMe session expired, please log in again", true
 	case code == http.StatusForbidden:
 		status, reason, message, certain = event.MessageStatusFail, event.MessageStatusNoPermission, "GroupMe doesn't allow this", true
+	case code == http.StatusRequestTimeout || code == http.StatusTooEarly:
 	case code >= 400 && code < 500:
 		status, message, certain = event.MessageStatusFail, "GroupMe rejected the request", true
 	}
