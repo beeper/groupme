@@ -18,6 +18,7 @@ package connector
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"mime"
@@ -57,6 +58,10 @@ func (gc *GMClient) PreHandleMatrixReaction(ctx context.Context, msg *bridgev2.M
 	}, nil
 }
 
+func unsupportedTarget(message string) error {
+	return bridgev2.WrapErrorInStatus(errors.New(message)).WithIsCertain(true).WithErrorAsMessage().WithSendNotice(true).WithErrorReason(event.MessageStatusUnsupported).WithStatus(event.MessageStatusFail)
+}
+
 func unformattedText(text string, _ format.Context) string { return text }
 
 var groupmeHTMLParser = &format.HTMLParser{
@@ -77,10 +82,10 @@ var groupmeHTMLParser = &format.HTMLParser{
 // HandleMatrixMessage converts and sends a native GroupMe message.
 func (gc *GMClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.MatrixMessage) (*bridgev2.MatrixMessageResponse, error) {
 	if msg.ReplyTo != nil && (msg.ReplyTo.ID == "" || msg.ReplyTo.Room != msg.Portal.PortalKey) {
-		return nil, fmt.Errorf("GroupMe replies must target a message in the same conversation")
+		return nil, unsupportedTarget("GroupMe replies must target a message in the same conversation")
 	}
 	if msg.ReplyTo != nil && isPollVoteID(msg.ReplyTo.ID) {
-		return nil, fmt.Errorf("GroupMe replies cannot target poll votes")
+		return nil, unsupportedTarget("GroupMe replies cannot target poll votes")
 	}
 	content := msg.Content
 	text := content.Body
@@ -288,7 +293,7 @@ func (gc *GMClient) HandleMatrixReaction(ctx context.Context, msg *bridgev2.Matr
 		conversationID = DMConversationID(groupme.ID(gc.Meta.GMID), gmid)
 	}
 	if isPollVoteID(msg.TargetMessage.ID) {
-		return nil, fmt.Errorf("GroupMe reactions cannot target poll votes")
+		return nil, unsupportedTarget("GroupMe reactions cannot target poll votes")
 	}
 	messageID := ParseMessageID(msg.TargetMessage.ID)
 	err := gc.Client.CreateLike(ctx, conversationID, messageID, msg.PreHandleResp.Emoji)
