@@ -182,7 +182,7 @@ func (gc *GMClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.Matri
 func (gc *GMClient) uploadMatrixMedia(ctx context.Context, content *event.MessageEventContent, portalType PortalType, gmid groupme.ID) (*groupme.Attachment, error) {
 	data, err := gc.Main.br.Bot.DownloadMedia(ctx, content.URL, content.File)
 	if err != nil {
-		return nil, fmt.Errorf("failed to download media from Matrix: %w", err)
+		return nil, fmt.Errorf("%w from Matrix: %w", bridgev2.ErrMediaDownloadFailed, err)
 	}
 	limit := MaxFileSize
 	if content.MsgType == event.MsgFile {
