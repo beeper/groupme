@@ -25,6 +25,7 @@
 | Typing notifications | ✅ Groups and DMs | ⚠️ Start pulses; SDK does not refresh sustained typing |
 | Read receipts | ✅ Own checkpoints and DM seen | ✅ Public reads and DM seen; private reads need SDK support |
 | Whole DM conversation deletion | ✅ Deletion and reappearance | ✅ Deletion and reappearance |
+| User blocking | ⚠️ Outgoing block state on DM metadata refresh/reconnect | ✅ Block and unblock in DMs; no spam reporting |
 
 Whole-chat deletion is implemented for DMs. Deleting an individual message is a
 separate feature and remains unimplemented. Groups have no delete-for-self

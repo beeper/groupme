@@ -70,10 +70,12 @@ func (gc *GMClient) listChats(ctx context.Context) []nativeChat {
 
 // catchUp runs on user-channel subscription, including reconnects, while that
 // channel's live pushes are held. It only queues work so they are not held for
-// long. DM info reuses the listing rather than paging it again for every DM.
+// long. DM info reuses the listing rather than paging it again for every DM,
+// and block state is applied once by syncBlockedUsers rather than per DM.
 func (gc *GMClient) catchUp(ctx context.Context) []nativeChat {
 	ctx = gc.UserLogin.Log.With().Str("action", "catch up").Logger().WithContext(ctx)
 	chats := gc.listChats(ctx)
+	gc.syncBlockedUsers(ctx)
 	zerolog.Ctx(ctx).Info().Int("chat_count", len(chats)).Msg("Syncing GroupMe chats")
 	for _, chat := range chats {
 		if ctx.Err() != nil {
@@ -82,7 +84,7 @@ func (gc *GMClient) catchUp(ctx context.Context) []nativeChat {
 		getChatInfo := gc.GetChatInfo
 		if chat.dmPartner != nil {
 			getChatInfo = func(ctx context.Context, portal *bridgev2.Portal) (*bridgev2.ChatInfo, error) {
-				return gc.dmChatInfo(ctx, chat.dmPartner.ID, chat.dmPartner), nil
+				return gc.dmChatInfo(ctx, chat.dmPartner.ID, chat.dmPartner, nil), nil
 			}
 		}
 		gc.Main.br.QueueRemoteEvent(gc.UserLogin, &simplevent.ChatResync{

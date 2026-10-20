@@ -21,6 +21,7 @@ import (
 	"errors"
 	"strings"
 	"sync"
+	"time"
 
 	"maunium.net/go/mautrix/bridgev2"
 	"maunium.net/go/mautrix/bridgev2/networkid"
@@ -47,6 +48,9 @@ type GMClient struct {
 	pushMu        sync.Mutex
 	push          *groupme.PushSubscription
 	pushTransport *groupmeext.WSFayeClient
+
+	blockMu      sync.Mutex
+	blockChanged map[groupme.ID]time.Time
 }
 
 var _ bridgev2.NetworkAPI = (*GMClient)(nil)

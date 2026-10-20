@@ -174,7 +174,7 @@ func TestReadCursorResolvesHiddenEditsToVisibleMessages(t *testing.T) {
 				return 200, fmt.Sprintf(`{"response":{"direct_messages":[%s]},"meta":{"code":200}}`, messages)
 			})
 			r := &nativeReceipt{client: gc, Receipt: &simplevent.Receipt{LastTarget: tc.target}}
-			r.PreHandle(ctx, portal)
+			r.PreHandleWithResult(ctx, portal)
 			if r.LastTarget != tc.want || calls != tc.requests {
 				t.Fatalf("resolved cursor=%s requests=%d", r.LastTarget, calls)
 			}
@@ -224,7 +224,7 @@ func TestReadCursorLimitsHistoryScan(t *testing.T) {
 					return 200, fmt.Sprintf(`{"response":{"%s":[%s]},"meta":{"code":200}}`, field, strings.Join(messages, ","))
 				})
 				receipt := &nativeReceipt{client: gc, Receipt: &simplevent.Receipt{LastTarget: target}}
-				receipt.PreHandle(ctx, portal)
+				receipt.PreHandleWithResult(ctx, portal)
 				if calls != 2 || receipt.LastTarget != target {
 					t.Fatalf("unresolved receipt target=%s requests=%d", receipt.LastTarget, calls)
 				}
