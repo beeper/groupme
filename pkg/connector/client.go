@@ -18,6 +18,7 @@ package connector
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"math/rand/v2"
 	"strings"
@@ -104,6 +105,16 @@ const (
 	connectRetryMax = 5 * time.Minute
 )
 
+func isTransientConnectError(err error) bool {
+	var meta *groupme.Meta
+	if errors.As(err, &meta) {
+		return meta.Code == 429 || meta.Code >= 500
+	}
+	var syntaxErr *json.SyntaxError
+	var typeErr *json.UnmarshalTypeError
+	return !errors.As(err, &syntaxErr) && !errors.As(err, &typeErr)
+}
+
 func (gc *GMClient) runSession(ctx context.Context) {
 	var me *groupme.User
 	var err error
@@ -112,8 +123,7 @@ func (gc *GMClient) runSession(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
-		var meta *groupme.Meta
-		if err == nil || (errors.As(err, &meta) && (meta.Code == 401 || meta.Code == 403)) {
+		if err == nil || !isTransientConnectError(err) {
 			break
 		}
 		wait := delay/2 + rand.N(delay/2)
