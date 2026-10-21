@@ -118,6 +118,7 @@ func isTransientConnectError(err error) bool {
 func (gc *GMClient) runSession(ctx context.Context) {
 	var me *groupme.User
 	var err error
+	retried := false
 	for delay := connectRetryMin; ; delay = min(delay*2, connectRetryMax) {
 		me, err = gc.Client.MyUser(ctx)
 		if ctx.Err() != nil {
@@ -139,6 +140,10 @@ func (gc *GMClient) runSession(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		}
+		retried = true
+	}
+	if retried && err == nil {
+		gc.UserLogin.BridgeState.Send(status.BridgeState{StateEvent: status.StateConnecting})
 	}
 	if err != nil {
 		state := status.BridgeState{StateEvent: status.StateUnknownError, Error: "groupme-connect-failed"}
