@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/rs/zerolog"
 	"maunium.net/go/mautrix/bridgev2"
 	"maunium.net/go/mautrix/bridgev2/database"
 	"maunium.net/go/mautrix/bridgev2/networkid"
@@ -71,10 +72,10 @@ func (gc *GMClient) fetchMessagePage(ctx context.Context, portalID networkid.Por
 		return nil, err
 	}
 	for _, msg := range messages {
-		if msg == nil || msg.ID == "" || msg.UserID == "" {
-			return nil, fmt.Errorf("GroupMe history response is missing a message or sender ID")
+		if msg == nil || msg.ID == "" {
+			return nil, fmt.Errorf("GroupMe history response is missing a message ID")
 		}
-		if gc.portalKeyForMessage(msg).ID != portalID || (kind == PortalTypeDM && msg.UserID != groupme.ID(gc.Meta.GMID) && msg.UserID != chatID && msg.UserID != "system") {
+		if msg.UserID != "" && (gc.portalKeyForMessage(msg).ID != portalID || (kind == PortalTypeDM && msg.UserID != groupme.ID(gc.Meta.GMID) && msg.UserID != chatID && msg.UserID != "system")) {
 			return nil, fmt.Errorf("GroupMe history response belongs to another conversation")
 		}
 		if before != "" && compareMessageIDs(msg.ID, before) >= 0 || after != "" && compareMessageIDs(msg.ID, after) <= 0 {
@@ -137,6 +138,10 @@ func (gc *GMClient) FetchMessages(ctx context.Context, params bridgev2.FetchMess
 			}
 			// Edit records advance native cursors without consuming visible history.
 			if msg.Event != nil && msg.Event.Type == "message.update" {
+				continue
+			}
+			if msg.UserID == "" {
+				zerolog.Ctx(ctx).Warn().Str("message_id", string(msg.ID)).Msg("Skipping GroupMe history message without a sender ID")
 				continue
 			}
 			messages = append(messages, msg)
