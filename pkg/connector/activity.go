@@ -119,6 +119,33 @@ func (gc *GMClient) readCheckpointEvent(receipt groupmeext.ReadCheckpoint) *nati
 	}}
 }
 
+func (gc *GMClient) loadReadCheckpoints(ctx context.Context) {
+	receipts, err := groupmeext.GetReadCheckpoints(ctx, gc.Meta.Token)
+	if err != nil {
+		gc.UserLogin.Log.Warn().Err(err).Msg("Failed to load GroupMe read checkpoints for backfill")
+	}
+	checkpoints := make(map[groupme.ID]groupme.ID, len(receipts))
+	for _, receipt := range receipts {
+		if receipt.LastReadMessageID != "" {
+			checkpoints[receipt.ConversationID] = receipt.LastReadMessageID
+		}
+	}
+	gc.readCheckpointsMu.Lock()
+	gc.readCheckpoints = checkpoints
+	gc.readCheckpointsMu.Unlock()
+}
+
+func (gc *GMClient) readCheckpointCovers(portalID networkid.PortalID, newest groupme.ID) bool {
+	conversation, err := gc.conversationID(portalID)
+	if err != nil {
+		return true
+	}
+	gc.readCheckpointsMu.Lock()
+	lastRead, ok := gc.readCheckpoints[conversation]
+	gc.readCheckpointsMu.Unlock()
+	return !ok || compareMessageIDs(lastRead, newest) >= 0
+}
+
 func (gc *GMClient) syncReadCheckpoints(ctx context.Context) {
 	receipts, err := groupmeext.GetReadCheckpoints(ctx, gc.Meta.Token)
 	if err != nil {

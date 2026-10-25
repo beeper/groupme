@@ -152,7 +152,7 @@ func (gc *GMClient) FetchMessages(ctx context.Context, params bridgev2.FetchMess
 		Forward: params.Forward, HasMore: hasMore,
 		Cursor:                  networkid.PaginationCursor(before),
 		AggressiveDeduplication: true,
-		MarkRead:                params.AnchorMessage == nil,
+		MarkRead:                params.AnchorMessage == nil && (len(messages) == 0 || gc.readCheckpointCovers(params.Portal.ID, messages[len(messages)-1].ID)),
 	}
 	for _, msg := range messages {
 		sender := gc.messageSender(msg)

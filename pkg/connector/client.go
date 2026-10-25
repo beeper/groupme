@@ -50,6 +50,9 @@ type GMClient struct {
 	pushMu        sync.Mutex
 	push          *groupme.PushSubscription
 	pushTransport *groupmeext.WSFayeClient
+
+	readCheckpointsMu sync.Mutex
+	readCheckpoints   map[groupme.ID]groupme.ID
 }
 
 var _ bridgev2.NetworkAPI = (*GMClient)(nil)
