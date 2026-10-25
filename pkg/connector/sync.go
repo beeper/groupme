@@ -73,8 +73,13 @@ func (gc *GMClient) listChats(ctx context.Context) []nativeChat {
 // long. DM info reuses the listing rather than paging it again for every DM.
 func (gc *GMClient) catchUp(ctx context.Context) []nativeChat {
 	ctx = gc.UserLogin.Log.With().Str("action", "catch up").Logger().WithContext(ctx)
-	gc.loadReadCheckpoints(ctx)
+	checkpointsLoaded := make(chan struct{})
+	go func() {
+		defer close(checkpointsLoaded)
+		gc.loadReadCheckpoints(ctx)
+	}()
 	chats := gc.listChats(ctx)
+	<-checkpointsLoaded
 	zerolog.Ctx(ctx).Info().Int("chat_count", len(chats)).Msg("Syncing GroupMe chats")
 	for _, chat := range chats {
 		if ctx.Err() != nil {
