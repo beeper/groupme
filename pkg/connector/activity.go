@@ -146,15 +146,18 @@ func (gc *GMClient) recordReadCheckpoint(conversation, lastRead groupme.ID) {
 	}
 }
 
-func (gc *GMClient) readCheckpointCovers(portalID networkid.PortalID, newest groupme.ID) bool {
+func (gc *GMClient) readCheckpointBehind(portalID networkid.PortalID, newest groupme.ID) *groupmeext.ReadCheckpoint {
 	conversation, err := gc.conversationID(portalID)
 	if err != nil {
-		return true
+		return nil
 	}
 	gc.readCheckpointsMu.Lock()
 	lastRead, ok := gc.readCheckpoints[conversation]
 	gc.readCheckpointsMu.Unlock()
-	return !ok || compareMessageIDs(lastRead, newest) >= 0
+	if !ok || compareMessageIDs(lastRead, newest) >= 0 {
+		return nil
+	}
+	return &groupmeext.ReadCheckpoint{ConversationID: conversation, LastReadMessageID: lastRead}
 }
 
 func (gc *GMClient) syncReadCheckpoints(ctx context.Context) {
