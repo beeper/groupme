@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -239,6 +240,9 @@ func (gc *GMClient) convertGroupMeMessage(ctx context.Context, portal *bridgev2.
 	}
 
 	cm.MergeCaption()
+	if !slices.ContainsFunc(cm.Parts, func(part *bridgev2.ConvertedMessagePart) bool { return part.ID == "" }) {
+		cm.Parts[0].ID = ""
+	}
 	return cm, nil
 }
 
