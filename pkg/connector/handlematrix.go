@@ -243,13 +243,16 @@ func (gc *GMClient) uploadMatrixMedia(ctx context.Context, content *event.Messag
 	case event.MsgVideo, event.MsgAudio:
 		var extension string
 		mimeType, extension = mediaUploadType(content, mimeType)
-		var groupID, recipientID string
+		req := groupmeext.UploadRequest{SenderId: gc.Meta.GMID, Extension: extension}
 		if portalType == PortalTypeDM {
-			recipientID = string(gmid)
+			req.RecipientId = string(gmid)
 		} else {
-			groupID = string(gmid)
+			req.GroupId = string(gmid)
 		}
-		uploaded, err := groupmeext.UploadMedia(ctx, gc.Meta.Token, gc.Meta.GMID, groupID, recipientID, data, extension, mimeType)
+		if content.MsgType == event.MsgVideo && content.Info != nil {
+			req.Width, req.Height = content.Info.Width, content.Info.Height
+		}
+		uploaded, err := groupmeext.UploadMedia(ctx, gc.Meta.Token, req, data, mimeType)
 		if err != nil {
 			return nil, wrapGroupMeError(err, "failed to upload media").WithIsCertain(true)
 		}

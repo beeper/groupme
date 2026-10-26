@@ -115,12 +115,15 @@ func GetFileMetadata(ctx context.Context, groupID groupme.ID, fileID, token stri
 }
 
 // Upload sessions require a group ID or recipient ID, plus size and extension.
-type createUploadRequest struct {
+// GroupMe's clients also send the dimensions of videos.
+type UploadRequest struct {
 	FileSize    int64  `json:"FileSize"`
 	SenderId    string `json:"SenderId"`
 	Extension   string `json:"Extension"`
 	GroupId     string `json:"groupId,omitempty"`
 	RecipientId string `json:"recipientId,omitempty"`
+	Width       int    `json:"width,omitempty"`
+	Height      int    `json:"height,omitempty"`
 }
 
 // UploadURL is a temporary signed upload destination. The other URLs are
@@ -133,16 +136,10 @@ type UploadedMedia struct {
 }
 
 // UploadMedia uploads a video or voice note: it creates a session, then PUTs
-// bytes to its signed URL without GroupMe credentials. Exactly one of groupID
-// and recipientID must be set.
-func UploadMedia(ctx context.Context, token, senderID, groupID, recipientID string, data []byte, extension, mimeType string) (*UploadedMedia, error) {
-	reqBody, err := json.Marshal(createUploadRequest{
-		FileSize:    int64(len(data)),
-		SenderId:    senderID,
-		Extension:   extension,
-		GroupId:     groupID,
-		RecipientId: recipientID,
-	})
+// bytes to its signed URL without GroupMe credentials.
+func UploadMedia(ctx context.Context, token string, req UploadRequest, data []byte, mimeType string) (*UploadedMedia, error) {
+	req.FileSize = int64(len(data))
+	reqBody, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build upload session request: %w", err)
 	}
