@@ -233,7 +233,7 @@ func (gc *GMClient) convertGroupMeMessage(ctx context.Context, portal *bridgev2.
 		})
 	}
 
-	if text := visibleText(msg.Text, msg.Attachments); len(text) > 0 || len(cm.Parts) == 0 {
+	if text := visibleText(msg); len(text) > 0 || len(cm.Parts) == 0 {
 		cm.Parts = append(cm.Parts, &bridgev2.ConvertedMessagePart{
 			ID:   "",
 			Type: event.EventMessage,
