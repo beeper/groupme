@@ -5,9 +5,10 @@ go 1.26.0
 toolchain go1.27.1
 
 require (
-	github.com/beeper/groupme-lib v0.2.1-0.20261013141939-3f2228f1769b
+	github.com/beeper/groupme-lib v0.2.1-0.20261026193346-17cb816de09e
 	github.com/coder/websocket v1.8.15
 	github.com/google/uuid v1.2.0
+	github.com/mattn/go-sqlite3 v1.14.52
 	github.com/rs/zerolog v1.35.1
 	go.mau.fi/util v0.10.1
 	maunium.net/go/mautrix v0.31.0
@@ -20,7 +21,6 @@ require (
 	github.com/lib/pq v1.12.3 // indirect
 	github.com/mattn/go-colorable v0.1.14 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
-	github.com/mattn/go-sqlite3 v1.14.52 // indirect
 	github.com/petermattis/goid v0.0.0-20260820044319-269ab09b5261 // indirect
 	github.com/rs/xid v1.6.0 // indirect
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e // indirect
