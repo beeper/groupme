@@ -53,7 +53,9 @@ func imageInfoFromURL(rawURL string) *event.FileInfo {
 }
 
 func sameMediaURL(a, b string) bool {
-	if a == b {
+	if a == "" || b == "" {
+		return false
+	} else if a == b {
 		return true
 	}
 	pa, errA := url.Parse(a)
