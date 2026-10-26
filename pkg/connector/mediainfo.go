@@ -23,6 +23,7 @@ import (
 	"net/url"
 	"path"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -62,27 +63,28 @@ func sameMediaURL(a, b string) bool {
 
 // GroupMe appends media URLs and document notices to the text for older
 // clients; its own clients hide them when the attachment is shown.
-func visibleText(text string, attachments []*groupme.Attachment) string {
-	for _, att := range attachments {
-		if att == nil {
-			continue
+func visibleText(msg *groupme.Message) string {
+	text := msg.Text
+	for {
+		trimmed := strings.TrimSpace(text)
+		cut := strings.LastIndexAny(trimmed, " \t\n") + 1
+		if !slices.ContainsFunc(msg.Attachments, func(att *groupme.Attachment) bool {
+			return att != nil && (att.Type == groupme.Image || att.Type == groupme.Video) && sameMediaURL(trimmed[cut:], att.URL)
+		}) {
+			break
 		}
-		switch att.Type {
-		case groupme.Image, groupme.Video:
-			trimmed := strings.TrimSpace(text)
-			last := trimmed[strings.LastIndexAny(trimmed, " \t\n")+1:]
-			if att.URL != "" && last != "" && sameMediaURL(last, att.URL) {
-				text = strings.TrimSpace(strings.TrimSuffix(trimmed, last))
-			}
-		case groupme.Audio:
-			if strings.HasPrefix(text, "⚠️You received a voice note") {
-				text = ""
-			}
-		case groupme.File:
-			if strings.HasPrefix(text, "Shared a document:") {
-				text = ""
-			}
-		}
+		text = strings.TrimSpace(trimmed[:cut])
+	}
+	// File attachments are only bridged in groups.
+	if msg.GroupID != "" && strings.HasPrefix(text, "Shared a document:") && slices.ContainsFunc(msg.Attachments, func(att *groupme.Attachment) bool {
+		return att != nil && att.Type == groupme.File
+	}) {
+		return ""
+	}
+	if strings.HasPrefix(text, "⚠️You received a voice note") && slices.ContainsFunc(msg.Attachments, func(att *groupme.Attachment) bool {
+		return att != nil && att.Type == groupme.Audio
+	}) {
+		return ""
 	}
 	return text
 }
@@ -129,6 +131,9 @@ func voiceNoteAttachment(content *event.MessageEventContent, uploaded *groupmeex
 	if durationMS == 0 && content.Info != nil {
 		durationMS = content.Info.Duration
 	}
-	att.Duration = math.Round(float64(durationMS) / 1000)
+	// GroupMe's clients send whole seconds.
+	if durationMS > 0 {
+		att.Duration = max(1, math.Round(float64(durationMS)/1000))
+	}
 	return att
 }
