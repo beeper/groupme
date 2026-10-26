@@ -96,13 +96,14 @@ func (gc *GMClient) HandleMatrixEdit(ctx context.Context, msg *bridgev2.MatrixEd
 	default:
 		return bridgev2.ErrUnsupportedMessageType
 	}
+	fmtCtx := format.NewContext(ctx)
 	if msg.Content.Format == event.FormatHTML && msg.Content.FormattedBody != "" {
-		text = groupmeHTMLParser.Parse(msg.Content.FormattedBody, format.NewContext(ctx))
+		text = gc.htmlParser().Parse(msg.Content.FormattedBody, fmtCtx)
 	}
 	if msg.Content.MsgType == event.MsgEmote {
 		text = "/me " + text
 	}
-	text = strings.TrimSpace(text)
+	text, mentions := takeMentions(strings.TrimSpace(text), fmtCtx)
 	if utf8.RuneCountInString(text) > 1000 {
 		return permanentFailure(event.MessageStatusUnsupported, "GroupMe messages are limited to 1000 characters")
 	}
@@ -116,6 +117,9 @@ func (gc *GMClient) HandleMatrixEdit(ctx context.Context, msg *bridgev2.MatrixEd
 		if attachment != nil && string(attachment.Type) != "mentions" && string(attachment.Type) != "emoji" {
 			content.Attachments = append(content.Attachments, attachment)
 		}
+	}
+	if mentions != nil {
+		content.Attachments = append(content.Attachments, mentions)
 	}
 	updated, err := groupmeext.EditMessage(ctx, gc.Meta.Token, kind == PortalTypeDM, chatID, ParseMessageID(target.ID), content)
 	if err != nil {
