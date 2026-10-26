@@ -17,6 +17,7 @@
 package connector
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -221,7 +222,7 @@ func (gc *GMClient) syncRemoteProfile(ctx context.Context, me *groupme.User) {
 		gc.UserLogin.Log.Err(err).Msg("Failed to get own GroupMe ghost")
 		return
 	}
-	ghost.UpdateInfo(ctx, &bridgev2.UserInfo{Name: ptr.Ptr(me.Name), Avatar: gc.avatarFor(ctx, me.AvatarURL)})
+	ghost.UpdateInfo(ctx, &bridgev2.UserInfo{Name: ptr.Ptr(me.Name), Avatar: gc.avatarIfSet(ctx, cmp.Or(me.ImageURL, me.AvatarURL))})
 	profile := gc.UserLogin.RemoteProfile
 	profile.Name, profile.Avatar = me.Name, ghost.AvatarMXC
 	if gc.UserLogin.RemoteName == me.Name && gc.UserLogin.RemoteProfile == profile {
