@@ -131,6 +131,9 @@ func voiceNoteAttachment(content *event.MessageEventContent, uploaded *groupmeex
 	if durationMS == 0 && content.Info != nil {
 		durationMS = content.Info.Duration
 	}
-	att.Duration = math.Round(float64(durationMS) / 1000)
+	// GroupMe's clients send whole seconds.
+	if durationMS > 0 {
+		att.Duration = max(1, math.Round(float64(durationMS)/1000))
+	}
 	return att
 }
