@@ -180,10 +180,16 @@ func (gc *GMClient) convertGroupMeMessage(ctx context.Context, portal *bridgev2.
 			if err != nil {
 				return nil, fmt.Errorf("upload GroupMe attachment: %w", err)
 			}
+			info := &event.FileInfo{MimeType: mime, Size: len(data)}
+			if att.Type == groupme.Image {
+				if urlInfo := imageInfoFromURL(att.URL); urlInfo != nil {
+					info.Width, info.Height = urlInfo.Width, urlInfo.Height
+				}
+			}
 			content = &event.MessageEventContent{
 				MsgType: event.MessageType("m." + att.Type),
 				Body:    filename,
-				Info:    &event.FileInfo{MimeType: mime, Size: len(data)},
+				Info:    info,
 			}
 			if file != nil {
 				content.File = file
@@ -227,13 +233,13 @@ func (gc *GMClient) convertGroupMeMessage(ctx context.Context, portal *bridgev2.
 		})
 	}
 
-	if len(msg.Text) > 0 || len(cm.Parts) == 0 {
+	if text := visibleText(msg.Text, msg.Attachments); len(text) > 0 || len(cm.Parts) == 0 {
 		cm.Parts = append(cm.Parts, &bridgev2.ConvertedMessagePart{
 			ID:   "",
 			Type: event.EventMessage,
 			Content: &event.MessageEventContent{
 				MsgType: event.MsgText,
-				Body:    msg.Text,
+				Body:    text,
 			},
 		})
 	}

@@ -107,6 +107,7 @@ func (gc *GMClient) directMediaContent(ctx context.Context, msg *groupme.Message
 	case groupme.Image:
 		fields = []string{"1i", att.URL}
 		content.MsgType, content.Body = event.MsgImage, "image"
+		content.Info = imageInfoFromURL(att.URL)
 	case groupme.Video:
 		fields = []string{"1v", string(gc.UserLogin.ID), att.URL}
 		content.MsgType, content.Body = event.MsgVideo, "video"
