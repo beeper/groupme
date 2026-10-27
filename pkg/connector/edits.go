@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"reflect"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -228,6 +230,19 @@ func (gc *GMClient) convertEdit(ctx context.Context, portal *bridgev2.Portal, in
 	for _, part := range existing {
 		byPart[part.PartID] = part
 	}
+	if byPart["text"] == nil {
+		// Parts stored before the first part became the default part still use
+		// the first attachment's own ID, which the converted message lacks.
+		for partID, part := range byPart {
+			if strings.HasPrefix(string(partID), "attachment-") && !slices.ContainsFunc(converted.Parts, func(converted *bridgev2.ConvertedMessagePart) bool {
+				return converted.ID == partID
+			}) {
+				byPart["text"], byPart[""] = byPart[""], part
+				delete(byPart, partID)
+				break
+			}
+		}
+	}
 	for _, part := range converted.Parts {
 		part.DBMetadata.(*MessageMetadata).EditedAt = update.UpdatedAt
 		if old := byPart[part.ID]; old != nil {
@@ -240,8 +255,9 @@ func (gc *GMClient) convertEdit(ctx context.Context, portal *bridgev2.Portal, in
 			result.AddedParts.Parts = append(result.AddedParts.Parts, part)
 		}
 	}
+	unmatched := slices.Collect(maps.Values(byPart))
 	for _, old := range existing {
-		if byPart[old.PartID] != nil {
+		if slices.Contains(unmatched, old) {
 			result.DeletedParts = append(result.DeletedParts, old)
 		}
 	}

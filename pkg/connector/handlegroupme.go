@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -251,6 +252,12 @@ func (gc *GMClient) convertGroupMeMessage(ctx context.Context, portal *bridgev2.
 	}
 
 	cm.MergeCaption()
+	// Replies resolve to the default part, so it must exist and stay on the
+	// same part whether or not the message has text, including across edits.
+	if i := slices.IndexFunc(cm.Parts, func(part *bridgev2.ConvertedMessagePart) bool { return part.ID == "" }); i > 0 {
+		cm.Parts[i].ID = "text"
+	}
+	cm.Parts[0].ID = ""
 	return cm, nil
 }
 
