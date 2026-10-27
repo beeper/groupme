@@ -154,7 +154,10 @@ func (gc *GMClient) refreshRecentReactions(ctx context.Context, chats []nativeCh
 			gc.Main.br.QueueRemoteEvent(gc.UserLogin, evt)
 		}
 		for _, msg := range slices.Backward(messages) {
-			if msg.Event != nil && msg.Event.Type == "message.update" {
+			if evt, _ := gc.messageDeleteEvent(*msg); evt != nil {
+				gc.Main.br.QueueRemoteEvent(gc.UserLogin, evt)
+			}
+			if isHiddenRecord(msg) {
 				continue
 			}
 			if msg.Reactions != nil || msg.FavoritedBy != nil {

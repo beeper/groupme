@@ -136,8 +136,8 @@ func (gc *GMClient) FetchMessages(ctx context.Context, params bridgev2.FetchMess
 				hasMore = false
 				continue
 			}
-			// Edit records advance native cursors without consuming visible history.
-			if msg.Event != nil && msg.Event.Type == "message.update" {
+			// Edit and deletion records advance native cursors without consuming visible history.
+			if isHiddenRecord(msg) {
 				continue
 			}
 			if msg.UserID == "" {

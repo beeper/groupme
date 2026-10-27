@@ -279,9 +279,9 @@ type nativeReceipt struct {
 	client *GMClient
 }
 
-// Web's read cursor includes hidden message.update system records. Translate
-// that native cursor to the preceding visible message inside the portal queue;
-// don't create a second Matrix message or mapping for an edit notification.
+// Web's read cursor includes hidden message.update and message.deleted records.
+// Translate that native cursor to the preceding visible message inside the
+// portal queue; those records have no Matrix message or mapping.
 func (r *nativeReceipt) PreHandle(ctx context.Context, portal *bridgev2.Portal) {
 	lookup := func(id groupme.ID) bool {
 		mapped, err := portal.Bridge.DB.Message.GetLastPartByID(ctx, portal.Receiver, MakeMessageID(id))
@@ -291,29 +291,29 @@ func (r *nativeReceipt) PreHandle(ctx context.Context, portal *bridgev2.Portal) 
 		return
 	}
 	var before groupme.ID
-	foundEdit := false
+	foundHidden := false
 	for page := 0; page < 2; page++ {
 		messages, err := r.client.fetchMessagePage(ctx, portal.ID, before, "", 100)
 		if err != nil {
-			r.client.UserLogin.Log.Warn().Err(err).Msg("Failed to resolve GroupMe edit receipt")
+			r.client.UserLogin.Log.Warn().Err(err).Msg("Failed to resolve GroupMe receipt on a hidden record")
 			return
 		}
 		if len(messages) == 0 {
 			return
 		}
 		for _, msg := range messages {
-			if !foundEdit {
+			if !foundHidden {
 				comparison := compareMessageIDs(msg.ID, ParseMessageID(r.LastTarget))
 				if comparison > 0 {
 					continue
 				}
-				if comparison < 0 || msg.Event == nil || msg.Event.Type != "message.update" {
+				if comparison < 0 || !isHiddenRecord(msg) {
 					return
 				}
-				foundEdit = true
+				foundHidden = true
 				continue
 			}
-			if msg.Event != nil && msg.Event.Type == "message.update" {
+			if isHiddenRecord(msg) {
 				continue
 			}
 			if lookup(msg.ID) {
