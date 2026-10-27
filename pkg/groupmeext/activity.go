@@ -127,3 +127,7 @@ func SendDMReadReceipt(ctx context.Context, token string, conversationID groupme
 func DeleteDM(ctx context.Context, token string, conversationID groupme.ID) error {
 	return activityRequest(ctx, token, http.MethodDelete, "/v3/chats/"+url.PathEscape(string(conversationID)), nil, nil)
 }
+
+func DeleteMessage(ctx context.Context, token string, conversationID, messageID groupme.ID) error {
+	return activityRequest(ctx, token, http.MethodDelete, "/v3/conversations/"+url.PathEscape(string(conversationID))+"/messages/"+url.PathEscape(string(messageID)), nil, nil)
+}

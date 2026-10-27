@@ -47,6 +47,12 @@ func (gc *GMClient) HandleTextMessage(msg groupme.Message) {
 	if gc.handleMessageUpdate(msg) {
 		return
 	}
+	if evt, handled := gc.messageDeleteEvent(msg); handled {
+		if evt != nil {
+			gc.Main.br.QueueRemoteEvent(gc.UserLogin, evt)
+		}
+		return
+	}
 	if msg.ID == "" || msg.UserID == "" || gc.portalKeyForMessage(&msg).ID == "" {
 		gc.UserLogin.Log.Warn().Msg("Ignoring malformed GroupMe push message")
 		return

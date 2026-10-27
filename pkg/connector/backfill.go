@@ -136,8 +136,8 @@ func (gc *GMClient) FetchMessages(ctx context.Context, params bridgev2.FetchMess
 				hasMore = false
 				continue
 			}
-			// Edit records advance native cursors without consuming visible history.
-			if msg.Event != nil && msg.Event.Type == "message.update" {
+			// Edit and deletion records advance native cursors without consuming visible history.
+			if isHiddenRecord(msg) {
 				continue
 			}
 			if msg.UserID == "" {
@@ -153,6 +153,18 @@ func (gc *GMClient) FetchMessages(ctx context.Context, params bridgev2.FetchMess
 		Cursor:                  networkid.PaginationCursor(before),
 		AggressiveDeduplication: true,
 		MarkRead:                params.AnchorMessage == nil,
+	}
+	if resp.MarkRead && len(messages) > 0 {
+		if checkpoint := gc.readCheckpointBehind(params.Portal.ID, messages[len(messages)-1].ID); checkpoint != nil {
+			resp.MarkRead = false
+			resp.CompleteCallback = func() {
+				go func() {
+					if evt := gc.readCheckpointEvent(*checkpoint); evt != nil {
+						gc.Main.br.QueueRemoteEvent(gc.UserLogin, evt)
+					}
+				}()
+			}
+		}
 	}
 	for _, msg := range messages {
 		sender := gc.messageSender(msg)
