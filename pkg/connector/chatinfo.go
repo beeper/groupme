@@ -17,6 +17,7 @@
 package connector
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 
@@ -217,7 +218,7 @@ func (gc *GMClient) GetUserInfo(ctx context.Context, ghost *bridgev2.Ghost) (*br
 		if err == nil && me != nil && me.ID == gmid {
 			return &bridgev2.UserInfo{
 				Name:   ptr.Ptr(me.Name),
-				Avatar: gc.avatarIfSet(ctx, me.AvatarURL),
+				Avatar: gc.avatarIfSet(ctx, cmp.Or(me.ImageURL, me.AvatarURL)),
 			}, nil
 		}
 	}
