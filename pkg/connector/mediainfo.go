@@ -110,6 +110,11 @@ func addVoiceNoteInfo(content *event.MessageEventContent, att *groupme.Attachmen
 func parsePeaks(raw json.RawMessage) []float64 {
 	var encoded string
 	if json.Unmarshal(raw, &encoded) == nil {
+		// Live DM events send comma-separated peaks without array brackets.
+		encoded = strings.TrimSpace(encoded)
+		if !strings.HasPrefix(encoded, "[") {
+			encoded = "[" + encoded + "]"
+		}
 		raw = json.RawMessage(encoded)
 	}
 	var peaks []float64
