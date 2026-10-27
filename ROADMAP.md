@@ -8,10 +8,11 @@
 | Mentions | ✅ | ✅ |
 | Images and GIFs | ✅ | ✅ |
 | Video | ✅ | ⚠️ Uploads, but GroupMe can't play it back |
+| Voice notes | ✅ | ✅ |
 | Files | ✅ Groups only | ✅ Groups only |
 | Media captions | ✅ | ✅ |
 | Locations | ✅ | ✅ |
-| Direct media | ✅ Images, videos, group files and avatars | N/A |
+| Direct media | ✅ Images, videos, voice notes, group files and avatars | N/A |
 | Emoji reactions | ⚠️ Push events, reconciled on reconnect | ✅ |
 | Custom reaction icons | ❌ | ❌ |
 | Polls | ✅ Active polls; reminders and results as text | ⚠️ Voting only; no creation or vote withdrawal |

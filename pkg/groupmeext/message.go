@@ -18,7 +18,8 @@ func DownloadImage(ctx context.Context, imageURL string) ([]byte, string, error)
 	return downloadMediaURL(ctx, imageURL, "")
 }
 
-// DownloadVideo uses the native token-cookie authentication contract.
+// DownloadVideo uses the native token-cookie authentication contract, which
+// voice notes share.
 func DownloadVideo(ctx context.Context, videoURL, token string) ([]byte, string, error) {
 	return downloadMediaURL(ctx, videoURL, token)
 }
@@ -113,7 +114,7 @@ func GetFileMetadata(ctx context.Context, groupID groupme.ID, fileID, token stri
 	return &meta[0].FileData, nil
 }
 
-// Video sessions require a group ID or recipient ID, plus size and extension.
+// Upload sessions require a group ID or recipient ID, plus size and extension.
 type createUploadRequest struct {
 	FileSize    int64  `json:"FileSize"`
 	SenderId    string `json:"SenderId"`
@@ -122,17 +123,19 @@ type createUploadRequest struct {
 	RecipientId string `json:"recipientId,omitempty"`
 }
 
-// UploadURL is a temporary signed upload destination. RenderURL and ThumbnailURL
-// are attachment URLs; no expiry parameter was observed in those URLs.
-type createUploadResponse struct {
-	UploadURL    string `json:"uploadUrl"`
-	RenderURL    string `json:"renderUrl"`
-	ThumbnailURL string `json:"thumbnailUrl"`
+// UploadURL is a temporary signed upload destination. The other URLs are
+// attachment URLs; no expiry parameter was observed in them.
+type UploadedMedia struct {
+	UploadURL     string `json:"uploadUrl"`
+	RenderURL     string `json:"renderUrl"`
+	ThumbnailURL  string `json:"thumbnailUrl"`
+	TranscriptURL string `json:"transcriptUrl"`
 }
 
-// UploadVideo creates a session, then PUTs bytes to its signed URL without
-// GroupMe credentials. Exactly one of groupID and recipientID must be set.
-func UploadVideo(ctx context.Context, token, senderID, groupID, recipientID string, data []byte, extension, mimeType string) (renderURL, thumbnailURL string, err error) {
+// UploadMedia uploads a video or voice note: it creates a session, then PUTs
+// bytes to its signed URL without GroupMe credentials. Exactly one of groupID
+// and recipientID must be set.
+func UploadMedia(ctx context.Context, token, senderID, groupID, recipientID string, data []byte, extension, mimeType string) (*UploadedMedia, error) {
 	reqBody, err := json.Marshal(createUploadRequest{
 		FileSize:    int64(len(data)),
 		SenderId:    senderID,
@@ -141,33 +144,33 @@ func UploadVideo(ctx context.Context, token, senderID, groupID, recipientID stri
 		RecipientId: recipientID,
 	})
 	if err != nil {
-		return "", "", fmt.Errorf("failed to build upload session request: %w", err)
+		return nil, fmt.Errorf("failed to build upload session request: %w", err)
 	}
 
 	sessionReq, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://m.groupme.com/uploads", bytes.NewReader(reqBody))
 	if err != nil {
-		return "", "", fmt.Errorf("failed to build upload session request: %w", err)
+		return nil, fmt.Errorf("failed to build upload session request: %w", err)
 	}
 	sessionReq.Header.Set("X-Access-Token", token)
 	sessionReq.Header.Set("Content-Type", "application/json")
 
 	sessionResp, err := mediaRequest(sessionReq)
 	if err != nil {
-		return "", "", fmt.Errorf("failed to create upload session: %w", err)
+		return nil, fmt.Errorf("failed to create upload session: %w", err)
 	}
 	defer sessionResp.Body.Close()
 
-	var session createUploadResponse
+	var session UploadedMedia
 	if err := json.NewDecoder(io.LimitReader(sessionResp.Body, 1024*1024)).Decode(&session); err != nil {
-		return "", "", fmt.Errorf("failed to decode upload session response: %w", err)
+		return nil, fmt.Errorf("failed to decode upload session response: %w", err)
 	}
 	if session.UploadURL == "" || session.RenderURL == "" {
-		return "", "", fmt.Errorf("GroupMe did not return an upload URL for the video session")
+		return nil, fmt.Errorf("GroupMe did not return an upload URL for the media session")
 	}
 
 	putReq, err := http.NewRequestWithContext(ctx, http.MethodPut, session.UploadURL, bytes.NewReader(data))
 	if err != nil {
-		return "", "", fmt.Errorf("invalid GroupMe video upload URL")
+		return nil, fmt.Errorf("invalid GroupMe media upload URL")
 	}
 	putReq.Header.Set("Content-Type", mimeType)
 	// Required by Azure Blob Storage for a PUT that creates a new blob
@@ -177,11 +180,11 @@ func UploadVideo(ctx context.Context, token, senderID, groupID, recipientID stri
 
 	putResp, err := mediaRequest(putReq)
 	if err != nil {
-		return "", "", fmt.Errorf("failed to upload video bytes: %w", err)
+		return nil, fmt.Errorf("failed to upload media bytes: %w", err)
 	}
 	defer putResp.Body.Close()
 
-	return session.RenderURL, session.ThumbnailURL, nil
+	return &session, nil
 }
 
 // createFileResponse is file.groupme.com's response to starting a file
@@ -205,7 +208,7 @@ type fileUploadStatus struct {
 // UploadFile uploads an outgoing file (GroupMe's group file-sharing
 // feature -- see DownloadFile's doc comment) and returns its file_id, for
 // use as a "file" attachment's file_id. Reverse-engineered live the same
-// way as UploadVideo.
+// way as UploadMedia.
 //
 // Unlike video, this doesn't need a separate SAS-signed upload step --
 // file.groupme.com is GroupMe's own file-service (confirmed via its

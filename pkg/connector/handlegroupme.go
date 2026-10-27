@@ -148,7 +148,7 @@ func (gc *GMClient) convertGroupMeMessage(ctx context.Context, portal *bridgev2.
 		partID := networkid.PartID(fmt.Sprintf("attachment-%d", i))
 		var content *event.MessageEventContent
 		switch att.Type {
-		case groupme.Image, groupme.Video, groupme.File:
+		case groupme.Image, groupme.Video, groupme.Audio, groupme.File:
 			if att.Type == groupme.File && msg.GroupID == "" {
 				log.Warn().Msg("Ignoring GroupMe file attachment outside a group")
 				continue
@@ -170,7 +170,7 @@ func (gc *GMClient) convertGroupMeMessage(ctx context.Context, portal *bridgev2.
 			switch att.Type {
 			case groupme.Image:
 				data, mime, err = groupmeext.DownloadImage(ctx, att.URL)
-			case groupme.Video:
+			case groupme.Video, groupme.Audio:
 				data, mime, err = groupmeext.DownloadVideo(ctx, att.URL, gc.Meta.Token)
 			case groupme.File:
 				data, filename, mime, err = groupmeext.DownloadFile(ctx, msg.GroupID, att.FileID, gc.Meta.Token)
@@ -231,6 +231,9 @@ func (gc *GMClient) convertGroupMeMessage(ctx context.Context, portal *bridgev2.
 		default:
 			// Mentions and custom emoji retain their plaintext fallback.
 			continue
+		}
+		if att.Type == groupme.Audio {
+			addVoiceNoteInfo(content, att)
 		}
 
 		cm.Parts = append(cm.Parts, &bridgev2.ConvertedMessagePart{

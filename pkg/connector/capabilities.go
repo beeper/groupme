@@ -57,13 +57,18 @@ var videoMimes = map[string]event.CapabilitySupportLevel{
 	"video/mp4": event.CapLevelFullySupported,
 }
 
+// Beeper clients transcode voice recordings to a listed type before sending.
+var voiceMimes = map[string]event.CapabilitySupportLevel{
+	"audio/mp4": event.CapLevelFullySupported,
+}
+
 var fileMimes = map[string]event.CapabilitySupportLevel{
 	"application/*": event.CapLevelFullySupported,
 	"text/*":        event.CapLevelFullySupported,
 }
 
 var roomCaps = &event.RoomFeatures{
-	ID: "fi.mau.groupme.capabilities.2026_10_26.4",
+	ID: "fi.mau.groupme.capabilities.2026_10_26.5",
 	Formatting: event.FormattingFeatureMap{
 		event.FmtUserLink: event.CapLevelFullySupported,
 	},
@@ -76,6 +81,11 @@ var roomCaps = &event.RoomFeatures{
 		event.MsgVideo: {
 			MimeTypes: videoMimes,
 			Caption:   event.CapLevelFullySupported,
+			MaxSize:   MaxFileSize,
+		},
+		event.CapMsgVoice: {
+			MimeTypes: voiceMimes,
+			Caption:   event.CapLevelDropped,
 			MaxSize:   MaxFileSize,
 		},
 		event.MsgFile: {

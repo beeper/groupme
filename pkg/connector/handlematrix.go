@@ -17,6 +17,7 @@
 package connector
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -122,8 +123,11 @@ func (gc *GMClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.Matri
 		return nil, fmt.Errorf("invalid GroupMe portal")
 	}
 	text := content.Body
-	if content.MsgType == event.MsgImage || content.MsgType == event.MsgVideo || content.MsgType == event.MsgFile {
+	switch content.MsgType {
+	case event.MsgImage, event.MsgVideo, event.MsgFile:
 		text = content.GetCaption()
+	case event.MsgAudio:
+		text = ""
 	}
 	fmtCtx := format.NewContext(ctx)
 	if text != "" && content.Format == event.FormatHTML && content.FormattedBody != "" {
@@ -148,7 +152,7 @@ func (gc *GMClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.Matri
 
 	switch content.MsgType {
 	case event.MsgText, event.MsgNotice, event.MsgEmote:
-	case event.MsgImage, event.MsgVideo, event.MsgFile:
+	case event.MsgImage, event.MsgVideo, event.MsgAudio, event.MsgFile:
 		attachment, err := gc.uploadMatrixMedia(ctx, content, portalType, gmid)
 		if err != nil {
 			return nil, err
@@ -213,7 +217,7 @@ func (gc *GMClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.Matri
 }
 
 // uploadMatrixMedia shares the Matrix download and byte limit checks. GroupMe
-// has separate image, video-session, and group-file upload APIs.
+// has separate image, media-session, and group-file upload APIs.
 func (gc *GMClient) uploadMatrixMedia(ctx context.Context, content *event.MessageEventContent, portalType PortalType, gmid groupme.ID) (*groupme.Attachment, error) {
 	data, err := gc.Main.br.Bot.DownloadMedia(ctx, content.URL, content.File)
 	if err != nil {
@@ -237,21 +241,23 @@ func (gc *GMClient) uploadMatrixMedia(ctx context.Context, content *event.Messag
 			return nil, wrapGroupMeError(err, "failed to upload media").WithIsCertain(true)
 		}
 		return &groupme.Attachment{Type: groupme.Image, URL: url}, nil
-	case event.MsgVideo:
-		if mimeType == "" {
-			mimeType = "video/mp4"
-		}
+	case event.MsgVideo, event.MsgAudio:
+		var extension string
+		mimeType, extension = mediaUploadType(content, mimeType)
 		var groupID, recipientID string
 		if portalType == PortalTypeDM {
 			recipientID = string(gmid)
 		} else {
 			groupID = string(gmid)
 		}
-		url, preview, err := groupmeext.UploadVideo(ctx, gc.Meta.Token, gc.Meta.GMID, groupID, recipientID, data, videoExtension(content, mimeType), mimeType)
+		uploaded, err := groupmeext.UploadMedia(ctx, gc.Meta.Token, gc.Meta.GMID, groupID, recipientID, data, extension, mimeType)
 		if err != nil {
 			return nil, wrapGroupMeError(err, "failed to upload media").WithIsCertain(true)
 		}
-		return &groupme.Attachment{Type: groupme.Video, URL: url, VideoPreviewURL: preview}, nil
+		if content.MsgType == event.MsgAudio {
+			return voiceNoteAttachment(content, uploaded), nil
+		}
+		return &groupme.Attachment{Type: groupme.Video, URL: uploaded.RenderURL, VideoPreviewURL: uploaded.ThumbnailURL}, nil
 	case event.MsgFile:
 		fileID, err := groupmeext.UploadFile(ctx, gmid, gc.Meta.Token, content.GetFileName(), data, mimeType)
 		if err != nil {
@@ -263,15 +269,24 @@ func (gc *GMClient) uploadMatrixMedia(ctx context.Context, content *event.Messag
 	}
 }
 
-// The video upload session requires an extension before it receives any bytes.
-func videoExtension(content *event.MessageEventContent, mimeType string) string {
+// The media upload session requires an extension before it receives any bytes.
+func mediaUploadType(content *event.MessageEventContent, mimeType string) (string, string) {
+	if content.MsgType == event.MsgAudio {
+		mimeType = cmp.Or(mimeType, "audio/mp4")
+	} else {
+		mimeType = cmp.Or(mimeType, "video/mp4")
+	}
 	if ext := strings.TrimPrefix(filepath.Ext(content.GetFileName()), "."); ext != "" {
-		return strings.ToLower(ext)
+		return mimeType, strings.ToLower(ext)
+	}
+	if content.MsgType == event.MsgAudio {
+		// mime lists audio/mp4 extensions alphabetically, so .f4a would come first.
+		return mimeType, "m4a"
 	}
 	if exts, err := mime.ExtensionsByType(mimeType); err == nil && len(exts) > 0 {
-		return strings.ToLower(strings.TrimPrefix(exts[0], "."))
+		return mimeType, strings.ToLower(strings.TrimPrefix(exts[0], "."))
 	}
-	return "mp4"
+	return mimeType, "mp4"
 }
 
 // GroupMe location attachments carry latitude, longitude, and a name.

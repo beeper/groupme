@@ -17,6 +17,8 @@
 package connector
 
 import (
+	"encoding/json"
+	"math"
 	"mime"
 	"net/url"
 	"path"
@@ -29,6 +31,7 @@ import (
 	"maunium.net/go/mautrix/event"
 
 	"github.com/beeper/groupme-lib"
+	"github.com/beeper/groupme/pkg/groupmeext"
 )
 
 // GroupMe image URLs name the file after its dimensions and format, e.g.
@@ -81,5 +84,64 @@ func visibleText(msg *groupme.Message) string {
 	}) {
 		return ""
 	}
+	if strings.HasPrefix(text, "⚠️You received a voice note") && slices.ContainsFunc(msg.Attachments, func(att *groupme.Attachment) bool {
+		return att != nil && att.Type == groupme.Audio
+	}) {
+		return ""
+	}
 	return text
+}
+
+// Matrix voice waveforms range from 0 to 1024; GroupMe peaks from 0 to 1.
+const waveformScale = 1024
+
+func addVoiceNoteInfo(content *event.MessageEventContent, att *groupme.Attachment) {
+	if content.Info == nil {
+		content.Info = &event.FileInfo{}
+	}
+	content.Info.Duration = int(att.Duration * 1000)
+	content.MSC3245Voice = &event.MSC3245Voice{}
+	content.MSC1767Audio = &event.MSC1767Audio{Duration: content.Info.Duration}
+	for _, peak := range parsePeaks(att.Peaks) {
+		content.MSC1767Audio.Waveform = append(content.MSC1767Audio.Waveform, int(math.Round(min(max(peak, 0), 1)*waveformScale)))
+	}
+}
+
+func parsePeaks(raw json.RawMessage) []float64 {
+	var encoded string
+	if json.Unmarshal(raw, &encoded) == nil {
+		// Live DM events send comma-separated peaks without array brackets.
+		encoded = strings.TrimSpace(encoded)
+		if !strings.HasPrefix(encoded, "[") {
+			encoded = "[" + encoded + "]"
+		}
+		raw = json.RawMessage(encoded)
+	}
+	var peaks []float64
+	_ = json.Unmarshal(raw, &peaks)
+	return peaks
+}
+
+func voiceNoteAttachment(content *event.MessageEventContent, uploaded *groupmeext.UploadedMedia) *groupme.Attachment {
+	att := &groupme.Attachment{Type: groupme.Audio, URL: uploaded.RenderURL, TranscriptURL: uploaded.TranscriptURL}
+	durationMS := 0
+	if content.MSC1767Audio != nil {
+		durationMS = content.MSC1767Audio.Duration
+		if len(content.MSC1767Audio.Waveform) > 0 {
+			peaks := make([]float64, len(content.MSC1767Audio.Waveform))
+			for i, sample := range content.MSC1767Audio.Waveform {
+				peaks[i] = min(max(float64(sample)/waveformScale, 0), 1)
+			}
+			encoded, _ := json.Marshal(peaks)
+			att.Peaks, _ = json.Marshal(string(encoded))
+		}
+	}
+	if durationMS == 0 && content.Info != nil {
+		durationMS = content.Info.Duration
+	}
+	// GroupMe's clients send whole seconds.
+	if durationMS > 0 {
+		att.Duration = max(1, math.Round(float64(durationMS)/1000))
+	}
+	return att
 }
