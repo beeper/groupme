@@ -93,7 +93,9 @@ func takeMentions(text string, ctx format.Context) (string, *groupme.Attachment)
 	return out.String(), mentions
 }
 
-func (gc *GMClient) applyMentions(content *event.MessageEventContent, attachments []*groupme.Attachment) {
+func (gc *GMClient) applyTextAttachments(content *event.MessageEventContent, attachments []*groupme.Attachment) {
+	body := content.Body
+	content.Body = groupMeEmojiReplacer(attachments)(body)
 	var mentions *groupme.Attachment
 	for _, att := range attachments {
 		if att != nil && att.Type == groupme.Mentions {
@@ -108,7 +110,7 @@ func (gc *GMClient) applyMentions(content *event.MessageEventContent, attachment
 		start, end int
 		user       groupme.ID
 	}
-	text := utf16.Encode([]rune(content.Body))
+	text := utf16.Encode([]rune(body))
 	spans := make([]span, 0, len(mentions.UserIDs))
 	for i, user := range mentions.UserIDs {
 		if i >= len(mentions.Loci) || len(mentions.Loci[i]) != 2 || user == "" {
@@ -120,8 +122,9 @@ func (gc *GMClient) applyMentions(content *event.MessageEventContent, attachment
 		}
 	}
 	slices.SortFunc(spans, func(a, b span) int { return a.start - b.start })
+	replaceEmoji := groupMeEmojiReplacer(attachments)
 	escape := func(units []uint16) string {
-		return strings.ReplaceAll(html.EscapeString(string(utf16.Decode(units))), "\n", "<br>")
+		return strings.ReplaceAll(html.EscapeString(replaceEmoji(string(utf16.Decode(units)))), "\n", "<br>")
 	}
 	var out strings.Builder
 	content.Mentions = &event.Mentions{}
