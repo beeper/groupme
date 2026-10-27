@@ -229,7 +229,6 @@ func (gc *GMClient) convertGroupMeMessage(ctx context.Context, portal *bridgev2.
 			continue
 
 		default:
-			// Mentions and custom emoji retain their plaintext fallback.
 			continue
 		}
 		if att.Type == groupme.Audio {
@@ -248,7 +247,7 @@ func (gc *GMClient) convertGroupMeMessage(ctx context.Context, portal *bridgev2.
 			MsgType: event.MsgText,
 			Body:    text,
 		}
-		gc.applyMentions(content, msg.Attachments)
+		gc.applyTextAttachments(content, msg.Attachments)
 		cm.Parts = append(cm.Parts, &bridgev2.ConvertedMessagePart{
 			ID:      "",
 			Type:    event.EventMessage,
