@@ -63,7 +63,7 @@ var fileMimes = map[string]event.CapabilitySupportLevel{
 }
 
 var roomCaps = &event.RoomFeatures{
-	ID: "fi.mau.groupme.capabilities.2026_10_26.1",
+	ID: "fi.mau.groupme.capabilities.2026_10_26.4",
 	Formatting: event.FormattingFeatureMap{
 		event.FmtUserLink: event.CapLevelFullySupported,
 	},
@@ -86,6 +86,7 @@ var roomCaps = &event.RoomFeatures{
 	},
 	MaxTextLength:       1000,
 	Edit:                event.CapLevelPartialSupport,
+	Delete:              event.CapLevelFullySupported,
 	EditMaxAge:          ptr.Ptr(jsontime.S(15 * time.Minute)),
 	TypingNotifications: true,
 	Reply:               event.CapLevelFullySupported,

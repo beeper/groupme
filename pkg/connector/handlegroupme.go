@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -45,6 +46,12 @@ func (gc *GMClient) HandleError(err error) {
 
 func (gc *GMClient) HandleTextMessage(msg groupme.Message) {
 	if gc.handleMessageUpdate(msg) {
+		return
+	}
+	if evt, handled := gc.messageDeleteEvent(msg); handled {
+		if evt != nil {
+			gc.Main.br.QueueRemoteEvent(gc.UserLogin, evt)
+		}
 		return
 	}
 	if msg.ID == "" || msg.UserID == "" || gc.portalKeyForMessage(&msg).ID == "" {
@@ -180,10 +187,16 @@ func (gc *GMClient) convertGroupMeMessage(ctx context.Context, portal *bridgev2.
 			if err != nil {
 				return nil, fmt.Errorf("upload GroupMe attachment: %w", err)
 			}
+			info := &event.FileInfo{MimeType: mime, Size: len(data)}
+			if att.Type == groupme.Image {
+				if urlInfo := imageInfoFromURL(att.URL); urlInfo != nil {
+					info.Width, info.Height = urlInfo.Width, urlInfo.Height
+				}
+			}
 			content = &event.MessageEventContent{
 				MsgType: event.MessageType("m." + att.Type),
 				Body:    filename,
-				Info:    &event.FileInfo{MimeType: mime, Size: len(data)},
+				Info:    info,
 			}
 			if file != nil {
 				content.File = file
@@ -227,10 +240,10 @@ func (gc *GMClient) convertGroupMeMessage(ctx context.Context, portal *bridgev2.
 		})
 	}
 
-	if len(msg.Text) > 0 || len(cm.Parts) == 0 {
+	if text := visibleText(msg); len(text) > 0 || len(cm.Parts) == 0 {
 		content := &event.MessageEventContent{
 			MsgType: event.MsgText,
-			Body:    msg.Text,
+			Body:    text,
 		}
 		gc.applyMentions(content, msg.Attachments)
 		cm.Parts = append(cm.Parts, &bridgev2.ConvertedMessagePart{
@@ -241,6 +254,12 @@ func (gc *GMClient) convertGroupMeMessage(ctx context.Context, portal *bridgev2.
 	}
 
 	cm.MergeCaption()
+	// Replies resolve to the default part, so it must exist and stay on the
+	// same part whether or not the message has text, including across edits.
+	if i := slices.IndexFunc(cm.Parts, func(part *bridgev2.ConvertedMessagePart) bool { return part.ID == "" }); i > 0 {
+		cm.Parts[i].ID = "text"
+	}
+	cm.Parts[0].ID = ""
 	return cm, nil
 }
 
