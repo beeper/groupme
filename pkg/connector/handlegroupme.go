@@ -34,7 +34,6 @@ import (
 	"maunium.net/go/mautrix/event"
 
 	"github.com/beeper/groupme-lib"
-
 	"github.com/beeper/groupme/pkg/groupmeext"
 )
 
@@ -84,7 +83,25 @@ func isSystemMessage(msg *groupme.Message) bool {
 	return msg.UserID == "system" || msg.System
 }
 
+func groupCallStarter(msg *groupme.Message) groupme.ID {
+	if msg.Event == nil || msg.Event.Type != "group.call.started" {
+		return ""
+	}
+	var data struct {
+		User struct {
+			ID groupme.ID `json:"id"`
+		} `json:"user"`
+	}
+	if json.Unmarshal(msg.Event.Data, &data) != nil || data.User.ID == "system" {
+		return ""
+	}
+	return data.User.ID
+}
+
 func (gc *GMClient) messageSender(msg *groupme.Message) bridgev2.EventSender {
+	if caller := groupCallStarter(msg); caller != "" {
+		return bridgev2.EventSender{IsFromMe: string(caller) == gc.Meta.GMID, Sender: MakeUserID(caller)}
+	}
 	if isSystemMessage(msg) {
 		return bridgev2.EventSender{}
 	}
@@ -126,7 +143,7 @@ func (gc *GMClient) convertGroupMeMessage(ctx context.Context, portal *bridgev2.
 			}
 			meta.NativeContent = nativeContent(msg)
 			// Clients render bridge bot notices as system lines rather than as chat messages.
-			if isSystemMessage(msg) && part.Content.MsgType == event.MsgText {
+			if isSystemMessage(msg) && groupCallStarter(msg) == "" && part.Content.MsgType == event.MsgText {
 				part.Content.MsgType = event.MsgNotice
 			}
 		}
