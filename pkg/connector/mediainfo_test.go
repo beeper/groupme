@@ -5,8 +5,9 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/beeper/groupme-lib"
 	"maunium.net/go/mautrix/event"
+
+	"github.com/beeper/groupme-lib"
 )
 
 func TestVoiceNoteNativePeakFormats(t *testing.T) {
