@@ -34,7 +34,6 @@ import (
 	"maunium.net/go/mautrix/event"
 
 	"github.com/beeper/groupme-lib"
-
 	"github.com/beeper/groupme/pkg/groupmeext"
 )
 
@@ -80,8 +79,30 @@ func (gc *GMClient) makeRemoteMessage(msg groupme.Message) *simplevent.Message[*
 	}
 }
 
+func isSystemMessage(msg *groupme.Message) bool {
+	return msg.UserID == "system" || msg.System
+}
+
+func groupCallStarter(msg *groupme.Message) groupme.ID {
+	if msg.Event == nil || msg.Event.Type != "group.call.started" {
+		return ""
+	}
+	var data struct {
+		User struct {
+			ID groupme.ID `json:"id"`
+		} `json:"user"`
+	}
+	if json.Unmarshal(msg.Event.Data, &data) != nil || data.User.ID == "system" {
+		return ""
+	}
+	return data.User.ID
+}
+
 func (gc *GMClient) messageSender(msg *groupme.Message) bridgev2.EventSender {
-	if msg.UserID == "system" || msg.System {
+	if caller := groupCallStarter(msg); caller != "" {
+		return bridgev2.EventSender{IsFromMe: string(caller) == gc.Meta.GMID, Sender: MakeUserID(caller)}
+	}
+	if isSystemMessage(msg) {
 		return bridgev2.EventSender{}
 	}
 	return bridgev2.EventSender{IsFromMe: string(msg.UserID) == gc.Meta.GMID, Sender: MakeUserID(msg.UserID)}
@@ -90,7 +111,7 @@ func (gc *GMClient) messageSender(msg *groupme.Message) bridgev2.EventSender {
 func (gc *GMClient) convertMessage(ctx context.Context, portal *bridgev2.Portal, intent bridgev2.MatrixAPI, msg *groupme.Message) (*bridgev2.ConvertedMessage, error) {
 	// Message snapshots may fill a missing profile, never overwrite current
 	// account-level data. Conversion runs inside the framework event path.
-	if msg.Name != "" && string(msg.UserID) != gc.Meta.GMID && msg.UserID != "system" && !msg.System {
+	if msg.Name != "" && string(msg.UserID) != gc.Meta.GMID && !isSystemMessage(msg) {
 		ghost, err := gc.Main.br.GetGhostByID(ctx, MakeUserID(msg.UserID))
 		if err != nil {
 			return nil, err
@@ -121,6 +142,10 @@ func (gc *GMClient) convertGroupMeMessage(ctx context.Context, portal *bridgev2.
 				part.DBMetadata = meta
 			}
 			meta.NativeContent = nativeContent(msg)
+			// Clients render bridge bot notices as system lines rather than as chat messages.
+			if isSystemMessage(msg) && groupCallStarter(msg) == "" && part.Content.MsgType == event.MsgText {
+				part.Content.MsgType = event.MsgNotice
+			}
 		}
 	}()
 	log := zerolog.Ctx(ctx)
