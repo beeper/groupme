@@ -241,13 +241,15 @@ func (gc *GMClient) convertGroupMeMessage(ctx context.Context, portal *bridgev2.
 	}
 
 	if text := visibleText(msg); len(text) > 0 || len(cm.Parts) == 0 {
+		content := &event.MessageEventContent{
+			MsgType: event.MsgText,
+			Body:    text,
+		}
+		gc.applyMentions(content, msg.Attachments)
 		cm.Parts = append(cm.Parts, &bridgev2.ConvertedMessagePart{
-			ID:   "",
-			Type: event.EventMessage,
-			Content: &event.MessageEventContent{
-				MsgType: event.MsgText,
-				Body:    text,
-			},
+			ID:      "",
+			Type:    event.EventMessage,
+			Content: content,
 		})
 	}
 
