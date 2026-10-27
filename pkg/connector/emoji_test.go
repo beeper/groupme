@@ -6,8 +6,9 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/beeper/groupme-lib"
 	"maunium.net/go/mautrix/event"
+
+	"github.com/beeper/groupme-lib"
 )
 
 func TestGroupMeEmojiConversion(t *testing.T) {
