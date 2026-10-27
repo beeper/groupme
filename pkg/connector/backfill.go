@@ -154,6 +154,18 @@ func (gc *GMClient) FetchMessages(ctx context.Context, params bridgev2.FetchMess
 		AggressiveDeduplication: true,
 		MarkRead:                params.AnchorMessage == nil,
 	}
+	if resp.MarkRead && len(messages) > 0 {
+		if checkpoint := gc.readCheckpointBehind(params.Portal.ID, messages[len(messages)-1].ID); checkpoint != nil {
+			resp.MarkRead = false
+			resp.CompleteCallback = func() {
+				go func() {
+					if evt := gc.readCheckpointEvent(*checkpoint); evt != nil {
+						gc.Main.br.QueueRemoteEvent(gc.UserLogin, evt)
+					}
+				}()
+			}
+		}
+	}
 	for _, msg := range messages {
 		sender := gc.messageSender(msg)
 		intent, ok := params.Portal.GetIntentFor(ctx, sender, gc.UserLogin, bridgev2.RemoteEventMessage)

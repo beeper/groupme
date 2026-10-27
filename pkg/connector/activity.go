@@ -97,6 +97,7 @@ func (gc *GMClient) HandleMatrixReadReceipt(ctx context.Context, msg *bridgev2.M
 	if err = groupmeext.MarkRead(ctx, gc.Meta.Token, conversation, ParseMessageID(target.ID)); err != nil {
 		return wrapGroupMeError(err, "failed to mark as read")
 	}
+	gc.recordReadCheckpoint(conversation, ParseMessageID(target.ID))
 	// bridgev2 invokes this for public m.read only. Implicit receipts from
 	// sending a message update our checkpoint without publishing a seen event.
 	if kind, _ := ParsePortalID(msg.Portal.ID); kind == PortalTypeDM && !msg.Implicit {
@@ -108,6 +109,7 @@ func (gc *GMClient) HandleMatrixReadReceipt(ctx context.Context, msg *bridgev2.M
 }
 
 func (gc *GMClient) readCheckpointEvent(receipt groupmeext.ReadCheckpoint) *nativeReceipt {
+	gc.recordReadCheckpoint(receipt.ConversationID, receipt.LastReadMessageID)
 	key := gc.portalForConversation(receipt.ConversationID)
 	if key.ID == "" || receipt.LastReadMessageID == "" {
 		return nil
@@ -117,6 +119,45 @@ func (gc *GMClient) readCheckpointEvent(receipt groupmeext.ReadCheckpoint) *nati
 			Sender: bridgev2.EventSender{IsFromMe: true, Sender: MakeUserID(groupme.ID(gc.Meta.GMID))}},
 		LastTarget: MakeMessageID(receipt.LastReadMessageID),
 	}}
+}
+
+func (gc *GMClient) loadReadCheckpoints(ctx context.Context) {
+	receipts, err := groupmeext.GetReadCheckpoints(ctx, gc.Meta.Token)
+	if err != nil {
+		gc.UserLogin.Log.Warn().Err(err).Msg("Failed to load GroupMe read checkpoints for backfill")
+		return
+	}
+	for _, receipt := range receipts {
+		gc.recordReadCheckpoint(receipt.ConversationID, receipt.LastReadMessageID)
+	}
+}
+
+func (gc *GMClient) recordReadCheckpoint(conversation, lastRead groupme.ID) {
+	if conversation == "" || lastRead == "" {
+		return
+	}
+	gc.readCheckpointsMu.Lock()
+	defer gc.readCheckpointsMu.Unlock()
+	if gc.readCheckpoints == nil {
+		gc.readCheckpoints = make(map[groupme.ID]groupme.ID)
+	}
+	if existing, ok := gc.readCheckpoints[conversation]; !ok || compareMessageIDs(lastRead, existing) > 0 {
+		gc.readCheckpoints[conversation] = lastRead
+	}
+}
+
+func (gc *GMClient) readCheckpointBehind(portalID networkid.PortalID, newest groupme.ID) *groupmeext.ReadCheckpoint {
+	conversation, err := gc.conversationID(portalID)
+	if err != nil {
+		return nil
+	}
+	gc.readCheckpointsMu.Lock()
+	lastRead, ok := gc.readCheckpoints[conversation]
+	gc.readCheckpointsMu.Unlock()
+	if !ok || compareMessageIDs(lastRead, newest) >= 0 {
+		return nil
+	}
+	return &groupmeext.ReadCheckpoint{ConversationID: conversation, LastReadMessageID: lastRead}
 }
 
 func (gc *GMClient) syncReadCheckpoints(ctx context.Context) {
@@ -209,6 +250,11 @@ func (gc *GMClient) parseActivity(msg groupme.PushMessage) ([]bridgev2.RemoteEve
 		_, peer := ParsePortalID(key.ID)
 		if key.ID == "" || subject.MessageID == "" || (subject.UserID != peer && string(subject.UserID) != gc.Meta.GMID) {
 			return nil, true
+		}
+		if string(subject.UserID) == gc.Meta.GMID {
+			if conversation, err := gc.conversationID(key.ID); err == nil {
+				gc.recordReadCheckpoint(conversation, subject.MessageID)
+			}
 		}
 		events = append(events, &nativeReceipt{client: gc, Receipt: &simplevent.Receipt{
 			EventMeta: simplevent.EventMeta{Type: bridgev2.RemoteEventReadReceipt, PortalKey: key,
