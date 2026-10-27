@@ -93,6 +93,7 @@ var roomCaps = &event.RoomFeatures{
 	},
 	MaxTextLength:       1000,
 	Edit:                event.CapLevelPartialSupport,
+	Delete:              event.CapLevelFullySupported,
 	EditMaxAge:          ptr.Ptr(jsontime.S(15 * time.Minute)),
 	TypingNotifications: true,
 	Reply:               event.CapLevelFullySupported,
