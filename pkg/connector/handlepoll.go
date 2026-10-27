@@ -20,7 +20,7 @@ var _ bridgev2.PollHandlingNetworkAPI = (*GMClient)(nil)
 // Only voting on received polls is implemented. The interface also requires a
 // creation handler, and the shared poll capability therefore stays partial.
 func (gc *GMClient) HandleMatrixPollStart(context.Context, *bridgev2.MatrixPollStart) (*bridgev2.MatrixMessageResponse, error) {
-	return nil, bridgev2.ErrPollsNotSupported
+	return nil, permanentFailure(event.MessageStatusUnsupported, "GroupMe polls can only be created in the GroupMe app")
 }
 
 func (gc *GMClient) HandleMatrixPollVote(ctx context.Context, msg *bridgev2.MatrixPollVote) (*bridgev2.MatrixMessageResponse, error) {
