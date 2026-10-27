@@ -122,6 +122,10 @@ func (gc *GMClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.Matri
 	if gmid == "" || (portalType != PortalTypeGroup && portalType != PortalTypeDM) {
 		return nil, fmt.Errorf("invalid GroupMe portal")
 	}
+	if content.MsgType == event.MsgAudio && content.MSC3245Voice == nil {
+		// GroupMe only has voice notes; other audio isn't in the room capabilities.
+		return nil, bridgev2.ErrUnsupportedMessageType
+	}
 	text := content.Body
 	switch content.MsgType {
 	case event.MsgImage, event.MsgVideo, event.MsgFile:
