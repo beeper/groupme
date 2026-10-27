@@ -26,6 +26,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"maunium.net/go/mautrix/event"
 
@@ -68,14 +69,14 @@ func sameMediaURL(a, b string) bool {
 func visibleText(msg *groupme.Message) string {
 	text := msg.Text
 	for {
-		trimmed := strings.TrimSpace(text)
+		trimmed := strings.TrimRightFunc(text, unicode.IsSpace)
 		cut := strings.LastIndexAny(trimmed, " \t\n") + 1
 		if !slices.ContainsFunc(msg.Attachments, func(att *groupme.Attachment) bool {
 			return att != nil && (att.Type == groupme.Image || att.Type == groupme.Video) && sameMediaURL(trimmed[cut:], att.URL)
 		}) {
 			break
 		}
-		text = strings.TrimSpace(trimmed[:cut])
+		text = strings.TrimRightFunc(trimmed[:cut], unicode.IsSpace)
 	}
 	// File attachments are only bridged in groups.
 	if msg.GroupID != "" && strings.HasPrefix(text, "Shared a document:") && slices.ContainsFunc(msg.Attachments, func(att *groupme.Attachment) bool {

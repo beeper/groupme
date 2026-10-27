@@ -5,6 +5,7 @@
 | Group and DM text | ✅ | ✅ |
 | Formatting | Plain text | Flattened to plain text |
 | Replies | ✅ | ✅ |
+| Mentions | ✅ | ✅ |
 | Images and GIFs | ✅ | ✅ |
 | Video | ✅ | ⚠️ Uploads, but GroupMe can't play it back |
 | Voice notes | ✅ | ✅ |

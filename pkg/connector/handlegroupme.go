@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -243,17 +244,25 @@ func (gc *GMClient) convertGroupMeMessage(ctx context.Context, portal *bridgev2.
 	}
 
 	if text := visibleText(msg); len(text) > 0 || len(cm.Parts) == 0 {
+		content := &event.MessageEventContent{
+			MsgType: event.MsgText,
+			Body:    text,
+		}
+		gc.applyMentions(content, msg.Attachments)
 		cm.Parts = append(cm.Parts, &bridgev2.ConvertedMessagePart{
-			ID:   "",
-			Type: event.EventMessage,
-			Content: &event.MessageEventContent{
-				MsgType: event.MsgText,
-				Body:    text,
-			},
+			ID:      "",
+			Type:    event.EventMessage,
+			Content: content,
 		})
 	}
 
 	cm.MergeCaption()
+	// Replies resolve to the default part, so it must exist and stay on the
+	// same part whether or not the message has text, including across edits.
+	if i := slices.IndexFunc(cm.Parts, func(part *bridgev2.ConvertedMessagePart) bool { return part.ID == "" }); i > 0 {
+		cm.Parts[i].ID = "text"
+	}
+	cm.Parts[0].ID = ""
 	return cm, nil
 }
 

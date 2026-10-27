@@ -118,27 +118,25 @@ func (gc *GMClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.Matri
 		return nil, permanentFailure(event.MessageStatusUnsupported, "GroupMe replies cannot target poll votes").WithSendNotice(true)
 	}
 	content := msg.Content
-	text := content.Body
-	if content.Format == event.FormatHTML && content.FormattedBody != "" {
-		text = groupmeHTMLParser.Parse(content.FormattedBody, format.NewContext(ctx))
-	}
-	if content.MsgType == event.MsgEmote {
-		text = "/me " + text
-	}
-
 	portalType, gmid := ParsePortalID(msg.Portal.ID)
 	if gmid == "" || (portalType != PortalTypeGroup && portalType != PortalTypeDM) {
 		return nil, fmt.Errorf("invalid GroupMe portal")
 	}
+	text := content.Body
 	switch content.MsgType {
 	case event.MsgImage, event.MsgVideo, event.MsgFile:
 		text = content.GetCaption()
-		if text != "" && content.Format == event.FormatHTML && content.FormattedBody != "" {
-			text = groupmeHTMLParser.Parse(content.FormattedBody, format.NewContext(ctx))
-		}
 	case event.MsgAudio:
 		text = ""
 	}
+	fmtCtx := format.NewContext(ctx)
+	if text != "" && content.Format == event.FormatHTML && content.FormattedBody != "" {
+		text = gc.htmlParser().Parse(content.FormattedBody, fmtCtx)
+	}
+	if content.MsgType == event.MsgEmote {
+		text = "/me " + text
+	}
+	text, mentions := takeMentions(text, fmtCtx)
 	if utf8.RuneCountInString(text) > 1000 {
 		return nil, permanentFailure(event.MessageStatusUnsupported, "GroupMe messages are limited to 1000 characters").WithSendNotice(true)
 	}
@@ -172,6 +170,9 @@ func (gc *GMClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.Matri
 		return nil, bridgev2.ErrUnsupportedMessageType
 	}
 
+	if mentions != nil && out.Text != "" {
+		out.Attachments = append(out.Attachments, mentions)
+	}
 	if msg.ReplyTo != nil {
 		out.Attachments = append(out.Attachments, &groupme.Attachment{
 			Type:        groupme.Reply,
