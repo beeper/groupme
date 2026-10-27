@@ -194,7 +194,6 @@ func (gc *GMClient) parseActivity(msg groupme.PushMessage) ([]bridgev2.RemoteEve
 	}
 	var data struct {
 		UserID  groupme.ID `json:"user_id"`
-		Started int64      `json:"started"`
 		Subject struct {
 			ID        groupme.ID                  `json:"id"`
 			ChatID    groupme.ID                  `json:"chat_id"`
@@ -233,16 +232,12 @@ func (gc *GMClient) parseActivity(msg groupme.PushMessage) ([]bridgev2.RemoteEve
 		} else if group, ok := strings.CutPrefix(msg.Channel(), "/group/"); ok {
 			key = gc.portalKeyForGroup(groupme.ID(group))
 		}
-		timeout := time.Until(time.UnixMilli(data.Started).Add(5 * time.Second))
-		if key.ID == "" || timeout <= 0 {
+		if key.ID == "" {
 			return nil, true
-		}
-		if timeout > 5*time.Second {
-			timeout = 5 * time.Second
 		}
 		events = append(events, &simplevent.Typing{
 			EventMeta: simplevent.EventMeta{Type: bridgev2.RemoteEventTyping, PortalKey: key, Sender: bridgev2.EventSender{Sender: MakeUserID(data.UserID)}},
-			Timeout:   timeout, Type: bridgev2.TypingTypeText,
+			Timeout:   5 * time.Second, Type: bridgev2.TypingTypeText,
 		})
 	case "read_receipt.create":
 		subject := data.Subject
