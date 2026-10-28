@@ -92,6 +92,11 @@ func visibleText(msg *groupme.Message) string {
 	}) {
 		return ""
 	}
+	if groupmeext.IsGiphyImageURL(strings.TrimSpace(text)) && slices.ContainsFunc(msg.Attachments, func(att *groupme.Attachment) bool {
+		return att != nil && (att.Type == "linked_image" || att.Type == "postprocessing")
+	}) {
+		return ""
+	}
 	return text
 }
 

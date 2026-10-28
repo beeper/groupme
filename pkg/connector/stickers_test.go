@@ -67,7 +67,7 @@ func TestStickerPushAndHistory(t *testing.T) {
 				t.Fatalf("unexpected sticker parts: %+v", converted)
 			}
 			content := converted.Parts[0].Content
-			if content.MsgType != event.MsgImage || content.URL != "mxc://test/sticker" || content.Info.MimeType != "image/gif" || content.Body != source {
+			if content.MsgType != event.MsgImage || content.URL != "mxc://test/sticker" || content.Info.MimeType != "image/gif" || content.Body != "image" || content.FileName != "" {
 				t.Fatalf("sticker is not a renderable image: %+v", content)
 			}
 			if string(msg.Attachments[0].Type) == "image" {
