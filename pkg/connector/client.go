@@ -235,7 +235,6 @@ func (gc *GMClient) runSession(ctx context.Context) {
 		}
 		if err != nil {
 			gc.connectFailed(err)
-			stop()
 			return
 		}
 		gc.UserLogin.BridgeState.Send(status.BridgeState{StateEvent: status.StateConnected})
