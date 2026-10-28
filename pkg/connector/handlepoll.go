@@ -17,10 +17,51 @@ import (
 
 var _ bridgev2.PollHandlingNetworkAPI = (*GMClient)(nil)
 
-// Only voting on received polls is implemented. The interface also requires a
-// creation handler, and the shared poll capability therefore stays partial.
-func (gc *GMClient) HandleMatrixPollStart(context.Context, *bridgev2.MatrixPollStart) (*bridgev2.MatrixMessageResponse, error) {
-	return nil, permanentFailure(event.MessageStatusUnsupported, "GroupMe polls can only be created in the GroupMe app")
+// GroupMe polls require an expiration, even though Matrix polls stay open until ended.
+func (gc *GMClient) HandleMatrixPollStart(ctx context.Context, msg *bridgev2.MatrixPollStart) (*bridgev2.MatrixMessageResponse, error) {
+	portalType, groupID := ParsePortalID(msg.Portal.ID)
+	if portalType != PortalTypeGroup {
+		return nil, permanentFailure(event.MessageStatusUnsupported, "GroupMe polls can only be created in groups")
+	}
+	start := msg.Content.PollStart
+	request := &groupme.CreatePollRequest{
+		Subject:    start.Question.GetText(),
+		Options:    make([]groupme.PollOption, len(start.Answers)),
+		Expiration: groupme.Timestamp(time.Now().Add(14*24*time.Hour - time.Minute).Unix()),
+		Visibility: "public",
+		Type:       "single",
+	}
+	if start.MaxSelections > 1 {
+		request.Type = "multi"
+	}
+	for i, answer := range start.Answers {
+		if answer.ID == "" || slices.ContainsFunc(start.Answers[:i], func(previous event.PollOption) bool { return previous.ID == answer.ID }) {
+			return nil, permanentFailure(event.MessageStatusUnsupported, "Poll answer IDs must be non-empty and unique")
+		}
+		request.Options[i].Title = answer.GetText()
+	}
+	poll, messageID, err := gc.Client.CreatePoll(ctx, string(groupID), request)
+	if err != nil {
+		status := wrapGroupMeError(err, "failed to create poll")
+		var meta *groupme.Meta
+		if status.Status == event.MessageStatusFail && errors.As(err, &meta) && len(meta.Errors) > 0 {
+			status = status.WithMessage(strings.Join(meta.Errors, "; "))
+		}
+		return nil, status
+	}
+	if len(poll.Options) != len(start.Answers) {
+		return nil, wrapGroupMeError(errors.New("GroupMe returned a different number of poll options"), "unexpected response from GroupMe")
+	}
+	answerIDs := make(map[string]string, len(start.Answers))
+	for i, answer := range start.Answers {
+		answerIDs[answer.ID] = poll.Options[i].ID
+	}
+	return &bridgev2.MatrixMessageResponse{DB: &database.Message{
+		ID:        MakeMessageID(messageID),
+		SenderID:  MakeUserID(groupme.ID(gc.Meta.GMID)),
+		Timestamp: poll.CreatedAt.ToTime(),
+		Metadata:  &MessageMetadata{PollID: poll.ID, PollAnswerIDs: answerIDs},
+	}}, nil
 }
 
 func (gc *GMClient) HandleMatrixPollVote(ctx context.Context, msg *bridgev2.MatrixPollVote) (*bridgev2.MatrixMessageResponse, error) {
@@ -39,7 +80,16 @@ func (gc *GMClient) HandleMatrixPollVote(ctx context.Context, msg *bridgev2.Matr
 	if poll.Status != "active" || (poll.Expiration > 0 && !poll.Expiration.ToTime().After(time.Now())) {
 		return nil, pollVoteError("This GroupMe poll has ended")
 	}
-	answers := msg.Content.Response.Answers
+	answers := slices.Clone(msg.Content.Response.Answers)
+	if meta.PollAnswerIDs != nil {
+		for i, answer := range answers {
+			optionID, ok := meta.PollAnswerIDs[answer]
+			if !ok {
+				return nil, pollVoteError("Unknown GroupMe poll answer")
+			}
+			answers[i] = optionID
+		}
+	}
 	if len(answers) == 0 {
 		return nil, pollVoteError("GroupMe vote withdrawal is not supported")
 	}

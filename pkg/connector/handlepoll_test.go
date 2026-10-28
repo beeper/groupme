@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"maunium.net/go/mautrix/bridgev2"
 	"maunium.net/go/mautrix/bridgev2/database"
@@ -102,6 +104,102 @@ func TestPollVoteRemoteResponses(t *testing.T) {
 			result, err := dmTestClient().HandleMatrixPollVote(context.Background(), msg)
 			if calls != 2 || (err != nil) != tc.wantError {
 				t.Fatalf("calls=%d error=%v result=%+v", calls, err, result)
+			}
+		})
+	}
+}
+
+func TestCreatedPollAnswerIDs(t *testing.T) {
+	for _, tc := range []struct {
+		name, kind              string
+		ids, votes, nativeVotes []string
+	}{
+		{"single", "single", []string{"1", "2"}, []string{"2"}, []string{"9"}},
+		{"multi", "multi", []string{"a7f", "q2x", "k9z"}, []string{"a7f", "k9z"}, []string{"7", "11"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			start := event.PollStart{Question: event.MSC1767Message{Text: "Choose"}, MaxSelections: 1}
+			native := groupme.PollDetail{ID: "poll-1", ConversationID: "88", CreatedAt: 1793204604, Expiration: 4000000000, Status: "active", Type: tc.kind}
+			for i, id := range tc.ids {
+				start.Answers = append(start.Answers, event.PollOption{ID: id, MSC1767Message: event.MSC1767Message{Text: id}})
+				native.Options = append(native.Options, groupme.PollOption{ID: []string{"7", "9", "11"}[i], Title: id})
+			}
+			if tc.kind == "multi" {
+				start.MaxSelections = 3
+			}
+			calls := 0
+			mockGroupMe(t, func(r *http.Request) (int, string) {
+				calls++
+				switch calls {
+				case 1:
+					var request groupme.CreatePollRequest
+					if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+						t.Fatal(err)
+					}
+					lifetime := time.Until(request.Expiration.ToTime())
+					if r.Method != "POST" || r.URL.Path != "/v3/poll/88" || request.Subject != "Choose" || request.Type != tc.kind || request.Visibility != "public" || lifetime > 14*24*time.Hour-time.Minute || lifetime < 14*24*time.Hour-2*time.Minute {
+						t.Fatalf("unexpected create request: %+v", request)
+					}
+					for i, option := range request.Options {
+						if option.ID != "" || option.Title != tc.ids[i] {
+							t.Fatalf("unexpected option: %+v", option)
+						}
+					}
+				case 2:
+					if r.Method != "GET" || r.URL.Path != "/v3/poll/88/poll-1" {
+						t.Fatalf("unexpected fetch: %s %s", r.Method, r.URL.Path)
+					}
+				case 3:
+					if r.Method != "POST" {
+						t.Fatal(r.Method)
+					}
+					if tc.kind == "single" {
+						if r.URL.Path != "/v3/poll/88/poll-1/9" {
+							t.Fatal(r.URL.Path)
+						}
+					} else {
+						var body struct {
+							Votes []string `json:"votes"`
+						}
+						_ = json.NewDecoder(r.Body).Decode(&body)
+						if r.URL.Path != "/v3/poll/88/poll-1" || !slices.Equal(body.Votes, tc.nativeVotes) {
+							t.Fatalf("wrong vote: %s %+v", r.URL.Path, body)
+						}
+					}
+				default:
+					t.Fatal("unexpected request")
+				}
+				response, _ := json.Marshal(map[string]any{"response": map[string]any{"poll": map[string]any{"data": native, "user_votes": tc.nativeVotes}, "message": map[string]any{"id": "announcement-1"}}})
+				return 201, string(response)
+			})
+			client := dmTestClient()
+			base := testMatrixText("group:88")
+			created, err := client.HandleMatrixPollStart(context.Background(), &bridgev2.MatrixPollStart{MatrixMessage: *base, Content: &event.PollStartEventContent{PollStart: start}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if created.DB.ID != "announcement-1" {
+				t.Fatalf("wrong echo identity: %s", created.DB.ID)
+			}
+			persisted, err := json.Marshal(created.DB.Metadata)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var metadata MessageMetadata
+			if err = json.Unmarshal(persisted, &metadata); err != nil {
+				t.Fatal(err)
+			}
+			if metadata.PollID != "poll-1" || len(metadata.PollAnswerIDs) != len(tc.ids) {
+				t.Fatalf("incorrect persisted mapping: %s", persisted)
+			}
+			created.DB.Room = base.Portal.PortalKey
+			created.DB.Metadata = &metadata
+			vote := &bridgev2.MatrixPollVote{MatrixMessage: *base, VoteTo: created.DB, Content: &event.PollResponseEventContent{Response: event.PollResponse{Answers: tc.votes}}}
+			if _, err = client.HandleMatrixPollVote(context.Background(), vote); err != nil {
+				t.Fatal(err)
+			}
+			if calls != 3 || !slices.Equal(vote.Content.Response.Answers, tc.votes) {
+				t.Fatalf("calls=%d, mutated Matrix answers: %v", calls, vote.Content.Response.Answers)
 			}
 		})
 	}
