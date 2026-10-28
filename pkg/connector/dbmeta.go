@@ -18,7 +18,12 @@
 package connector
 
 import (
+	"encoding/json"
+	"fmt"
+	"sync"
+
 	"maunium.net/go/mautrix/bridgev2/database"
+	"maunium.net/go/mautrix/bridgev2/networkid"
 
 	"github.com/beeper/groupme-lib"
 	"github.com/beeper/groupme/pkg/groupmeext"
@@ -27,8 +32,43 @@ import (
 // UserLoginMetadata is stored on the bridgev2 UserLogin row and holds the
 // GroupMe access token that was obtained during login.
 type UserLoginMetadata struct {
-	Token string `json:"token"`
-	GMID  string `json:"gmid"`
+	Token       string      `json:"token"`
+	GMID        string      `json:"gmid"`
+	ActivePolls ActivePolls `json:"active_polls"`
+}
+
+func (m *UserLoginMetadata) CopyFrom(other any) {
+	otherMeta, ok := other.(*UserLoginMetadata)
+	if !ok || otherMeta == nil {
+		panic(fmt.Errorf("invalid type %T provided to UserLoginMetadata.CopyFrom", other))
+	}
+	m.Token, m.GMID = otherMeta.Token, otherMeta.GMID
+}
+
+// ActivePolls marshals under its own lock because the framework can save the
+// login while the poller is changing it.
+type ActivePolls struct {
+	sync.Mutex
+	polls map[string]*ActivePoll
+}
+
+func (ap *ActivePolls) MarshalJSON() ([]byte, error) {
+	ap.Lock()
+	defer ap.Unlock()
+	return json.Marshal(ap.polls)
+}
+
+func (ap *ActivePolls) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &ap.polls)
+}
+
+type ActivePoll struct {
+	GroupID    groupme.ID          `json:"group_id"`
+	MessageID  networkid.MessageID `json:"message_id"`
+	Expiration groupme.Timestamp   `json:"expiration"`
+	Selections map[string][]string `json:"selections"`
+	voting     bool
+	revision   uint64
 }
 
 // PortalType distinguishes GroupMe groups from GroupMe direct messages. Both

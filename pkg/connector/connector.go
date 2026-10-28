@@ -28,6 +28,7 @@ import (
 )
 
 type GMConnector struct {
+	Config         Config
 	br             *bridgev2.Bridge
 	useDirectMedia bool
 }
@@ -46,7 +47,7 @@ func (gc *GMConnector) Start(ctx context.Context) error {
 }
 
 func (gc *GMConnector) GetConfig() (example string, data any, upgrader configupgrade.Upgrader) {
-	return "", nil, nil
+	return ExampleConfig, &gc.Config, configupgrade.SimpleUpgrader(upgradeConfig)
 }
 
 func (gc *GMConnector) GetName() bridgev2.BridgeName {

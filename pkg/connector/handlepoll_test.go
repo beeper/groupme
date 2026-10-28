@@ -40,7 +40,7 @@ func TestPollConversionRemoteResponses(t *testing.T) {
 				return tc.status, tc.response
 			})
 			msg := &groupme.Message{GroupID: "88", Event: &groupme.Event{Type: "poll.created", Data: json.RawMessage(`{"conversation":{"id":"88"},"poll":{"id":"poll-1","subject":"Choose"}}`)}}
-			part := convertGroupMePollEvent(context.Background(), dmTestClient().Client, msg)
+			part := pollTestClient(t).convertGroupMePollEvent(context.Background(), msg)
 			if part == nil {
 				t.Fatal("poll disappeared")
 			}
@@ -101,9 +101,21 @@ func TestPollVoteRemoteResponses(t *testing.T) {
 			})
 			base := testMatrixText("group:88")
 			msg := &bridgev2.MatrixPollVote{MatrixMessage: *base, VoteTo: &database.Message{Room: base.Portal.PortalKey, Metadata: &MessageMetadata{PollID: "poll-1"}}, Content: &event.PollResponseEventContent{Response: event.PollResponse{Answers: tc.answers}}}
-			result, err := dmTestClient().HandleMatrixPollVote(context.Background(), msg)
+			client := pollTestClient(t)
+			result, err := client.HandleMatrixPollVote(context.Background(), msg)
 			if calls != 2 || (err != nil) != tc.wantError {
 				t.Fatalf("calls=%d error=%v result=%+v", calls, err, result)
+			}
+			if err == nil {
+				stored, saveErr := client.Main.br.DB.UserLogin.GetByID(context.Background(), client.UserLogin.ID)
+				if saveErr != nil {
+					t.Fatal(saveErr)
+				}
+				want := slices.Clone(tc.answers)
+				slices.Sort(want)
+				if !slices.Equal(stored.Metadata.(*UserLoginMetadata).ActivePolls.polls["poll-1"].Selections["20"], want) || result.DB.ID != "poll-vote:$outgoing-test" || result.DB.Timestamp != msg.VoteTo.Timestamp.Add(-time.Nanosecond) {
+					t.Fatalf("vote selection or mapping was not preserved: %+v", result.DB)
+				}
 			}
 		})
 	}
@@ -172,7 +184,7 @@ func TestCreatedPollAnswerIDs(t *testing.T) {
 				response, _ := json.Marshal(map[string]any{"response": map[string]any{"poll": map[string]any{"data": native, "user_votes": tc.nativeVotes}, "message": map[string]any{"id": "announcement-1"}}})
 				return 201, string(response)
 			})
-			client := dmTestClient()
+			client := pollTestClient(t)
 			base := testMatrixText("group:88")
 			created, err := client.HandleMatrixPollStart(context.Background(), &bridgev2.MatrixPollStart{MatrixMessage: *base, Content: &event.PollStartEventContent{PollStart: start}})
 			if err != nil {

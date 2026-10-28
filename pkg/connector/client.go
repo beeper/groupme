@@ -101,6 +101,17 @@ func (gc *GMClient) Connect(ctx context.Context) {
 	go func() {
 		defer close(done)
 		defer cancel()
+		if !gc.Main.Config.DisablePollPolling {
+			pollsDone := make(chan struct{})
+			go func() {
+				defer close(pollsDone)
+				gc.pollActivePolls(runCtx)
+			}()
+			defer func() {
+				cancel()
+				<-pollsDone
+			}()
+		}
 		gc.runSession(runCtx)
 	}()
 }
