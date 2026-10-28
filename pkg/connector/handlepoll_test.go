@@ -113,7 +113,7 @@ func TestPollVoteRemoteResponses(t *testing.T) {
 				}
 				want := slices.Clone(tc.answers)
 				slices.Sort(want)
-				if !slices.Equal(stored.Metadata.(*UserLoginMetadata).ActivePolls["poll-1"].Selections["20"], want) || result.DB.ID != "poll-vote:$outgoing-test" || result.DB.Timestamp != msg.VoteTo.Timestamp.Add(-time.Nanosecond) {
+				if !slices.Equal(stored.Metadata.(*UserLoginMetadata).ActivePolls.polls["poll-1"].Selections["20"], want) || result.DB.ID != "poll-vote:$outgoing-test" || result.DB.Timestamp != msg.VoteTo.Timestamp.Add(-time.Nanosecond) {
 					t.Fatalf("vote selection or mapping was not preserved: %+v", result.DB)
 				}
 			}

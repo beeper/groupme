@@ -55,8 +55,6 @@ type GMClient struct {
 
 	readCheckpointsMu sync.Mutex
 	readCheckpoints   map[groupme.ID]groupme.ID
-
-	pollsMu sync.Mutex
 }
 
 var _ bridgev2.NetworkAPI = (*GMClient)(nil)
@@ -240,8 +238,6 @@ func (gc *GMClient) syncRemoteProfile(ctx context.Context, me *groupme.User) {
 	}
 	ghost.UpdateInfo(ctx, &bridgev2.UserInfo{Name: ptr.Ptr(me.Name), Avatar: gc.avatarIfSet(ctx, cmp.Or(me.ImageURL, me.AvatarURL))})
 	profile := gc.UserLogin.RemoteProfile
-	gc.pollsMu.Lock()
-	defer gc.pollsMu.Unlock()
 	profile.Name, profile.Avatar = me.Name, ghost.AvatarMXC
 	if gc.UserLogin.RemoteName == me.Name && gc.UserLogin.RemoteProfile == profile {
 		return

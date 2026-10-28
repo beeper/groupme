@@ -106,20 +106,21 @@ func (gc *GMClient) HandleMatrixPollVote(ctx context.Context, msg *bridgev2.Matr
 			return nil, pollVoteError("Unknown or repeated GroupMe poll option")
 		}
 	}
-	gc.pollsMu.Lock()
-	tracked := gc.Meta.ActivePolls[poll.ID]
+	active := &gc.Meta.ActivePolls
+	active.Lock()
+	tracked := active.polls[poll.ID]
 	if tracked != nil {
 		tracked.voting = true
 		tracked.revision++
 	}
-	gc.pollsMu.Unlock()
+	active.Unlock()
 	defer func() {
-		gc.pollsMu.Lock()
+		active.Lock()
 		if tracked != nil {
 			tracked.voting = false
 			tracked.revision++
 		}
-		gc.pollsMu.Unlock()
+		active.Unlock()
 	}()
 	result, err := gc.Client.VotePoll(ctx, string(groupID), meta.PollID, answers, poll.Type == "multi")
 	if err != nil {
@@ -131,12 +132,15 @@ func (gc *GMClient) HandleMatrixPollVote(ctx context.Context, msg *bridgev2.Matr
 	if !slices.Equal(confirmed, expected) {
 		return nil, wrapGroupMeError(errors.New("GroupMe did not confirm the requested poll selection"), "unexpected response from GroupMe")
 	}
-	gc.pollsMu.Lock()
-	if tracked := gc.Meta.ActivePolls[poll.ID]; tracked != nil {
+	active.Lock()
+	tracked = active.polls[poll.ID]
+	if tracked != nil {
 		tracked.Selections[gc.Meta.GMID] = confirmed
+	}
+	active.Unlock()
+	if tracked != nil {
 		gc.savePolls(ctx)
 	}
-	gc.pollsMu.Unlock()
 	// GroupMe returns poll state without a message ID. Use the originating
 	// Matrix event to identify this action in the framework's message mapping,
 	// dated before the poll so it never becomes the newest message catch-up

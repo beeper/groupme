@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"maps"
+	"net/http"
 	"slices"
 	"time"
 
@@ -23,7 +24,7 @@ func pollIsActive(poll *groupme.PollDetail, now time.Time) bool {
 
 func pollIsGone(err error) bool {
 	var meta *groupme.Meta
-	return errors.As(err, &meta) && meta.Code >= 400 && meta.Code < 500
+	return errors.As(err, &meta) && (meta.Code == http.StatusForbidden || meta.Code == http.StatusNotFound)
 }
 
 func (gc *GMClient) savePolls(ctx context.Context) {
@@ -36,18 +37,20 @@ func (gc *GMClient) trackPoll(ctx context.Context, groupID groupme.ID, messageID
 	if !pollIsActive(poll, time.Now()) {
 		return
 	}
-	gc.pollsMu.Lock()
-	defer gc.pollsMu.Unlock()
-	if gc.Meta.ActivePolls[poll.ID] != nil {
+	active := &gc.Meta.ActivePolls
+	active.Lock()
+	if active.polls[poll.ID] != nil {
+		active.Unlock()
 		return
 	}
-	if gc.Meta.ActivePolls == nil {
-		gc.Meta.ActivePolls = make(map[string]*ActivePoll)
+	if active.polls == nil {
+		active.polls = make(map[string]*ActivePoll)
 	}
-	gc.Meta.ActivePolls[poll.ID] = &ActivePoll{
+	active.polls[poll.ID] = &ActivePoll{
 		GroupID: groupID, MessageID: messageID, Expiration: poll.Expiration,
 		Selections: make(map[string][]string),
 	}
+	active.Unlock()
 	gc.savePolls(ctx)
 }
 
@@ -117,9 +120,9 @@ func (gc *GMClient) pollActivePolls(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			gc.pollsMu.Lock()
-			pollIDs := slices.Collect(maps.Keys(gc.Meta.ActivePolls))
-			gc.pollsMu.Unlock()
+			gc.Meta.ActivePolls.Lock()
+			pollIDs := slices.Collect(maps.Keys(gc.Meta.ActivePolls.polls))
+			gc.Meta.ActivePolls.Unlock()
 			for _, pollID := range pollIDs {
 				if ctx.Err() != nil {
 					return
@@ -131,55 +134,65 @@ func (gc *GMClient) pollActivePolls(ctx context.Context) {
 }
 
 func (gc *GMClient) refreshPoll(ctx context.Context, pollID string) {
-	gc.pollsMu.Lock()
-	tracked := gc.Meta.ActivePolls[pollID]
+	active := &gc.Meta.ActivePolls
+	active.Lock()
+	tracked := active.polls[pollID]
 	if tracked == nil || tracked.voting {
-		gc.pollsMu.Unlock()
+		active.Unlock()
 		return
 	}
 	if !tracked.Expiration.ToTime().After(time.Now()) {
-		delete(gc.Meta.ActivePolls, pollID)
+		delete(active.polls, pollID)
+		active.Unlock()
 		gc.savePolls(ctx)
-		gc.pollsMu.Unlock()
 		return
 	}
 	revision := tracked.revision
-	gc.pollsMu.Unlock()
+	active.Unlock()
 	log := gc.UserLogin.Log.With().Str("poll_id", pollID).Logger()
 	log.Debug().Msg("Fetching active GroupMe poll")
 	poll, err := gc.Client.GetPoll(ctx, string(tracked.GroupID), pollID)
 	if ctx.Err() != nil {
 		return
 	}
-	gc.pollsMu.Lock()
-	if gc.Meta.ActivePolls[pollID] != tracked || tracked.revision != revision {
-		gc.pollsMu.Unlock()
+	active.Lock()
+	if active.polls[pollID] != tracked || tracked.revision != revision {
+		active.Unlock()
 		return
 	}
 	if err != nil {
-		if pollIsGone(err) {
-			delete(gc.Meta.ActivePolls, pollID)
+		gone := pollIsGone(err)
+		if gone {
+			delete(active.polls, pollID)
+		}
+		active.Unlock()
+		log.Warn().Err(err).Msg("Failed to fetch active GroupMe poll")
+		if gone {
 			gc.savePolls(ctx)
 		}
-		gc.pollsMu.Unlock()
-		log.Warn().Err(err).Msg("Failed to fetch active GroupMe poll")
 		return
 	}
 	changed := changedPollSelections(tracked.Selections, pollSelections(poll))
-	gc.pollsMu.Unlock()
+	active.Unlock()
 	if poll.Visibility != "anonymous" {
 		gc.syncPollSelections(ctx, tracked, changed, revision)
 	}
-	gc.pollsMu.Lock()
-	defer gc.pollsMu.Unlock()
+	active.Lock()
 	if tracked.revision != revision {
+		active.Unlock()
 		return
 	}
-	if !pollIsActive(poll, time.Now()) {
-		delete(gc.Meta.ActivePolls, pollID)
+	stopped := !pollIsActive(poll, time.Now())
+	if stopped {
+		delete(active.polls, pollID)
+	}
+	active.Unlock()
+	if stopped {
 		log.Debug().Msg("Stopped tracking GroupMe poll")
 	}
-	gc.savePolls(ctx)
+	if stopped || len(changed) > 0 {
+		gc.savePolls(ctx)
+	}
 }
 
 func (gc *GMClient) syncPollSelections(ctx context.Context, tracked *ActivePoll, changed map[string][]string, revision uint64) {
@@ -191,10 +204,11 @@ func (gc *GMClient) syncPollSelections(ctx context.Context, tracked *ActivePoll,
 		gc.UserLogin.Log.Warn().Err(err).Msg("Failed to get poll response target message")
 		return
 	}
+	active := &gc.Meta.ActivePolls
 	for voter, selection := range changed {
-		gc.pollsMu.Lock()
+		active.Lock()
 		stale := tracked.revision != revision
-		gc.pollsMu.Unlock()
+		active.Unlock()
 		if stale || ctx.Err() != nil {
 			return
 		}
@@ -213,10 +227,10 @@ func (gc *GMClient) syncPollSelections(ctx context.Context, tracked *ActivePoll,
 			ID:   networkid.MessageID(pollVoteIDPrefix + uuid.NewString()),
 			Data: &bridgev2.ConvertedMessage{Parts: []*bridgev2.ConvertedMessagePart{part}},
 		})
-		gc.pollsMu.Lock()
+		active.Lock()
 		if result.Success && !result.Ignored && tracked.revision == revision {
 			tracked.Selections[voter] = selection
 		}
-		gc.pollsMu.Unlock()
+		active.Unlock()
 	}
 }

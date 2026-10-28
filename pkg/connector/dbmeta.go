@@ -18,6 +18,9 @@
 package connector
 
 import (
+	"encoding/json"
+	"sync"
+
 	"maunium.net/go/mautrix/bridgev2/database"
 	"maunium.net/go/mautrix/bridgev2/networkid"
 
@@ -28,9 +31,26 @@ import (
 // UserLoginMetadata is stored on the bridgev2 UserLogin row and holds the
 // GroupMe access token that was obtained during login.
 type UserLoginMetadata struct {
-	Token       string                 `json:"token"`
-	GMID        string                 `json:"gmid"`
-	ActivePolls map[string]*ActivePoll `json:"active_polls,omitempty"`
+	Token       string      `json:"token"`
+	GMID        string      `json:"gmid"`
+	ActivePolls ActivePolls `json:"active_polls"`
+}
+
+// ActivePolls marshals under its own lock because the framework can save the
+// login while the poller is changing it.
+type ActivePolls struct {
+	sync.Mutex
+	polls map[string]*ActivePoll
+}
+
+func (ap *ActivePolls) MarshalJSON() ([]byte, error) {
+	ap.Lock()
+	defer ap.Unlock()
+	return json.Marshal(ap.polls)
+}
+
+func (ap *ActivePolls) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &ap.polls)
 }
 
 type ActivePoll struct {

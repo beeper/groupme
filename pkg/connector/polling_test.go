@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"path/filepath"
 	"reflect"
@@ -117,29 +118,28 @@ func TestPollTrackingStops(t *testing.T) {
 		{"expired", "active", 1, 200, false, 0},
 		{"not found", "active", 4000000000, 404, false, 1},
 		{"forbidden", "active", 4000000000, 403, false, 1},
-		{"rate limited", "active", 4000000000, 429, false, 1},
+		{"rate limited", "active", 4000000000, 429, true, 1},
 		{"server error", "active", 4000000000, 500, true, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			gc := pollTestClient(t)
-			gc.Meta.ActivePolls = map[string]*ActivePoll{"poll-1": {GroupID: "88", Expiration: tc.expiration, Selections: map[string][]string{}}}
+			gc.Meta.ActivePolls.polls = map[string]*ActivePoll{"poll-1": {GroupID: "88", Expiration: tc.expiration, Selections: map[string][]string{}}}
 			calls := 0
 			mockGroupMe(t, func(r *http.Request) (int, string) {
 				calls++
 				body, _ := json.Marshal(map[string]any{"response": map[string]any{"poll": map[string]any{"data": groupme.PollDetail{ID: "poll-1", ConversationID: "88", Status: tc.status, Expiration: tc.expiration}}}})
 				return tc.httpStatus, string(body)
 			})
+			gc.savePolls(context.Background())
 			gc.refreshPoll(context.Background(), "poll-1")
 			stored, err := gc.Main.br.DB.UserLogin.GetByID(context.Background(), gc.UserLogin.ID)
 			if err != nil {
 				t.Fatal(err)
 			}
-			tracked := stored.Metadata.(*UserLoginMetadata).ActivePolls["poll-1"] != nil
-			if tc.httpStatus >= 500 {
-				tracked = gc.Meta.ActivePolls["poll-1"] != nil
-			}
-			if calls != tc.wantRequests || tracked != tc.wantTracked {
-				t.Fatalf("requests=%d tracked=%v", calls, tracked)
+			tracked := gc.Meta.ActivePolls.polls["poll-1"] != nil
+			persisted := stored.Metadata.(*UserLoginMetadata).ActivePolls.polls["poll-1"] != nil
+			if calls != tc.wantRequests || tracked != tc.wantTracked || persisted != tc.wantTracked {
+				t.Fatalf("requests=%d tracked=%v persisted=%v", calls, tracked, persisted)
 			}
 		})
 	}
@@ -151,12 +151,12 @@ func TestPollTrackingStops(t *testing.T) {
 func TestPollFetchOverlappingMatrixVote(t *testing.T) {
 	gc := pollTestClient(t)
 	tracked := &ActivePoll{GroupID: "88", Expiration: 4000000000, Selections: map[string][]string{}}
-	gc.Meta.ActivePolls = map[string]*ActivePoll{"poll-1": tracked}
+	gc.Meta.ActivePolls.polls = map[string]*ActivePoll{"poll-1": tracked}
 	mockGroupMe(t, func(r *http.Request) (int, string) {
-		gc.pollsMu.Lock()
+		gc.Meta.ActivePolls.Lock()
 		tracked.Selections["20"] = []string{"2"}
 		tracked.revision++
-		gc.pollsMu.Unlock()
+		gc.Meta.ActivePolls.Unlock()
 		return 200, pollResponse
 	})
 	gc.refreshPoll(context.Background(), "poll-1")
@@ -169,4 +169,24 @@ func TestPollFetchOverlappingMatrixVote(t *testing.T) {
 		return 0, ""
 	})
 	gc.refreshPoll(context.Background(), "poll-1")
+}
+
+func TestPollStateMarshalsDuringRefresh(t *testing.T) {
+	gc := pollTestClient(t)
+	gc.Meta.ActivePolls.polls = map[string]*ActivePoll{"poll-1": {GroupID: "88", Expiration: 4000000000, Selections: map[string][]string{}}}
+	mockGroupMe(t, func(r *http.Request) (int, string) { return 200, pollResponse })
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for range 200 {
+			if _, err := json.Marshal(gc.Meta); err != nil {
+				t.Error(err)
+			}
+		}
+	}()
+	for i := range 20 {
+		gc.trackPoll(context.Background(), "88", "poll-message", &groupme.PollDetail{ID: fmt.Sprint("poll-", i+2), Status: "active", Expiration: 4000000000})
+		gc.refreshPoll(context.Background(), "poll-1")
+	}
+	<-done
 }
