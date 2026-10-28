@@ -21,6 +21,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math/rand/v2"
 	"strconv"
 	"strings"
 	"sync"
@@ -81,10 +82,11 @@ func (m *bayeuxMessage) Error() string { return m.MsgError }
 type WSFayeClient struct {
 	// OnEvent handles native events absent from groupme-lib's dispatcher. Set
 	// before Listen; returning true consumes the event after subscription gating.
-	OnEvent        func(context.Context, groupme.PushMessage) bool
-	log            zerolog.Logger
-	onSubscribed   func(ctx context.Context, channel string)
-	onDisconnected func(err error)
+	OnEvent           func(context.Context, groupme.PushMessage) bool
+	log               zerolog.Logger
+	onSubscribed      func(ctx context.Context, channel string)
+	onSubscribeFailed func(ctx context.Context, channel string)
+	onDisconnected    func(err error)
 
 	mu          sync.Mutex
 	conn        *websocket.Conn
@@ -115,14 +117,21 @@ var _ groupme.FayeClient = (*WSFayeClient)(nil)
 // groupme.PushSubscription.StartListening) to begin connecting.
 //
 // onSubscribed runs each time a channel is subscribed on a new connection.
-// That channel's pushes are delivered only after it returns. onDisconnected
+// That channel's pushes are delivered only after it returns. onSubscribeFailed
+// runs before each retry of a channel's failed subscription. onDisconnected
 // runs each time a connection attempt fails or an established connection drops.
-func NewWSFayeClient(logger zerolog.Logger, onSubscribed func(ctx context.Context, channel string), onDisconnected func(err error)) *WSFayeClient {
+func NewWSFayeClient(
+	logger zerolog.Logger,
+	onSubscribed func(ctx context.Context, channel string),
+	onSubscribeFailed func(ctx context.Context, channel string),
+	onDisconnected func(err error),
+) *WSFayeClient {
 	return &WSFayeClient{
-		log:            logger.With().Str("component", "WSFayeClient").Logger(),
-		onSubscribed:   onSubscribed,
-		onDisconnected: onDisconnected,
-		subs:           map[string]*pushSubscription{},
+		log:               logger.With().Str("component", "WSFayeClient").Logger(),
+		onSubscribed:      onSubscribed,
+		onSubscribeFailed: onSubscribeFailed,
+		onDisconnected:    onDisconnected,
+		subs:              map[string]*pushSubscription{},
 	}
 }
 
@@ -324,8 +333,13 @@ func (c *WSFayeClient) isCurrent(conn *websocket.Conn, channel string, sub *push
 	return c.conn == conn && c.subs[channel] == sub
 }
 
+const (
+	subscribeRetryMin = 2 * time.Second
+	subscribeRetryMax = 60 * time.Second
+)
+
 func (c *WSFayeClient) subscribe(ctx context.Context, conn *websocket.Conn, clientID, channel string, sub *pushSubscription) {
-	for {
+	for delay := subscribeRetryMin; ; delay = min(delay*2, subscribeRetryMax) {
 		msg := &bayeuxMessage{Chan: metaSubscribe, ClientID: clientID, Subscription: channel}
 		msg.Ext()["access_token"] = sub.token
 		msg.Ext()["timestamp"] = time.Now().Unix()
@@ -339,9 +353,13 @@ func (c *WSFayeClient) subscribe(ctx context.Context, conn *websocket.Conn, clie
 		if ctx.Err() != nil || !current {
 			return
 		}
-		c.log.Warn().Err(err).Str("channel", channel).Msg("Failed to subscribe to GroupMe push channel, retrying")
+		wait := delay/2 + rand.N(delay/2)
+		c.log.Warn().Err(err).Str("channel", channel).Dur("retry_in", wait).Msg("Failed to subscribe to GroupMe push channel, retrying")
+		if c.onSubscribeFailed != nil {
+			c.onSubscribeFailed(ctx, channel)
+		}
 		select {
-		case <-time.After(2 * time.Second):
+		case <-time.After(wait):
 		case <-ctx.Done():
 			return
 		}

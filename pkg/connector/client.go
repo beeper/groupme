@@ -24,6 +24,7 @@ import (
 	"math/rand/v2"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.mau.fi/util/ptr"
@@ -52,6 +53,9 @@ type GMClient struct {
 	pushMu        sync.Mutex
 	push          *groupme.PushSubscription
 	pushTransport *groupmeext.WSFayeClient
+	stopSession   context.CancelFunc
+
+	tokenRejected atomic.Bool
 
 	readCheckpointsMu sync.Mutex
 	readCheckpoints   map[groupme.ID]groupme.ID
@@ -93,6 +97,7 @@ func (gc *GMClient) Connect(ctx context.Context) {
 		})
 		return
 	}
+	gc.tokenRejected.Store(false)
 	runCtx, cancel := context.WithCancel(gc.UserLogin.Log.WithContext(gc.Main.br.BackgroundCtx))
 	gc.sessionCancel = cancel
 	done := make(chan struct{})
@@ -118,6 +123,27 @@ func isTransientConnectError(err error) bool {
 	var syntaxErr *json.SyntaxError
 	var typeErr *json.UnmarshalTypeError
 	return !errors.As(err, &syntaxErr) && !errors.As(err, &typeErr)
+}
+
+func isAuthError(err error) bool {
+	var meta *groupme.Meta
+	return errors.As(err, &meta) && (meta.Code == 401 || meta.Code == 403)
+}
+
+func (gc *GMClient) rejectToken(err error) {
+	if !gc.tokenRejected.Swap(true) {
+		gc.UserLogin.BridgeState.Send(status.BridgeState{
+			StateEvent: status.StateBadCredentials,
+			Error:      "groupme-session-expired",
+			Message:    "your GroupMe session expired, please log in again",
+			Info:       map[string]any{"go_error": err.Error()},
+		})
+	}
+	gc.pushMu.Lock()
+	defer gc.pushMu.Unlock()
+	if gc.stopSession != nil {
+		gc.stopSession()
+	}
 }
 
 func (gc *GMClient) runSession(ctx context.Context) {
@@ -151,22 +177,20 @@ func (gc *GMClient) runSession(ctx context.Context) {
 		gc.UserLogin.BridgeState.Send(status.BridgeState{StateEvent: status.StateConnecting})
 	}
 	if err != nil {
-		state := status.BridgeState{
-			StateEvent: status.StateUnknownError,
-			Error:      "groupme-unexpected-response",
-			Message:    "GroupMe returned an unexpected response, try reconnecting later",
-			Info:       map[string]any{"go_error": err.Error()},
+		if isAuthError(err) {
+			gc.rejectToken(err)
+		} else {
+			gc.UserLogin.BridgeState.Send(status.BridgeState{
+				StateEvent: status.StateUnknownError,
+				Error:      "groupme-unexpected-response",
+				Message:    "GroupMe returned an unexpected response, try reconnecting later",
+				Info:       map[string]any{"go_error": err.Error()},
+			})
 		}
-		var meta *groupme.Meta
-		if errors.As(err, &meta) && (meta.Code == 401 || meta.Code == 403) {
-			state.StateEvent = status.StateBadCredentials
-			state.Error = "groupme-session-expired"
-			state.Message = "your GroupMe session expired, please log in again"
-		}
-		gc.UserLogin.BridgeState.Send(state)
 		return
 	}
 	if me == nil || string(me.ID) != gc.Meta.GMID || string(me.ID) != string(gc.UserLogin.ID) {
+		gc.tokenRejected.Store(true)
 		gc.UserLogin.BridgeState.Send(status.BridgeState{
 			StateEvent: status.StateBadCredentials,
 			Error:      "groupme-account-mismatch",
@@ -178,6 +202,8 @@ func (gc *GMClient) runSession(ctx context.Context) {
 	// newer messages move the bridged history past it. Live messages only
 	// arrive over push, so the login is connected only while the user channel is.
 	gc.syncRemoteProfile(ctx, me)
+	ctx, stop := context.WithCancel(ctx)
+	defer stop()
 	userChannel := groupme.UserChannel(me.ID)
 	var reactionRefreshes sync.WaitGroup
 	sub := groupme.NewPushSubscription(ctx)
@@ -197,6 +223,13 @@ func (gc *GMClient) runSession(ctx context.Context) {
 			gc.refreshRecentReactions(ctx, chats)
 			gc.syncReadCheckpoints(ctx)
 		}()
+	}, func(ctx context.Context, channel string) {
+		if channel != userChannel {
+			return
+		}
+		if _, err := gc.Client.MyUser(ctx); isAuthError(err) {
+			gc.rejectToken(err)
+		}
 	}, func(err error) {
 		gc.UserLogin.BridgeState.Send(status.BridgeState{
 			StateEvent: status.StateTransientDisconnect,
@@ -210,14 +243,18 @@ func (gc *GMClient) runSession(ctx context.Context) {
 	gc.pushMu.Lock()
 	gc.push = sub
 	gc.pushTransport = transport
+	gc.stopSession = stop
 	gc.pushMu.Unlock()
-	if err := sub.SubscribeToUser(me.ID, gc.Meta.Token); err != nil {
+	if gc.tokenRejected.Load() {
+		stop()
+	} else if err := sub.SubscribeToUser(me.ID, gc.Meta.Token); err != nil {
 		gc.UserLogin.Log.Err(err).Msg("Failed to subscribe to GroupMe push channel")
 	}
 	<-ctx.Done()
 	gc.pushMu.Lock()
 	gc.push = nil
 	gc.pushTransport = nil
+	gc.stopSession = nil
 	gc.pushMu.Unlock()
 	sub.Wait()
 	reactionRefreshes.Wait()
@@ -257,7 +294,7 @@ func (gc *GMClient) Disconnect() {
 }
 
 func (gc *GMClient) IsLoggedIn() bool {
-	return gc.Client != nil && gc.Meta.Token != ""
+	return gc.Client != nil && gc.Meta.Token != "" && !gc.tokenRejected.Load()
 }
 
 func (gc *GMClient) LogoutRemote(ctx context.Context) {

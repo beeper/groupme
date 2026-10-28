@@ -121,6 +121,26 @@ func TestSendRejectsEmptySuccessAndPreservesFailures(t *testing.T) {
 	}
 }
 
+func TestSendOnlyRejectsTokenOnUnauthorized(t *testing.T) {
+	for code, rejected := range map[int]bool{401: true, 403: false, 429: false} {
+		t.Run(fmt.Sprint(code), func(t *testing.T) {
+			mockGroupMe(t, func(r *http.Request) (int, string) {
+				return code, fmt.Sprintf(`{"meta":{"code":%d}}`, code)
+			})
+			gc := dmTestClient()
+			session, stop := context.WithCancel(context.Background())
+			defer stop()
+			gc.stopSession = stop
+			if _, err := gc.HandleMatrixMessage(context.Background(), testMatrixText("group:9")); err == nil {
+				t.Fatal("failed send was accepted as delivered")
+			}
+			if gc.IsLoggedIn() == rejected || (session.Err() != nil) != rejected {
+				t.Fatalf("token rejected: %v, session stopped: %v, want %v", !gc.IsLoggedIn(), session.Err() != nil, rejected)
+			}
+		})
+	}
+}
+
 func TestDMReactionsUseNumericConversationOrder(t *testing.T) {
 	gc := dmTestClient()
 	var calls []string

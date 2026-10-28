@@ -60,7 +60,7 @@ func (gc *GMClient) HandleMatrixEdit(ctx context.Context, msg *bridgev2.MatrixEd
 		for original == nil {
 			page, err := gc.fetchMessagePage(ctx, msg.Portal.ID, before, "", 100)
 			if err != nil {
-				return wrapGroupMeError(err, "failed to load the original message").WithIsCertain(true)
+				return gc.wrapGroupMeError(err, "failed to load the original message").WithIsCertain(true)
 			}
 			if len(page) == 0 {
 				break
@@ -125,10 +125,10 @@ func (gc *GMClient) HandleMatrixEdit(ctx context.Context, msg *bridgev2.MatrixEd
 	}
 	updated, err := groupmeext.EditMessage(ctx, gc.Meta.Token, kind == PortalTypeDM, chatID, ParseMessageID(target.ID), content)
 	if err != nil {
-		return wrapGroupMeError(err, "failed to edit message")
+		return gc.wrapGroupMeError(err, "failed to edit message")
 	}
 	if updated.UserID != groupme.ID(gc.Meta.GMID) || gc.portalKeyForMessage(&updated.Message) != msg.Portal.PortalKey {
-		return wrapGroupMeError(errors.New("GroupMe edit response belongs to another sender or conversation"), "unexpected response from GroupMe")
+		return gc.wrapGroupMeError(errors.New("GroupMe edit response belongs to another sender or conversation"), "unexpected response from GroupMe")
 	}
 	meta.NativeContent = nativeContent(&updated.Message)
 	meta.EditedAt = updated.UpdatedAt
