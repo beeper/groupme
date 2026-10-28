@@ -10,6 +10,39 @@ import (
 	"testing"
 )
 
+func TestGiphyImageBoundary(t *testing.T) {
+	for rawURL, allowed := range map[string]bool{
+		"https://media4.giphy.com/media/example/200w.gif": true,
+		"https://media.giphy.com/media/example/giphy.gif": true,
+		"https://i.giphy.com/example.gif":                 true,
+		"https://media4.giphy.com.evil.example/a.gif":     false,
+		"https://media4.giphy.com@evil.example/a.gif":     false,
+		"https://user@media4.giphy.com/a.gif":             false,
+		"https://media4.giphy.com:8443/a.gif":             false,
+		"http://media4.giphy.com/a.gif":                   false,
+		"https://media4.giphy.com/a.html":                 false,
+		"caption https://media4.giphy.com/a.gif":          false,
+	} {
+		if IsGiphyImageURL(rawURL) != allowed || (ValidateImageURL(rawURL) == nil) != allowed {
+			t.Fatalf("wrong image URL classification for %q", rawURL)
+		}
+		if ValidateMediaURL(rawURL) == nil {
+			t.Fatal("GIPHY was allowed for authenticated GroupMe media")
+		}
+	}
+	previous := http.DefaultTransport
+	t.Cleanup(func() { http.DefaultTransport = previous })
+	http.DefaultTransport = roundTripper(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Host != "media4.giphy.com" || r.Header.Get("Cookie") != "" || r.Header.Get("X-Access-Token") != "" {
+			t.Fatal("sticker request escaped its host or included credentials")
+		}
+		return &http.Response{StatusCode: 302, Header: http.Header{"Location": {"https://example.com/image.gif"}}, Body: io.NopCloser(strings.NewReader(""))}, nil
+	})
+	if _, _, err := DownloadImage(context.Background(), "https://media4.giphy.com/a.gif"); err == nil {
+		t.Fatal("accepted a sticker redirect outside the image hosts")
+	}
+}
+
 func TestMediaRemoteResponses(t *testing.T) {
 	for _, tc := range []struct {
 		name, kind string

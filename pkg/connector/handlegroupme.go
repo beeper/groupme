@@ -170,6 +170,14 @@ func (gc *GMClient) convertGroupMeMessage(ctx context.Context, portal *bridgev2.
 		if att == nil {
 			continue
 		}
+		switch att.Type {
+		case "linked_image":
+			att = &groupme.Attachment{Type: groupme.Image, URL: att.URL}
+		case "postprocessing":
+			if groupmeext.IsGiphyImageURL(msg.Text) {
+				att = &groupme.Attachment{Type: groupme.Image, URL: msg.Text}
+			}
+		}
 		partID := networkid.PartID(fmt.Sprintf("attachment-%d", i))
 		var content *event.MessageEventContent
 		switch att.Type {

@@ -45,6 +45,9 @@ func imageInfoFromURL(rawURL string) *event.FileInfo {
 	}
 	match := imageNamePattern.FindStringSubmatch(path.Base(parsed.Path))
 	if match == nil {
+		if groupmeext.IsGiphyImageURL(rawURL) {
+			return &event.FileInfo{MimeType: "image/gif"}
+		}
 		return nil
 	}
 	info := &event.FileInfo{MimeType: mime.TypeByExtension("." + strings.ToLower(match[3]))}

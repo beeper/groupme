@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -13,21 +14,49 @@ import (
 // GroupMe documents a 50 MB limit for document sharing.
 const MaxMediaSize = 50_000_000
 
-var mediaHTTPClient = &http.Client{
-	Timeout: 2 * time.Minute,
-	CheckRedirect: func(req *http.Request, via []*http.Request) error {
-		if len(via) >= 10 {
-			return fmt.Errorf("too many media redirects")
-		}
-		if err := validateMediaURL(req.URL); err != nil {
-			return err
-		}
-		if req.URL.Host != via[0].URL.Host {
-			req.Header.Del("X-Access-Token")
-			req.Header.Del("Cookie")
-		}
+var mediaHTTPClient = newMediaHTTPClient(validateMediaURL)
+var imageHTTPClient = newMediaHTTPClient(validateImageURL)
+
+func newMediaHTTPClient(validate func(*url.URL) error) *http.Client {
+	return &http.Client{
+		Timeout: 2 * time.Minute,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 10 {
+				return fmt.Errorf("too many media redirects")
+			}
+			if err := validate(req.URL); err != nil {
+				return err
+			}
+			if req.URL.Host != via[0].URL.Host {
+				req.Header.Del("X-Access-Token")
+				req.Header.Del("Cookie")
+			}
+			return nil
+		},
+	}
+}
+
+var giphyImageHost = regexp.MustCompile(`^(media[0-9]*|i)\.giphy\.com$`)
+
+func IsGiphyImageURL(rawURL string) bool {
+	u, err := url.Parse(rawURL)
+	return err == nil && u.Scheme == "https" && u.User == nil && u.Port() == "" &&
+		giphyImageHost.MatchString(u.Hostname()) && strings.HasSuffix(u.Path, ".gif")
+}
+
+func validateImageURL(u *url.URL) error {
+	if IsGiphyImageURL(u.String()) {
 		return nil
-	},
+	}
+	return validateMediaURL(u)
+}
+
+func ValidateImageURL(rawURL string) error {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("invalid GroupMe image URL")
+	}
+	return validateImageURL(u)
 }
 
 func validateMediaURL(u *url.URL) error {
@@ -68,10 +97,14 @@ func (e *HTTPError) Error() string {
 }
 
 func mediaRequest(req *http.Request) (*http.Response, error) {
-	if err := validateMediaURL(req.URL); err != nil {
+	return requestMedia(req, mediaHTTPClient, validateMediaURL)
+}
+
+func requestMedia(req *http.Request, client *http.Client, validate func(*url.URL) error) (*http.Response, error) {
+	if err := validate(req.URL); err != nil {
 		return nil, err
 	}
-	resp, err := mediaHTTPClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, mediaError(err)
 	}
