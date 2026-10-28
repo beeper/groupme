@@ -49,19 +49,19 @@ func (gc *GMClient) HandleMatrixPollStart(ctx context.Context, msg *bridgev2.Mat
 		}
 		return nil, status
 	}
-	if len(poll.Options) != len(start.Answers) {
-		return nil, wrapGroupMeError(errors.New("GroupMe returned a different number of poll options"), "unexpected response from GroupMe")
-	}
 	answerIDs := make(map[string]string, len(start.Answers))
-	for i, answer := range start.Answers {
-		answerIDs[answer.ID] = poll.Options[i].ID
+	for i := range min(len(start.Answers), len(poll.Options)) {
+		answerIDs[start.Answers[i].ID] = poll.Options[i].ID
 	}
-	return &bridgev2.MatrixMessageResponse{DB: &database.Message{
-		ID:        MakeMessageID(messageID),
-		SenderID:  MakeUserID(groupme.ID(gc.Meta.GMID)),
-		Timestamp: poll.CreatedAt.ToTime(),
-		Metadata:  &MessageMetadata{PollID: poll.ID, PollAnswerIDs: answerIDs},
-	}}, nil
+	dbMessage := &database.Message{
+		ID:       MakeMessageID(messageID),
+		SenderID: MakeUserID(groupme.ID(gc.Meta.GMID)),
+		Metadata: &MessageMetadata{PollID: poll.ID, PollAnswerIDs: answerIDs},
+	}
+	if poll.CreatedAt > 0 {
+		dbMessage.Timestamp = poll.CreatedAt.ToTime()
+	}
+	return &bridgev2.MatrixMessageResponse{DB: dbMessage}, nil
 }
 
 func (gc *GMClient) HandleMatrixPollVote(ctx context.Context, msg *bridgev2.MatrixPollVote) (*bridgev2.MatrixMessageResponse, error) {
