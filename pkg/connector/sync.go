@@ -42,7 +42,10 @@ func (gc *GMClient) listChats(ctx context.Context) ([]nativeChat, error) {
 
 	groups, err := gc.Client.IndexAllGroups(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("failed to list GroupMe groups: %w", err)
+		if isAuthError(err) || isTransientConnectError(err) {
+			return nil, fmt.Errorf("failed to list GroupMe groups: %w", err)
+		}
+		zerolog.Ctx(ctx).Err(err).Msg("Failed to list GroupMe groups")
 	}
 	for _, group := range groups {
 		if group != nil && len(group.ID) > 0 {
@@ -52,7 +55,10 @@ func (gc *GMClient) listChats(ctx context.Context) ([]nativeChat, error) {
 
 	dms, err := gc.Client.IndexAllChats(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("failed to list GroupMe DM chats: %w", err)
+		if isAuthError(err) || isTransientConnectError(err) {
+			return nil, fmt.Errorf("failed to list GroupMe DM chats: %w", err)
+		}
+		zerolog.Ctx(ctx).Err(err).Msg("Failed to list GroupMe DM chats")
 	}
 	for _, dm := range dms {
 		if dm == nil || len(dm.OtherUser.ID) == 0 {
