@@ -29,8 +29,8 @@ func compareMessageIDs(a, b groupme.ID) int {
 	return strings.Compare(string(a), string(b))
 }
 
-// Poll votes are stored under non-native IDs. Step over them to the nearest
-// native message in the given direction.
+// Poll votes are stored under their Matrix event ID, dated just before their
+// poll. Step over them to the nearest native message in the given direction.
 func (gc *GMClient) nearestNativeMessage(ctx context.Context, portal networkid.PortalKey, msg *database.Message, newer bool) (*database.Message, error) {
 	var err error
 	for msg != nil && isPollVoteID(msg.ID) {

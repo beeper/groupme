@@ -19,6 +19,7 @@ package connector
 
 import (
 	"encoding/json"
+	"fmt"
 	"sync"
 
 	"maunium.net/go/mautrix/bridgev2/database"
@@ -34,6 +35,14 @@ type UserLoginMetadata struct {
 	Token       string      `json:"token"`
 	GMID        string      `json:"gmid"`
 	ActivePolls ActivePolls `json:"active_polls"`
+}
+
+func (m *UserLoginMetadata) CopyFrom(other any) {
+	otherMeta, ok := other.(*UserLoginMetadata)
+	if !ok || otherMeta == nil {
+		panic(fmt.Errorf("invalid type %T provided to UserLoginMetadata.CopyFrom", other))
+	}
+	m.Token, m.GMID = otherMeta.Token, otherMeta.GMID
 }
 
 // ActivePolls marshals under its own lock because the framework can save the

@@ -8,11 +8,9 @@ import (
 	"slices"
 	"time"
 
-	"github.com/google/uuid"
 	"maunium.net/go/mautrix/bridgev2"
 	"maunium.net/go/mautrix/bridgev2/database"
 	"maunium.net/go/mautrix/bridgev2/networkid"
-	"maunium.net/go/mautrix/bridgev2/simplevent"
 	"maunium.net/go/mautrix/event"
 
 	"github.com/beeper/groupme-lib"
@@ -204,6 +202,11 @@ func (gc *GMClient) syncPollSelections(ctx context.Context, tracked *ActivePoll,
 		gc.UserLogin.Log.Warn().Err(err).Msg("Failed to get poll response target message")
 		return
 	}
+	portal, err := gc.Main.br.GetExistingPortalByKey(ctx, message.Room)
+	if err != nil || portal == nil || portal.MXID == "" {
+		gc.UserLogin.Log.Warn().Err(err).Msg("Failed to get poll response portal")
+		return
+	}
 	active := &gc.Meta.ActivePolls
 	for voter, selection := range changed {
 		active.Lock()
@@ -217,18 +220,19 @@ func (gc *GMClient) syncPollSelections(ctx context.Context, tracked *ActivePoll,
 			gc.UserLogin.Log.Warn().Err(err).Msg("Failed to convert GroupMe poll response")
 			continue
 		}
-		result := gc.Main.br.QueueRemoteEvent(gc.UserLogin, &simplevent.PreConvertedMessage{
-			EventMeta: simplevent.EventMeta{
-				Type:      bridgev2.RemoteEventMessage,
-				PortalKey: gc.portalKeyForGroup(tracked.GroupID),
-				Sender:    bridgev2.EventSender{Sender: MakeUserID(groupme.ID(voter)), IsFromMe: voter == gc.Meta.GMID},
-				Timestamp: time.Now(),
-			},
-			ID:   networkid.MessageID(pollVoteIDPrefix + uuid.NewString()),
-			Data: &bridgev2.ConvertedMessage{Parts: []*bridgev2.ConvertedMessagePart{part}},
-		})
+		// Sent without a message row: a vote must never become the newest message
+		// that catch-up cuts native history off at.
+		sender := bridgev2.EventSender{Sender: MakeUserID(groupme.ID(voter)), IsFromMe: voter == gc.Meta.GMID}
+		intent, ok := portal.GetIntentFor(ctx, sender, gc.UserLogin, bridgev2.RemoteEventMessage)
+		if !ok {
+			continue
+		}
+		if _, err = intent.SendMessage(ctx, portal.MXID, part.Type, &event.Content{Parsed: part.Content, Raw: part.Extra}, nil); err != nil {
+			gc.UserLogin.Log.Warn().Err(err).Str("voter_id", voter).Msg("Failed to send GroupMe poll response")
+			continue
+		}
 		active.Lock()
-		if result.Success && !result.Ignored && tracked.revision == revision {
+		if tracked.revision == revision {
 			tracked.Selections[voter] = selection
 		}
 		active.Unlock()
