@@ -46,7 +46,7 @@ func parseDirectMediaID(mediaID networkid.MediaID) ([]string, error) {
 	}
 	switch fields[0] {
 	case "1i":
-		if len(fields) == 2 && groupmeext.ValidateMediaURL(fields[1]) == nil {
+		if len(fields) == 2 && groupmeext.ValidateImageURL(fields[1]) == nil {
 			return fields, nil
 		}
 	case "1v":
