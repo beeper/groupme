@@ -151,13 +151,17 @@ func (gc *GMClient) runSession(ctx context.Context) {
 		gc.UserLogin.BridgeState.Send(status.BridgeState{StateEvent: status.StateConnecting})
 	}
 	if err != nil {
-		state := status.BridgeState{StateEvent: status.StateUnknownError, Error: "groupme-connect-failed"}
+		state := status.BridgeState{
+			StateEvent: status.StateUnknownError,
+			Error:      "groupme-unexpected-response",
+			Message:    "GroupMe returned an unexpected response, try reconnecting later",
+			Info:       map[string]any{"go_error": err.Error()},
+		}
 		var meta *groupme.Meta
 		if errors.As(err, &meta) && (meta.Code == 401 || meta.Code == 403) {
 			state.StateEvent = status.StateBadCredentials
 			state.Error = "groupme-session-expired"
 			state.Message = "your GroupMe session expired, please log in again"
-			state.Info = map[string]any{"go_error": err.Error()}
 		}
 		gc.UserLogin.BridgeState.Send(state)
 		return
