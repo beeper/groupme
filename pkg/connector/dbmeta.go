@@ -19,6 +19,7 @@ package connector
 
 import (
 	"maunium.net/go/mautrix/bridgev2/database"
+	"maunium.net/go/mautrix/bridgev2/networkid"
 
 	"github.com/beeper/groupme-lib"
 	"github.com/beeper/groupme/pkg/groupmeext"
@@ -27,8 +28,18 @@ import (
 // UserLoginMetadata is stored on the bridgev2 UserLogin row and holds the
 // GroupMe access token that was obtained during login.
 type UserLoginMetadata struct {
-	Token string `json:"token"`
-	GMID  string `json:"gmid"`
+	Token       string                 `json:"token"`
+	GMID        string                 `json:"gmid"`
+	ActivePolls map[string]*ActivePoll `json:"active_polls,omitempty"`
+}
+
+type ActivePoll struct {
+	GroupID    groupme.ID          `json:"group_id"`
+	MessageID  networkid.MessageID `json:"message_id"`
+	Expiration groupme.Timestamp   `json:"expiration"`
+	Selections map[string][]string `json:"selections"`
+	voting     bool
+	revision   uint64
 }
 
 // PortalType distinguishes GroupMe groups from GroupMe direct messages. Both

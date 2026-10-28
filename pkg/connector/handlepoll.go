@@ -61,6 +61,7 @@ func (gc *GMClient) HandleMatrixPollStart(ctx context.Context, msg *bridgev2.Mat
 	if poll.CreatedAt > 0 {
 		dbMessage.Timestamp = poll.CreatedAt.ToTime()
 	}
+	gc.trackPoll(ctx, groupID, dbMessage.ID, poll)
 	return &bridgev2.MatrixMessageResponse{DB: dbMessage}, nil
 }
 
@@ -80,6 +81,7 @@ func (gc *GMClient) HandleMatrixPollVote(ctx context.Context, msg *bridgev2.Matr
 	if poll.Status != "active" || (poll.Expiration > 0 && !poll.Expiration.ToTime().After(time.Now())) {
 		return nil, pollVoteError("This GroupMe poll has ended")
 	}
+	gc.trackPoll(ctx, groupID, msg.VoteTo.ID, poll)
 	answers := slices.Clone(msg.Content.Response.Answers)
 	if meta.PollAnswerIDs != nil {
 		for i, answer := range answers {
@@ -104,6 +106,21 @@ func (gc *GMClient) HandleMatrixPollVote(ctx context.Context, msg *bridgev2.Matr
 			return nil, pollVoteError("Unknown or repeated GroupMe poll option")
 		}
 	}
+	gc.pollsMu.Lock()
+	tracked := gc.Meta.ActivePolls[poll.ID]
+	if tracked != nil {
+		tracked.voting = true
+		tracked.revision++
+	}
+	gc.pollsMu.Unlock()
+	defer func() {
+		gc.pollsMu.Lock()
+		if tracked != nil {
+			tracked.voting = false
+			tracked.revision++
+		}
+		gc.pollsMu.Unlock()
+	}()
 	result, err := gc.Client.VotePoll(ctx, string(groupID), meta.PollID, answers, poll.Type == "multi")
 	if err != nil {
 		return nil, wrapGroupMeError(err, "failed to vote in poll")
@@ -114,6 +131,12 @@ func (gc *GMClient) HandleMatrixPollVote(ctx context.Context, msg *bridgev2.Matr
 	if !slices.Equal(confirmed, expected) {
 		return nil, wrapGroupMeError(errors.New("GroupMe did not confirm the requested poll selection"), "unexpected response from GroupMe")
 	}
+	gc.pollsMu.Lock()
+	if tracked := gc.Meta.ActivePolls[poll.ID]; tracked != nil {
+		tracked.Selections[gc.Meta.GMID] = confirmed
+		gc.savePolls(ctx)
+	}
+	gc.pollsMu.Unlock()
 	// GroupMe returns poll state without a message ID. Use the originating
 	// Matrix event to identify this action in the framework's message mapping,
 	// dated before the poll so it never becomes the newest message catch-up
