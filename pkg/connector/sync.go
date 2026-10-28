@@ -18,6 +18,7 @@ package connector
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"time"
 
@@ -36,14 +37,12 @@ type nativeChat struct {
 	dmPartner *groupme.User
 }
 
-// A failed listing does not prevent returning the other conversation type.
-func (gc *GMClient) listChats(ctx context.Context) []nativeChat {
-	log := zerolog.Ctx(ctx)
+func (gc *GMClient) listChats(ctx context.Context) ([]nativeChat, error) {
 	var chats []nativeChat
 
 	groups, err := gc.Client.IndexAllGroups(ctx)
 	if err != nil {
-		log.Err(err).Msg("Failed to list GroupMe groups")
+		return nil, fmt.Errorf("failed to list GroupMe groups: %w", err)
 	}
 	for _, group := range groups {
 		if group != nil && len(group.ID) > 0 {
@@ -53,7 +52,7 @@ func (gc *GMClient) listChats(ctx context.Context) []nativeChat {
 
 	dms, err := gc.Client.IndexAllChats(ctx)
 	if err != nil {
-		log.Err(err).Msg("Failed to list GroupMe DM chats")
+		return nil, fmt.Errorf("failed to list GroupMe DM chats: %w", err)
 	}
 	for _, dm := range dms {
 		if dm == nil || len(dm.OtherUser.ID) == 0 {
@@ -65,25 +64,32 @@ func (gc *GMClient) listChats(ctx context.Context) []nativeChat {
 		}
 		chats = append(chats, nativeChat{portalKey: gc.portalKeyForDM(dm.OtherUser.ID), latestID: latestID, dmPartner: &dm.OtherUser})
 	}
-	return chats
+	return chats, nil
 }
 
 // catchUp runs on user-channel subscription, including reconnects, while that
 // channel's live pushes are held. It only queues work so they are not held for
 // long. DM info reuses the listing rather than paging it again for every DM.
-func (gc *GMClient) catchUp(ctx context.Context) []nativeChat {
+func (gc *GMClient) catchUp(ctx context.Context) ([]nativeChat, error) {
 	ctx = gc.UserLogin.Log.With().Str("action", "catch up").Logger().WithContext(ctx)
 	checkpointsLoaded := make(chan struct{})
 	go func() {
 		defer close(checkpointsLoaded)
 		gc.loadReadCheckpoints(ctx)
 	}()
-	chats := gc.listChats(ctx)
+	var chats []nativeChat
+	err := gc.retryConnect(ctx, func() (err error) {
+		chats, err = gc.listChats(ctx)
+		return err
+	})
 	<-checkpointsLoaded
+	if err != nil {
+		return nil, err
+	}
 	zerolog.Ctx(ctx).Info().Int("chat_count", len(chats)).Msg("Syncing GroupMe chats")
 	for _, chat := range chats {
 		if ctx.Err() != nil {
-			return nil
+			return nil, ctx.Err()
 		}
 		getChatInfo := gc.GetChatInfo
 		if chat.dmPartner != nil {
@@ -109,7 +115,7 @@ func (gc *GMClient) catchUp(ctx context.Context) []nativeChat {
 		})
 		gc.subscribeToChat(chat.portalKey.ID)
 	}
-	return chats
+	return chats, nil
 }
 
 // Appservices never receive chat-view notifications. Keep the native group and

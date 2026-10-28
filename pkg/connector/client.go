@@ -27,6 +27,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/rs/zerolog"
 	"go.mau.fi/util/ptr"
 	"maunium.net/go/mautrix/bridgev2"
 	"maunium.net/go/mautrix/bridgev2/networkid"
@@ -146,20 +147,24 @@ func (gc *GMClient) rejectToken(err error) {
 	}
 }
 
-func (gc *GMClient) runSession(ctx context.Context) {
-	var me *groupme.User
-	var err error
+func (gc *GMClient) retryConnect(ctx context.Context, step func() error) error {
 	retried := false
 	for delay := connectRetryMin; ; delay = min(delay*2, connectRetryMax) {
-		me, err = gc.Client.MyUser(ctx)
+		err := step()
 		if ctx.Err() != nil {
-			return
+			return ctx.Err()
 		}
-		if err == nil || !isTransientConnectError(err) {
-			break
+		if err == nil {
+			if retried {
+				gc.UserLogin.BridgeState.Send(status.BridgeState{StateEvent: status.StateConnecting})
+			}
+			return nil
+		}
+		if !isTransientConnectError(err) {
+			return err
 		}
 		wait := delay/2 + rand.N(delay/2)
-		gc.UserLogin.Log.Warn().Err(err).Dur("retry_in", wait).Msg("Failed to fetch GroupMe user, retrying")
+		zerolog.Ctx(ctx).Warn().Err(err).Dur("retry_in", wait).Msg("Failed to connect to GroupMe, retrying")
 		gc.UserLogin.BridgeState.Send(status.BridgeState{
 			StateEvent: status.StateTransientDisconnect,
 			Error:      "groupme-connect-failed",
@@ -169,24 +174,36 @@ func (gc *GMClient) runSession(ctx context.Context) {
 		select {
 		case <-time.After(wait):
 		case <-ctx.Done():
-			return
+			return ctx.Err()
 		}
 		retried = true
 	}
-	if retried && err == nil {
-		gc.UserLogin.BridgeState.Send(status.BridgeState{StateEvent: status.StateConnecting})
+}
+
+func (gc *GMClient) connectFailed(err error) {
+	if isAuthError(err) {
+		gc.rejectToken(err)
+		return
+	}
+	gc.UserLogin.BridgeState.Send(status.BridgeState{
+		StateEvent: status.StateUnknownError,
+		Error:      "groupme-unexpected-response",
+		Message:    "GroupMe returned an unexpected response, try reconnecting later",
+		Info:       map[string]any{"go_error": err.Error()},
+	})
+}
+
+func (gc *GMClient) runSession(ctx context.Context) {
+	var me *groupme.User
+	err := gc.retryConnect(ctx, func() (err error) {
+		me, err = gc.Client.MyUser(ctx)
+		return err
+	})
+	if ctx.Err() != nil {
+		return
 	}
 	if err != nil {
-		if isAuthError(err) {
-			gc.rejectToken(err)
-		} else {
-			gc.UserLogin.BridgeState.Send(status.BridgeState{
-				StateEvent: status.StateUnknownError,
-				Error:      "groupme-unexpected-response",
-				Message:    "GroupMe returned an unexpected response, try reconnecting later",
-				Info:       map[string]any{"go_error": err.Error()},
-			})
-		}
+		gc.connectFailed(err)
 		return
 	}
 	if me == nil || string(me.ID) != gc.Meta.GMID || string(me.ID) != string(gc.UserLogin.ID) {
@@ -212,8 +229,13 @@ func (gc *GMClient) runSession(ctx context.Context) {
 		if channel != userChannel {
 			return
 		}
-		chats := gc.catchUp(ctx)
+		chats, err := gc.catchUp(ctx)
 		if ctx.Err() != nil {
+			return
+		}
+		if err != nil {
+			gc.connectFailed(err)
+			stop()
 			return
 		}
 		gc.UserLogin.BridgeState.Send(status.BridgeState{StateEvent: status.StateConnected})
