@@ -174,8 +174,8 @@ func (gc *GMClient) convertGroupMeMessage(ctx context.Context, portal *bridgev2.
 		case "linked_image":
 			att = &groupme.Attachment{Type: groupme.Image, URL: att.URL}
 		case "postprocessing":
-			if groupmeext.IsGiphyImageURL(msg.Text) {
-				att = &groupme.Attachment{Type: groupme.Image, URL: msg.Text}
+			if stickerURL := strings.TrimSpace(msg.Text); groupmeext.IsGiphyImageURL(stickerURL) {
+				att = &groupme.Attachment{Type: groupme.Image, URL: stickerURL}
 			}
 		}
 		partID := networkid.PartID(fmt.Sprintf("attachment-%d", i))
