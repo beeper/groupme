@@ -24,8 +24,10 @@ import (
 	"math/rand/v2"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/rs/zerolog"
 	"go.mau.fi/util/ptr"
 	"maunium.net/go/mautrix/bridgev2"
 	"maunium.net/go/mautrix/bridgev2/networkid"
@@ -52,6 +54,9 @@ type GMClient struct {
 	pushMu        sync.Mutex
 	push          *groupme.PushSubscription
 	pushTransport *groupmeext.WSFayeClient
+	stopSession   context.CancelFunc
+
+	tokenRejected atomic.Bool
 
 	readCheckpointsMu sync.Mutex
 	readCheckpoints   map[groupme.ID]groupme.ID
@@ -93,6 +98,7 @@ func (gc *GMClient) Connect(ctx context.Context) {
 		})
 		return
 	}
+	gc.tokenRejected.Store(false)
 	runCtx, cancel := context.WithCancel(gc.UserLogin.Log.WithContext(gc.Main.br.BackgroundCtx))
 	gc.sessionCancel = cancel
 	done := make(chan struct{})
@@ -131,20 +137,45 @@ func isTransientConnectError(err error) bool {
 	return !errors.As(err, &syntaxErr) && !errors.As(err, &typeErr)
 }
 
-func (gc *GMClient) runSession(ctx context.Context) {
-	var me *groupme.User
-	var err error
+func isAuthError(err error) bool {
+	var meta *groupme.Meta
+	return errors.As(err, &meta) && (meta.Code == 401 || meta.Code == 403)
+}
+
+func (gc *GMClient) rejectToken(err error) {
+	if !gc.tokenRejected.Swap(true) {
+		gc.UserLogin.BridgeState.Send(status.BridgeState{
+			StateEvent: status.StateBadCredentials,
+			Error:      "groupme-session-expired",
+			Message:    "your GroupMe session expired, please log in again",
+			Info:       map[string]any{"go_error": err.Error()},
+		})
+	}
+	gc.pushMu.Lock()
+	defer gc.pushMu.Unlock()
+	if gc.stopSession != nil {
+		gc.stopSession()
+	}
+}
+
+func (gc *GMClient) retryConnect(ctx context.Context, step func() error) error {
 	retried := false
 	for delay := connectRetryMin; ; delay = min(delay*2, connectRetryMax) {
-		me, err = gc.Client.MyUser(ctx)
+		err := step()
 		if ctx.Err() != nil {
-			return
+			return ctx.Err()
 		}
-		if err == nil || !isTransientConnectError(err) {
-			break
+		if err == nil {
+			if retried {
+				gc.UserLogin.BridgeState.Send(status.BridgeState{StateEvent: status.StateConnecting})
+			}
+			return nil
+		}
+		if !isTransientConnectError(err) {
+			return err
 		}
 		wait := delay/2 + rand.N(delay/2)
-		gc.UserLogin.Log.Warn().Err(err).Dur("retry_in", wait).Msg("Failed to fetch GroupMe user, retrying")
+		zerolog.Ctx(ctx).Warn().Err(err).Dur("retry_in", wait).Msg("Failed to connect to GroupMe, retrying")
 		gc.UserLogin.BridgeState.Send(status.BridgeState{
 			StateEvent: status.StateTransientDisconnect,
 			Error:      "groupme-connect-failed",
@@ -154,26 +185,40 @@ func (gc *GMClient) runSession(ctx context.Context) {
 		select {
 		case <-time.After(wait):
 		case <-ctx.Done():
-			return
+			return ctx.Err()
 		}
 		retried = true
 	}
-	if retried && err == nil {
-		gc.UserLogin.BridgeState.Send(status.BridgeState{StateEvent: status.StateConnecting})
+}
+
+func (gc *GMClient) connectFailed(err error) {
+	if isAuthError(err) {
+		gc.rejectToken(err)
+		return
+	}
+	gc.UserLogin.BridgeState.Send(status.BridgeState{
+		StateEvent: status.StateUnknownError,
+		Error:      "groupme-unexpected-response",
+		Message:    "GroupMe returned an unexpected response, try reconnecting later",
+		Info:       map[string]any{"go_error": err.Error()},
+	})
+}
+
+func (gc *GMClient) runSession(ctx context.Context) {
+	var me *groupme.User
+	err := gc.retryConnect(ctx, func() (err error) {
+		me, err = gc.Client.MyUser(ctx)
+		return err
+	})
+	if ctx.Err() != nil {
+		return
 	}
 	if err != nil {
-		state := status.BridgeState{StateEvent: status.StateUnknownError, Error: "groupme-connect-failed"}
-		var meta *groupme.Meta
-		if errors.As(err, &meta) && (meta.Code == 401 || meta.Code == 403) {
-			state.StateEvent = status.StateBadCredentials
-			state.Error = "groupme-session-expired"
-			state.Message = "your GroupMe session expired, please log in again"
-			state.Info = map[string]any{"go_error": err.Error()}
-		}
-		gc.UserLogin.BridgeState.Send(state)
+		gc.connectFailed(err)
 		return
 	}
 	if me == nil || string(me.ID) != gc.Meta.GMID || string(me.ID) != string(gc.UserLogin.ID) {
+		gc.tokenRejected.Store(true)
 		gc.UserLogin.BridgeState.Send(status.BridgeState{
 			StateEvent: status.StateBadCredentials,
 			Error:      "groupme-account-mismatch",
@@ -185,6 +230,8 @@ func (gc *GMClient) runSession(ctx context.Context) {
 	// newer messages move the bridged history past it. Live messages only
 	// arrive over push, so the login is connected only while the user channel is.
 	gc.syncRemoteProfile(ctx, me)
+	ctx, stop := context.WithCancel(ctx)
+	defer stop()
 	userChannel := groupme.UserChannel(me.ID)
 	var reactionRefreshes sync.WaitGroup
 	sub := groupme.NewPushSubscription(ctx)
@@ -193,8 +240,12 @@ func (gc *GMClient) runSession(ctx context.Context) {
 		if channel != userChannel {
 			return
 		}
-		chats := gc.catchUp(ctx)
+		chats, err := gc.catchUp(ctx)
 		if ctx.Err() != nil {
+			return
+		}
+		if err != nil {
+			gc.connectFailed(err)
 			return
 		}
 		gc.UserLogin.BridgeState.Send(status.BridgeState{StateEvent: status.StateConnected})
@@ -204,6 +255,13 @@ func (gc *GMClient) runSession(ctx context.Context) {
 			gc.refreshRecentReactions(ctx, chats)
 			gc.syncReadCheckpoints(ctx)
 		}()
+	}, func(ctx context.Context, channel string) {
+		if channel != userChannel {
+			return
+		}
+		if _, err := gc.Client.MyUser(ctx); isAuthError(err) {
+			gc.rejectToken(err)
+		}
 	}, func(err error) {
 		gc.UserLogin.BridgeState.Send(status.BridgeState{
 			StateEvent: status.StateTransientDisconnect,
@@ -217,14 +275,18 @@ func (gc *GMClient) runSession(ctx context.Context) {
 	gc.pushMu.Lock()
 	gc.push = sub
 	gc.pushTransport = transport
+	gc.stopSession = stop
 	gc.pushMu.Unlock()
-	if err := sub.SubscribeToUser(me.ID, gc.Meta.Token); err != nil {
+	if gc.tokenRejected.Load() {
+		stop()
+	} else if err := sub.SubscribeToUser(me.ID, gc.Meta.Token); err != nil {
 		gc.UserLogin.Log.Err(err).Msg("Failed to subscribe to GroupMe push channel")
 	}
 	<-ctx.Done()
 	gc.pushMu.Lock()
 	gc.push = nil
 	gc.pushTransport = nil
+	gc.stopSession = nil
 	gc.pushMu.Unlock()
 	sub.Wait()
 	reactionRefreshes.Wait()
@@ -264,7 +326,7 @@ func (gc *GMClient) Disconnect() {
 }
 
 func (gc *GMClient) IsLoggedIn() bool {
-	return gc.Client != nil && gc.Meta.Token != ""
+	return gc.Client != nil && gc.Meta.Token != "" && !gc.tokenRejected.Load()
 }
 
 func (gc *GMClient) LogoutRemote(ctx context.Context) {

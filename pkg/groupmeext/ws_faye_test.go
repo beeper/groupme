@@ -13,7 +13,7 @@ import (
 
 func TestActivityHookRespectsSubscriptionGate(t *testing.T) {
 	ctx := context.Background()
-	client := NewWSFayeClient(zerolog.Nop(), nil, nil)
+	client := NewWSFayeClient(zerolog.Nop(), nil, nil, nil)
 	sub := &pushSubscription{messages: make(chan groupme.PushMessage, 1)}
 	client.subs["/user/20"] = sub
 	var handled []groupme.PushMessage
@@ -45,7 +45,7 @@ func TestActivityHookRespectsSubscriptionGate(t *testing.T) {
 }
 
 func TestTypingRequiresPushConnection(t *testing.T) {
-	client := NewWSFayeClient(zerolog.Nop(), nil, nil)
+	client := NewWSFayeClient(zerolog.Nop(), nil, nil, nil)
 	if err := client.SendTyping(context.Background(), "/group/88", "test-token", "20"); err == nil {
 		t.Fatal("typing succeeded without a push connection")
 	}
