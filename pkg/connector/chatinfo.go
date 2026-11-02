@@ -19,6 +19,7 @@ package connector
 import (
 	"cmp"
 	"context"
+	"crypto/sha256"
 	"fmt"
 
 	"github.com/rs/zerolog"
@@ -48,6 +49,8 @@ func (gc *GMClient) avatarFor(ctx context.Context, url string) *bridgev2.Avatar 
 		avatar.MXC, err = gc.Main.directMediaURI(ctx, "1i", url)
 		if err != nil {
 			zerolog.Ctx(ctx).Warn().Err(err).Msg("Failed to generate GroupMe avatar media URI")
+		} else {
+			avatar.Hash = sha256.Sum256([]byte(url))
 		}
 	}
 	return avatar

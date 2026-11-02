@@ -46,7 +46,7 @@ func parseDirectMediaID(mediaID networkid.MediaID) ([]string, error) {
 	}
 	switch fields[0] {
 	case "1i":
-		if len(fields) == 2 && groupmeext.ValidateMediaURL(fields[1]) == nil {
+		if len(fields) == 2 && groupmeext.ValidateImageURL(fields[1]) == nil {
 			return fields, nil
 		}
 	case "1v":
@@ -111,9 +111,11 @@ func (gc *GMClient) directMediaContent(ctx context.Context, msg *groupme.Message
 	case groupme.Video:
 		fields = []string{"1v", string(gc.UserLogin.ID), att.URL}
 		content.MsgType, content.Body = event.MsgVideo, "video"
+		content.Info = &event.FileInfo{MimeType: "video/mp4"}
 	case groupme.Audio:
 		fields = []string{"1v", string(gc.UserLogin.ID), att.URL}
 		content.MsgType, content.Body = event.MsgAudio, "voice note"
+		content.Info = &event.FileInfo{MimeType: "audio/mp4"}
 	case groupme.File:
 		fields = []string{"1f", string(gc.UserLogin.ID), string(msg.GroupID), att.FileID}
 		meta, err := groupmeext.GetFileMetadata(ctx, msg.GroupID, att.FileID, gc.Meta.Token)

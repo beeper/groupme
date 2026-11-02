@@ -45,6 +45,9 @@ func imageInfoFromURL(rawURL string) *event.FileInfo {
 	}
 	match := imageNamePattern.FindStringSubmatch(path.Base(parsed.Path))
 	if match == nil {
+		if groupmeext.IsGiphyImageURL(rawURL) {
+			return &event.FileInfo{MimeType: "image/gif"}
+		}
 		return nil
 	}
 	info := &event.FileInfo{MimeType: mime.TypeByExtension("." + strings.ToLower(match[3]))}
@@ -86,6 +89,11 @@ func visibleText(msg *groupme.Message) string {
 	}
 	if strings.HasPrefix(text, "⚠️You received a voice note") && slices.ContainsFunc(msg.Attachments, func(att *groupme.Attachment) bool {
 		return att != nil && att.Type == groupme.Audio
+	}) {
+		return ""
+	}
+	if groupmeext.IsGiphyImageURL(strings.TrimSpace(text)) && slices.ContainsFunc(msg.Attachments, func(att *groupme.Attachment) bool {
+		return att != nil && (att.Type == "linked_image" || att.Type == "postprocessing")
 	}) {
 		return ""
 	}

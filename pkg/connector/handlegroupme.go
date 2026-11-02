@@ -159,7 +159,7 @@ func (gc *GMClient) convertGroupMeMessage(ctx context.Context, portal *bridgev2.
 	// Poll events carry content in Event.Data; attachments only identify the
 	// poll. Fall back to the native message text if conversion fails.
 	if msg.Event != nil && strings.HasPrefix(msg.Event.Type, "poll.") {
-		if part := convertGroupMePollEvent(ctx, gc.Client, msg); part != nil {
+		if part := gc.convertGroupMePollEvent(ctx, msg); part != nil {
 			cm.Parts = append(cm.Parts, part)
 			return cm, nil
 		}
@@ -169,6 +169,14 @@ func (gc *GMClient) convertGroupMeMessage(ctx context.Context, portal *bridgev2.
 	for i, att := range msg.Attachments {
 		if att == nil {
 			continue
+		}
+		switch att.Type {
+		case "linked_image":
+			att = &groupme.Attachment{Type: groupme.Image, URL: att.URL}
+		case "postprocessing":
+			if stickerURL := strings.TrimSpace(msg.Text); groupmeext.IsGiphyImageURL(stickerURL) {
+				att = &groupme.Attachment{Type: groupme.Image, URL: stickerURL}
+			}
 		}
 		partID := networkid.PartID(fmt.Sprintf("attachment-%d", i))
 		var content *event.MessageEventContent
@@ -298,7 +306,7 @@ func failedAttachment(partID networkid.PartID) *bridgev2.ConvertedMessagePart {
 
 // Active group polls use the framework's interactive poll event. Reminders,
 // final anonymous tallies, and unsupported definitions retain readable text.
-func convertGroupMePollEvent(ctx context.Context, client *groupmeext.Client, msg *groupme.Message) *bridgev2.ConvertedMessagePart {
+func (gc *GMClient) convertGroupMePollEvent(ctx context.Context, msg *groupme.Message) *bridgev2.ConvertedMessagePart {
 	log := zerolog.Ctx(ctx)
 
 	var data groupme.PollEventData
@@ -313,7 +321,7 @@ func convertGroupMePollEvent(ctx context.Context, client *groupmeext.Client, msg
 		if data.Conversation.ID == "" || data.Poll.ID == "" || data.Conversation.ID != string(msg.GroupID) {
 			return nil
 		}
-		poll, err := client.GetPoll(ctx, data.Conversation.ID, data.Poll.ID)
+		poll, err := gc.Client.GetPoll(ctx, data.Conversation.ID, data.Poll.ID)
 		if err != nil {
 			// Best-effort: GroupMe's own notice text already mentions the
 			// poll by name, so a failed detail fetch degrades to
@@ -340,6 +348,7 @@ func convertGroupMePollEvent(ctx context.Context, client *groupmeext.Client, msg
 		}
 		body = b.String()
 		if part := interactivePollPart(poll, body); part != nil {
+			gc.trackPoll(ctx, msg.GroupID, MakeMessageID(msg.ID), poll)
 			return part
 		}
 
