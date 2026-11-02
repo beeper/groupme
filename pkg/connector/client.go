@@ -58,6 +58,9 @@ type GMClient struct {
 
 	tokenRejected atomic.Bool
 
+	blockMu      sync.Mutex
+	blockChanged map[groupme.ID]time.Time
+
 	readCheckpointsMu sync.Mutex
 	readCheckpoints   map[groupme.ID]groupme.ID
 }

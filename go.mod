@@ -10,8 +10,8 @@ require (
 	github.com/google/uuid v1.2.0
 	github.com/mattn/go-sqlite3 v1.14.52
 	github.com/rs/zerolog v1.35.1
-	go.mau.fi/util v0.10.1
-	maunium.net/go/mautrix v0.31.0
+	go.mau.fi/util v0.10.2-0.20260918225449-a4c0d5b86aa8
+	maunium.net/go/mautrix v0.31.1-0.20261014100333-d27bb75b1649
 )
 
 require (

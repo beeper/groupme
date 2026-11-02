@@ -27,6 +27,7 @@
 | Typing notifications | ✅ Groups and DMs | ⚠️ Start pulses; SDK does not refresh sustained typing |
 | Read receipts | ✅ Own checkpoints and DM seen | ✅ Public reads and DM seen; private reads need SDK support |
 | Whole DM conversation deletion | ✅ Deletion and reappearance | ✅ Deletion and reappearance |
+| User blocking | ⚠️ Outgoing block state on DM metadata refresh/reconnect | ✅ Block and unblock in DMs; no spam reporting |
 
 Groups have no delete-for-self operation equivalent to deleting a DM
 conversation.

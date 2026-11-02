@@ -141,6 +141,28 @@ peer-visible DM seen receipt, with both native sessions of the reading account
 kept away from the DM. These are local validation results, not production
 readiness claims.
 
+## Blocking
+
+DMs support blocking and unblocking the other user through mautrix's
+`com.beeper.block_user` event and `block-user` / `unblock-user` commands.
+The connector uses GroupMe's account-level block operation, which prevents the
+blocked person from sending DMs or adding the blocker to groups. Blocking does
+not leave shared groups or delete conversation history. Spam reporting is not
+implemented and requests for it are rejected before changing the block state.
+
+DM metadata refreshes, including reconnect sync, read the account's outgoing
+block list. GroupMe's `/blocks/between` endpoint is symmetric and is deliberately
+not used for this: a block by the other person is not a block you can undo.
+Failed lookups preserve the previous state. No native block-change push was
+observed, so changes made in GroupMe are picked up on metadata refresh or
+reconnect, rather than immediately.
+
+The October 15 implementation was checked against both native tester accounts:
+the compiled connector's block/unblock calls, repeated calls, and directional
+DM metadata. Browser requests were captured through Chrome remote debugging.
+This validates the connector/native API path; Beeper UI and deployment validation
+remain separate.
+
 ## Media limits
 
 The connector retains its 25 MiB image/video send limit and supports the

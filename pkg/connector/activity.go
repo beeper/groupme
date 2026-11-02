@@ -274,6 +274,13 @@ type nativeReceipt struct {
 	client *GMClient
 }
 
+// Override the embedded EventMeta hook: the current SDK prefers this callback
+// over PreHandle, so receipt translation must run here as well.
+func (r *nativeReceipt) PreHandleWithResult(ctx context.Context, portal *bridgev2.Portal) *bridgev2.EventHandlingResult {
+	r.PreHandle(ctx, portal)
+	return nil
+}
+
 // Web's read cursor includes hidden message.update and message.deleted records.
 // Translate that native cursor to the preceding visible message inside the
 // portal queue; those records have no Matrix message or mapping.
