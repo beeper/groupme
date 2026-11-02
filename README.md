@@ -26,8 +26,8 @@ is incomplete.
   reactions and replies are included in converted history.
 
 [ROADMAP.md](ROADMAP.md) lists functionality in each direction.
-Individual message deletion, poll creation, vote withdrawal, live vote-result
-synchronization, and outgoing group management are not advertised as supported.
+Poll creation, vote withdrawal, live vote-result synchronization, and outgoing
+group management are not advertised as supported.
 
 ## Login
 

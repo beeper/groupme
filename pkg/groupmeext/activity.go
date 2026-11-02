@@ -64,7 +64,7 @@ func activityRequest(ctx context.Context, token, method, path string, body, resu
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("GroupMe activity request returned HTTP %d", resp.StatusCode)
+		return &HTTPError{Request: "GroupMe activity request", StatusCode: resp.StatusCode}
 	}
 	if result != nil {
 		if err = json.NewDecoder(io.LimitReader(resp.Body, 8*1024*1024)).Decode(result); err != nil {
@@ -126,4 +126,8 @@ func SendDMReadReceipt(ctx context.Context, token string, conversationID groupme
 // It is separate from clearing history, blocking the peer, or leaving a group.
 func DeleteDM(ctx context.Context, token string, conversationID groupme.ID) error {
 	return activityRequest(ctx, token, http.MethodDelete, "/v3/chats/"+url.PathEscape(string(conversationID)), nil, nil)
+}
+
+func DeleteMessage(ctx context.Context, token string, conversationID, messageID groupme.ID) error {
+	return activityRequest(ctx, token, http.MethodDelete, "/v3/conversations/"+url.PathEscape(string(conversationID))+"/messages/"+url.PathEscape(string(messageID)), nil, nil)
 }

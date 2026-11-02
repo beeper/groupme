@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -33,7 +34,6 @@ import (
 	"maunium.net/go/mautrix/event"
 
 	"github.com/beeper/groupme-lib"
-
 	"github.com/beeper/groupme/pkg/groupmeext"
 )
 
@@ -45,6 +45,12 @@ func (gc *GMClient) HandleError(err error) {
 
 func (gc *GMClient) HandleTextMessage(msg groupme.Message) {
 	if gc.handleMessageUpdate(msg) {
+		return
+	}
+	if evt, handled := gc.messageDeleteEvent(msg); handled {
+		if evt != nil {
+			gc.Main.br.QueueRemoteEvent(gc.UserLogin, evt)
+		}
 		return
 	}
 	if msg.ID == "" || msg.UserID == "" || gc.portalKeyForMessage(&msg).ID == "" {
@@ -73,8 +79,30 @@ func (gc *GMClient) makeRemoteMessage(msg groupme.Message) *simplevent.Message[*
 	}
 }
 
+func isSystemMessage(msg *groupme.Message) bool {
+	return msg.UserID == "system" || msg.System
+}
+
+func groupCallStarter(msg *groupme.Message) groupme.ID {
+	if msg.Event == nil || msg.Event.Type != "group.call.started" {
+		return ""
+	}
+	var data struct {
+		User struct {
+			ID groupme.ID `json:"id"`
+		} `json:"user"`
+	}
+	if json.Unmarshal(msg.Event.Data, &data) != nil || data.User.ID == "system" {
+		return ""
+	}
+	return data.User.ID
+}
+
 func (gc *GMClient) messageSender(msg *groupme.Message) bridgev2.EventSender {
-	if msg.UserID == "system" || msg.System {
+	if caller := groupCallStarter(msg); caller != "" {
+		return bridgev2.EventSender{IsFromMe: string(caller) == gc.Meta.GMID, Sender: MakeUserID(caller)}
+	}
+	if isSystemMessage(msg) {
 		return bridgev2.EventSender{}
 	}
 	return bridgev2.EventSender{IsFromMe: string(msg.UserID) == gc.Meta.GMID, Sender: MakeUserID(msg.UserID)}
@@ -83,7 +111,7 @@ func (gc *GMClient) messageSender(msg *groupme.Message) bridgev2.EventSender {
 func (gc *GMClient) convertMessage(ctx context.Context, portal *bridgev2.Portal, intent bridgev2.MatrixAPI, msg *groupme.Message) (*bridgev2.ConvertedMessage, error) {
 	// Message snapshots may fill a missing profile, never overwrite current
 	// account-level data. Conversion runs inside the framework event path.
-	if msg.Name != "" && string(msg.UserID) != gc.Meta.GMID && msg.UserID != "system" && !msg.System {
+	if msg.Name != "" && string(msg.UserID) != gc.Meta.GMID && !isSystemMessage(msg) {
 		ghost, err := gc.Main.br.GetGhostByID(ctx, MakeUserID(msg.UserID))
 		if err != nil {
 			return nil, err
@@ -114,6 +142,10 @@ func (gc *GMClient) convertGroupMeMessage(ctx context.Context, portal *bridgev2.
 				part.DBMetadata = meta
 			}
 			meta.NativeContent = nativeContent(msg)
+			// Clients render bridge bot notices as system lines rather than as chat messages.
+			if isSystemMessage(msg) && groupCallStarter(msg) == "" && part.Content.MsgType == event.MsgText {
+				part.Content.MsgType = event.MsgNotice
+			}
 		}
 	}()
 	log := zerolog.Ctx(ctx)
@@ -127,7 +159,7 @@ func (gc *GMClient) convertGroupMeMessage(ctx context.Context, portal *bridgev2.
 	// Poll events carry content in Event.Data; attachments only identify the
 	// poll. Fall back to the native message text if conversion fails.
 	if msg.Event != nil && strings.HasPrefix(msg.Event.Type, "poll.") {
-		if part := convertGroupMePollEvent(ctx, gc.Client, msg); part != nil {
+		if part := gc.convertGroupMePollEvent(ctx, msg); part != nil {
 			cm.Parts = append(cm.Parts, part)
 			return cm, nil
 		}
@@ -138,10 +170,18 @@ func (gc *GMClient) convertGroupMeMessage(ctx context.Context, portal *bridgev2.
 		if att == nil {
 			continue
 		}
+		switch att.Type {
+		case "linked_image":
+			att = &groupme.Attachment{Type: groupme.Image, URL: att.URL}
+		case "postprocessing":
+			if stickerURL := strings.TrimSpace(msg.Text); groupmeext.IsGiphyImageURL(stickerURL) {
+				att = &groupme.Attachment{Type: groupme.Image, URL: stickerURL}
+			}
+		}
 		partID := networkid.PartID(fmt.Sprintf("attachment-%d", i))
 		var content *event.MessageEventContent
 		switch att.Type {
-		case groupme.Image, groupme.Video, groupme.File:
+		case groupme.Image, groupme.Video, groupme.Audio, groupme.File:
 			if att.Type == groupme.File && msg.GroupID == "" {
 				log.Warn().Msg("Ignoring GroupMe file attachment outside a group")
 				continue
@@ -163,7 +203,7 @@ func (gc *GMClient) convertGroupMeMessage(ctx context.Context, portal *bridgev2.
 			switch att.Type {
 			case groupme.Image:
 				data, mime, err = groupmeext.DownloadImage(ctx, att.URL)
-			case groupme.Video:
+			case groupme.Video, groupme.Audio:
 				data, mime, err = groupmeext.DownloadVideo(ctx, att.URL, gc.Meta.Token)
 			case groupme.File:
 				data, filename, mime, err = groupmeext.DownloadFile(ctx, msg.GroupID, att.FileID, gc.Meta.Token)
@@ -180,10 +220,16 @@ func (gc *GMClient) convertGroupMeMessage(ctx context.Context, portal *bridgev2.
 			if err != nil {
 				return nil, fmt.Errorf("upload GroupMe attachment: %w", err)
 			}
+			info := &event.FileInfo{MimeType: mime, Size: len(data)}
+			if att.Type == groupme.Image {
+				if urlInfo := imageInfoFromURL(att.URL); urlInfo != nil {
+					info.Width, info.Height = urlInfo.Width, urlInfo.Height
+				}
+			}
 			content = &event.MessageEventContent{
 				MsgType: event.MessageType("m." + att.Type),
 				Body:    filename,
-				Info:    &event.FileInfo{MimeType: mime, Size: len(data)},
+				Info:    info,
 			}
 			if file != nil {
 				content.File = file
@@ -216,8 +262,10 @@ func (gc *GMClient) convertGroupMeMessage(ctx context.Context, portal *bridgev2.
 			continue
 
 		default:
-			// Mentions and custom emoji retain their plaintext fallback.
 			continue
+		}
+		if att.Type == groupme.Audio {
+			addVoiceNoteInfo(content, att)
 		}
 
 		cm.Parts = append(cm.Parts, &bridgev2.ConvertedMessagePart{
@@ -227,18 +275,26 @@ func (gc *GMClient) convertGroupMeMessage(ctx context.Context, portal *bridgev2.
 		})
 	}
 
-	if len(msg.Text) > 0 || len(cm.Parts) == 0 {
+	if text := visibleText(msg); len(text) > 0 || len(cm.Parts) == 0 {
+		content := &event.MessageEventContent{
+			MsgType: event.MsgText,
+			Body:    text,
+		}
+		gc.applyTextAttachments(content, msg.Attachments)
 		cm.Parts = append(cm.Parts, &bridgev2.ConvertedMessagePart{
-			ID:   "",
-			Type: event.EventMessage,
-			Content: &event.MessageEventContent{
-				MsgType: event.MsgText,
-				Body:    msg.Text,
-			},
+			ID:      "",
+			Type:    event.EventMessage,
+			Content: content,
 		})
 	}
 
 	cm.MergeCaption()
+	// Replies resolve to the default part, so it must exist and stay on the
+	// same part whether or not the message has text, including across edits.
+	if i := slices.IndexFunc(cm.Parts, func(part *bridgev2.ConvertedMessagePart) bool { return part.ID == "" }); i > 0 {
+		cm.Parts[i].ID = "text"
+	}
+	cm.Parts[0].ID = ""
 	return cm, nil
 }
 
@@ -250,7 +306,7 @@ func failedAttachment(partID networkid.PartID) *bridgev2.ConvertedMessagePart {
 
 // Active group polls use the framework's interactive poll event. Reminders,
 // final anonymous tallies, and unsupported definitions retain readable text.
-func convertGroupMePollEvent(ctx context.Context, client *groupmeext.Client, msg *groupme.Message) *bridgev2.ConvertedMessagePart {
+func (gc *GMClient) convertGroupMePollEvent(ctx context.Context, msg *groupme.Message) *bridgev2.ConvertedMessagePart {
 	log := zerolog.Ctx(ctx)
 
 	var data groupme.PollEventData
@@ -265,7 +321,7 @@ func convertGroupMePollEvent(ctx context.Context, client *groupmeext.Client, msg
 		if data.Conversation.ID == "" || data.Poll.ID == "" || data.Conversation.ID != string(msg.GroupID) {
 			return nil
 		}
-		poll, err := client.GetPoll(ctx, data.Conversation.ID, data.Poll.ID)
+		poll, err := gc.Client.GetPoll(ctx, data.Conversation.ID, data.Poll.ID)
 		if err != nil {
 			// Best-effort: GroupMe's own notice text already mentions the
 			// poll by name, so a failed detail fetch degrades to
@@ -292,6 +348,7 @@ func convertGroupMePollEvent(ctx context.Context, client *groupmeext.Client, msg
 		}
 		body = b.String()
 		if part := interactivePollPart(poll, body); part != nil {
+			gc.trackPoll(ctx, msg.GroupID, MakeMessageID(msg.ID), poll)
 			return part
 		}
 

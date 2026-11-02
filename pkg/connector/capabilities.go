@@ -53,8 +53,17 @@ var imageMimes = map[string]event.CapabilitySupportLevel{
 	"image/gif":  event.CapLevelFullySupported,
 }
 
+var gifMimes = map[string]event.CapabilitySupportLevel{
+	"image/gif": event.CapLevelFullySupported,
+}
+
 var videoMimes = map[string]event.CapabilitySupportLevel{
 	"video/mp4": event.CapLevelFullySupported,
+}
+
+// Beeper clients transcode voice recordings to a listed type before sending.
+var voiceMimes = map[string]event.CapabilitySupportLevel{
+	"audio/mp4": event.CapLevelFullySupported,
 }
 
 var fileMimes = map[string]event.CapabilitySupportLevel{
@@ -63,16 +72,29 @@ var fileMimes = map[string]event.CapabilitySupportLevel{
 }
 
 var roomCaps = &event.RoomFeatures{
-	ID: "fi.mau.groupme.capabilities.2026_10_14.4",
+	ID: "fi.mau.groupme.capabilities.2026_10_27.1",
+	Formatting: event.FormattingFeatureMap{
+		event.FmtUserLink: event.CapLevelFullySupported,
+	},
 	File: event.FileFeatureMap{
 		event.MsgImage: {
 			MimeTypes: imageMimes,
 			Caption:   event.CapLevelFullySupported,
 			MaxSize:   MaxFileSize,
 		},
+		event.CapMsgGIF: {
+			MimeTypes: gifMimes,
+			Caption:   event.CapLevelFullySupported,
+			MaxSize:   MaxFileSize,
+		},
 		event.MsgVideo: {
 			MimeTypes: videoMimes,
 			Caption:   event.CapLevelFullySupported,
+			MaxSize:   MaxFileSize,
+		},
+		event.CapMsgVoice: {
+			MimeTypes: voiceMimes,
+			Caption:   event.CapLevelDropped,
 			MaxSize:   MaxFileSize,
 		},
 		event.MsgFile: {
@@ -83,6 +105,7 @@ var roomCaps = &event.RoomFeatures{
 	},
 	MaxTextLength:       1000,
 	Edit:                event.CapLevelPartialSupport,
+	Delete:              event.CapLevelFullySupported,
 	EditMaxAge:          ptr.Ptr(jsontime.S(15 * time.Minute)),
 	TypingNotifications: true,
 	Reply:               event.CapLevelFullySupported,
