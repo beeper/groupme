@@ -42,7 +42,7 @@ func (gc *GMClient) HandleMatrixPollStart(ctx context.Context, msg *bridgev2.Mat
 	}
 	poll, messageID, err := gc.Client.CreatePoll(ctx, string(groupID), request)
 	if err != nil {
-		status := wrapGroupMeError(err, "failed to create poll")
+		status := gc.wrapGroupMeError(err, "failed to create poll")
 		var meta *groupme.Meta
 		if status.Status == event.MessageStatusFail && errors.As(err, &meta) && len(meta.Errors) > 0 {
 			status = status.WithMessage(strings.Join(meta.Errors, "; "))
