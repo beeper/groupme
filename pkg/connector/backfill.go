@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"slices"
 	"strings"
 	"time"
@@ -69,6 +70,9 @@ func (gc *GMClient) fetchMessagePage(ctx context.Context, portalID networkid.Por
 		return nil, nil
 	}
 	if err != nil {
+		if groupMeHTTPStatus(err) == http.StatusUnauthorized {
+			gc.rejectToken(err)
+		}
 		return nil, err
 	}
 	for _, msg := range messages {

@@ -63,10 +63,10 @@ func (gc *GMClient) HandleMatrixTyping(ctx context.Context, msg *bridgev2.Matrix
 	transport := gc.pushTransport
 	gc.pushMu.Unlock()
 	if transport == nil {
-		return wrapGroupMeError(errors.New("GroupMe push is disconnected"), "not connected to GroupMe").WithIsCertain(true)
+		return gc.wrapGroupMeError(errors.New("GroupMe push is disconnected"), "not connected to GroupMe").WithIsCertain(true)
 	}
 	if err = transport.SendTyping(ctx, channel, gc.Meta.Token, gc.Meta.GMID); err != nil {
-		return wrapGroupMeError(err, "failed to send typing notification")
+		return gc.wrapGroupMeError(err, "failed to send typing notification")
 	}
 	return nil
 }
@@ -95,14 +95,14 @@ func (gc *GMClient) HandleMatrixReadReceipt(ctx context.Context, msg *bridgev2.M
 		return err
 	}
 	if err = groupmeext.MarkRead(ctx, gc.Meta.Token, conversation, ParseMessageID(target.ID)); err != nil {
-		return wrapGroupMeError(err, "failed to mark as read")
+		return gc.wrapGroupMeError(err, "failed to mark as read")
 	}
 	gc.recordReadCheckpoint(conversation, ParseMessageID(target.ID))
 	// bridgev2 invokes this for public m.read only. Implicit receipts from
 	// sending a message update our checkpoint without publishing a seen event.
 	if kind, _ := ParsePortalID(msg.Portal.ID); kind == PortalTypeDM && !msg.Implicit {
 		if err = groupmeext.SendDMReadReceipt(ctx, gc.Meta.Token, conversation); err != nil {
-			return wrapGroupMeError(err, "failed to send read receipt")
+			return gc.wrapGroupMeError(err, "failed to send read receipt")
 		}
 	}
 	return nil
