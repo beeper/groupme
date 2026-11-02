@@ -457,7 +457,8 @@ func (c *WSFayeClient) echoLoop(ctx context.Context, conn *websocket.Conn, echoe
 	}
 	ticker := time.NewTicker(pushEchoInterval)
 	defer ticker.Stop()
-	for n := 1; ; n++ {
+	sent := 0
+	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -470,7 +471,8 @@ func (c *WSFayeClient) echoLoop(ctx context.Context, conn *websocket.Conn, echoe
 		if !ready {
 			continue
 		}
-		id := fmt.Sprintf("%s:%d", clientID, n)
+		sent++
+		id := fmt.Sprintf("%s:%d", clientID, sent)
 		_, err := c.request(ctx, conn, &bayeuxMessage{
 			Chan: c.EchoChannel, ClientID: clientID,
 			MsgData: map[string]interface{}{"type": "ping", "ping_id": id},
