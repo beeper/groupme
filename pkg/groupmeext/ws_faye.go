@@ -38,6 +38,8 @@ import (
 // GroupMe uses the same Faye endpoint for WebSocket and HTTP transports.
 var wsPushServer = "wss" + strings.TrimPrefix(groupme.PushServer, "https")
 
+var pushEchoInterval, pushEchoTimeout = 2 * time.Minute, 30 * time.Second
+
 const (
 	metaHandshake   = "/meta/handshake"
 	metaSubscribe   = "/meta/subscribe"
@@ -82,7 +84,11 @@ func (m *bayeuxMessage) Error() string { return m.MsgError }
 type WSFayeClient struct {
 	// OnEvent handles native events absent from groupme-lib's dispatcher. Set
 	// before Listen; returning true consumes the event after subscription gating.
-	OnEvent           func(context.Context, groupme.PushMessage) bool
+	OnEvent func(context.Context, groupme.PushMessage) bool
+	// EchoChannel gets a ping published to it periodically. GroupMe can stop
+	// routing pushes to a connection while its socket and connects stay
+	// healthy; a ping that doesn't echo back means that happened. Set before Listen.
+	EchoChannel       string
 	log               zerolog.Logger
 	onSubscribed      func(ctx context.Context, channel string)
 	onSubscribeFailed func(ctx context.Context, channel string)
@@ -94,6 +100,7 @@ type WSFayeClient struct {
 	connWorkers *sync.WaitGroup
 	clientID    string
 	subs        map[string]*pushSubscription
+	echoes      chan string
 
 	pendingMu sync.Mutex
 	pending   map[string]chan *bayeuxMessage
@@ -198,7 +205,7 @@ func decodeBayeuxFrame(raw []byte) ([]*bayeuxMessage, error) {
 
 // Route replies by request ID, and push events by subscription channel.
 func (c *WSFayeClient) handleIncoming(ctx context.Context, m *bayeuxMessage) {
-	if m == nil {
+	if m == nil || c.takeEcho(m) {
 		return
 	}
 	if m.ReqID != "" {
@@ -442,6 +449,70 @@ func (c *WSFayeClient) connectLoop(ctx context.Context, conn *websocket.Conn) er
 	}
 }
 
+// Other connections' pings pass through to groupme-lib, which ignores them.
+func (c *WSFayeClient) takeEcho(m *bayeuxMessage) bool {
+	id, _ := m.MsgData["ping_id"].(string)
+	if id == "" || m.Chan != c.EchoChannel {
+		return false
+	}
+	c.mu.Lock()
+	echoes, own := c.echoes, c.clientID != "" && strings.HasPrefix(id, c.clientID+":")
+	c.mu.Unlock()
+	if !own {
+		return false
+	}
+	select {
+	case echoes <- id:
+	default:
+	}
+	return true
+}
+
+func (c *WSFayeClient) echoLoop(ctx context.Context, conn *websocket.Conn, echoes <-chan string) error {
+	if c.EchoChannel == "" {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	ticker := time.NewTicker(pushEchoInterval)
+	defer ticker.Stop()
+	sent := 0
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+		c.mu.Lock()
+		sub, clientID := c.subs[c.EchoChannel], c.clientID
+		ready := sub != nil && sub.ready
+		c.mu.Unlock()
+		if !ready {
+			continue
+		}
+		sent++
+		id := fmt.Sprintf("%s:%d", clientID, sent)
+		_, err := c.request(ctx, conn, &bayeuxMessage{
+			Chan: c.EchoChannel, ClientID: clientID,
+			MsgData: map[string]interface{}{"type": "ping", "ping_id": id},
+			MsgExt:  map[string]interface{}{"access_token": sub.token},
+		})
+		if err != nil {
+			return fmt.Errorf("publishing ping: %w", err)
+		}
+		timeout := time.After(pushEchoTimeout)
+		for echoed := false; !echoed; {
+			select {
+			case got := <-echoes:
+				echoed = got == id
+			case <-timeout:
+				return fmt.Errorf("ping %s was not echoed within %s", id, pushEchoTimeout)
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+	}
+}
+
 // Check transport liveness independently of Bayeux message traffic.
 func (c *WSFayeClient) pingLoop(ctx context.Context, conn *websocket.Conn) error {
 	const interval = 30 * time.Second
@@ -476,9 +547,10 @@ func (c *WSFayeClient) connectAndRun(ctx context.Context) (handshook bool, err e
 
 	runCtx, cancelRun := context.WithCancel(ctx)
 	var workers sync.WaitGroup
+	echoes := make(chan string, 1)
 
 	c.mu.Lock()
-	c.conn, c.connCtx, c.connWorkers, c.clientID = conn, runCtx, &workers, ""
+	c.conn, c.connCtx, c.connWorkers, c.clientID, c.echoes = conn, runCtx, &workers, "", echoes
 	c.mu.Unlock()
 	defer func() {
 		cancelRun()
@@ -509,6 +581,10 @@ func (c *WSFayeClient) connectAndRun(ctx context.Context) (handshook bool, err e
 	workers.Add(1)
 	go func() { defer workers.Done(); pingErrCh <- c.pingLoop(runCtx, conn) }()
 
+	echoErrCh := make(chan error, 1)
+	workers.Add(1)
+	go func() { defer workers.Done(); echoErrCh <- c.echoLoop(runCtx, conn, echoes) }()
+
 	select {
 	case <-ctx.Done():
 		return true, ctx.Err()
@@ -518,6 +594,8 @@ func (c *WSFayeClient) connectAndRun(ctx context.Context) (handshook bool, err e
 		return true, fmt.Errorf("connect loop: %w", err)
 	case err := <-pingErrCh:
 		return true, fmt.Errorf("ping loop: %w", err)
+	case err := <-echoErrCh:
+		return true, fmt.Errorf("echo loop: %w", err)
 	}
 }
 

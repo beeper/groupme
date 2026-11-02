@@ -271,6 +271,7 @@ func (gc *GMClient) runSession(ctx context.Context) {
 		})
 	})
 	transport.OnEvent = gc.handleActivity
+	transport.EchoChannel = userChannel
 	sub.StartListening(ctx, transport)
 	gc.pushMu.Lock()
 	gc.push = sub
