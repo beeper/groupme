@@ -3,7 +3,6 @@ package connector
 import (
 	"context"
 	"errors"
-	"fmt"
 	"slices"
 	"strings"
 	"time"
@@ -18,10 +17,52 @@ import (
 
 var _ bridgev2.PollHandlingNetworkAPI = (*GMClient)(nil)
 
-// Only voting on received polls is implemented. The interface also requires a
-// creation handler, and the shared poll capability therefore stays partial.
-func (gc *GMClient) HandleMatrixPollStart(context.Context, *bridgev2.MatrixPollStart) (*bridgev2.MatrixMessageResponse, error) {
-	return nil, bridgev2.ErrPollsNotSupported
+// GroupMe polls require an expiration, even though Matrix polls stay open until ended.
+func (gc *GMClient) HandleMatrixPollStart(ctx context.Context, msg *bridgev2.MatrixPollStart) (*bridgev2.MatrixMessageResponse, error) {
+	portalType, groupID := ParsePortalID(msg.Portal.ID)
+	if portalType != PortalTypeGroup {
+		return nil, permanentFailure(event.MessageStatusUnsupported, "GroupMe polls can only be created in groups")
+	}
+	start := msg.Content.PollStart
+	request := &groupme.CreatePollRequest{
+		Subject:    start.Question.GetText(),
+		Options:    make([]groupme.PollOption, len(start.Answers)),
+		Expiration: groupme.Timestamp(time.Now().Add(14*24*time.Hour - time.Minute).Unix()),
+		Visibility: "public",
+		Type:       "single",
+	}
+	if start.MaxSelections > 1 {
+		request.Type = "multi"
+	}
+	for i, answer := range start.Answers {
+		if answer.ID == "" || slices.ContainsFunc(start.Answers[:i], func(previous event.PollOption) bool { return previous.ID == answer.ID }) {
+			return nil, permanentFailure(event.MessageStatusUnsupported, "Poll answer IDs must be non-empty and unique")
+		}
+		request.Options[i].Title = answer.GetText()
+	}
+	poll, messageID, err := gc.Client.CreatePoll(ctx, string(groupID), request)
+	if err != nil {
+		status := wrapGroupMeError(err, "failed to create poll")
+		var meta *groupme.Meta
+		if status.Status == event.MessageStatusFail && errors.As(err, &meta) && len(meta.Errors) > 0 {
+			status = status.WithMessage(strings.Join(meta.Errors, "; "))
+		}
+		return nil, status
+	}
+	answerIDs := make(map[string]string, len(start.Answers))
+	for i := range min(len(start.Answers), len(poll.Options)) {
+		answerIDs[start.Answers[i].ID] = poll.Options[i].ID
+	}
+	dbMessage := &database.Message{
+		ID:       MakeMessageID(messageID),
+		SenderID: MakeUserID(groupme.ID(gc.Meta.GMID)),
+		Metadata: &MessageMetadata{PollID: poll.ID, PollAnswerIDs: answerIDs},
+	}
+	if poll.CreatedAt > 0 {
+		dbMessage.Timestamp = poll.CreatedAt.ToTime()
+	}
+	gc.trackPoll(ctx, groupID, dbMessage.ID, poll)
+	return &bridgev2.MatrixMessageResponse{DB: dbMessage}, nil
 }
 
 func (gc *GMClient) HandleMatrixPollVote(ctx context.Context, msg *bridgev2.MatrixPollVote) (*bridgev2.MatrixMessageResponse, error) {
@@ -35,12 +76,22 @@ func (gc *GMClient) HandleMatrixPollVote(ctx context.Context, msg *bridgev2.Matr
 	}
 	poll, err := gc.Client.GetPoll(ctx, string(groupID), meta.PollID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to fetch GroupMe poll: %w", err)
+		return nil, wrapGroupMeError(err, "failed to load poll").WithIsCertain(true)
 	}
 	if poll.Status != "active" || (poll.Expiration > 0 && !poll.Expiration.ToTime().After(time.Now())) {
 		return nil, pollVoteError("This GroupMe poll has ended")
 	}
-	answers := msg.Content.Response.Answers
+	gc.trackPoll(ctx, groupID, msg.VoteTo.ID, poll)
+	answers := slices.Clone(msg.Content.Response.Answers)
+	if meta.PollAnswerIDs != nil {
+		for i, answer := range answers {
+			optionID, ok := meta.PollAnswerIDs[answer]
+			if !ok {
+				return nil, pollVoteError("Unknown GroupMe poll answer")
+			}
+			answers[i] = optionID
+		}
+	}
 	if len(answers) == 0 {
 		return nil, pollVoteError("GroupMe vote withdrawal is not supported")
 	}
@@ -55,15 +106,40 @@ func (gc *GMClient) HandleMatrixPollVote(ctx context.Context, msg *bridgev2.Matr
 			return nil, pollVoteError("Unknown or repeated GroupMe poll option")
 		}
 	}
+	active := &gc.Meta.ActivePolls
+	active.Lock()
+	tracked := active.polls[poll.ID]
+	if tracked != nil {
+		tracked.voting = true
+		tracked.revision++
+	}
+	active.Unlock()
+	defer func() {
+		active.Lock()
+		if tracked != nil {
+			tracked.voting = false
+			tracked.revision++
+		}
+		active.Unlock()
+	}()
 	result, err := gc.Client.VotePoll(ctx, string(groupID), meta.PollID, answers, poll.Type == "multi")
 	if err != nil {
-		return nil, fmt.Errorf("failed to vote in GroupMe poll: %w", err)
+		return nil, wrapGroupMeError(err, "failed to vote in poll")
 	}
 	confirmed, expected := slices.Clone(result.MyVotes), slices.Clone(answers)
 	slices.Sort(confirmed)
 	slices.Sort(expected)
 	if !slices.Equal(confirmed, expected) {
-		return nil, fmt.Errorf("GroupMe did not confirm the requested poll selection")
+		return nil, wrapGroupMeError(errors.New("GroupMe did not confirm the requested poll selection"), "unexpected response from GroupMe")
+	}
+	active.Lock()
+	tracked = active.polls[poll.ID]
+	if tracked != nil {
+		tracked.Selections[gc.Meta.GMID] = confirmed
+	}
+	active.Unlock()
+	if tracked != nil {
+		gc.savePolls(ctx)
 	}
 	// GroupMe returns poll state without a message ID. Use the originating
 	// Matrix event to identify this action in the framework's message mapping,

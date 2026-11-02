@@ -74,8 +74,14 @@ func (gc *GMClient) listChats(ctx context.Context) []nativeChat {
 // and block state is applied once by syncBlockedUsers rather than per DM.
 func (gc *GMClient) catchUp(ctx context.Context) []nativeChat {
 	ctx = gc.UserLogin.Log.With().Str("action", "catch up").Logger().WithContext(ctx)
+	checkpointsLoaded := make(chan struct{})
+	go func() {
+		defer close(checkpointsLoaded)
+		gc.loadReadCheckpoints(ctx)
+	}()
 	chats := gc.listChats(ctx)
 	gc.syncBlockedUsers(ctx)
+	<-checkpointsLoaded
 	zerolog.Ctx(ctx).Info().Int("chat_count", len(chats)).Msg("Syncing GroupMe chats")
 	for _, chat := range chats {
 		if ctx.Err() != nil {
@@ -150,7 +156,10 @@ func (gc *GMClient) refreshRecentReactions(ctx context.Context, chats []nativeCh
 			gc.Main.br.QueueRemoteEvent(gc.UserLogin, evt)
 		}
 		for _, msg := range slices.Backward(messages) {
-			if msg.Event != nil && msg.Event.Type == "message.update" {
+			if evt, _ := gc.messageDeleteEvent(*msg); evt != nil {
+				gc.Main.br.QueueRemoteEvent(gc.UserLogin, evt)
+			}
+			if isHiddenRecord(msg) {
 				continue
 			}
 			if msg.Reactions != nil || msg.FavoritedBy != nil {

@@ -29,7 +29,7 @@ func TestIncomingTypingRoutesAndExpires(t *testing.T) {
 		{"group", "/group/88", "9", 0, "group:88"},
 		{"DM", "/direct_message/9_20", "9", 0, "dm:9"},
 		{"future pulse", "/group/88", "9", -time.Minute, "group:88"},
-		{"expired", "/group/88", "9", 6 * time.Second, ""},
+		{"old pulse", "/group/88", "9", 6 * time.Second, "group:88"},
 		{"self", "/group/88", "20", 0, ""},
 		{"missing sender", "/group/88", "", 0, ""},
 		{"wrong DM sender", "/direct_message/9_20", "30", 0, ""},

@@ -3,8 +3,11 @@ package connector
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"maps"
 	"reflect"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -33,10 +36,10 @@ func nativeContent(msg *groupme.Message) *groupmeext.MessageContent {
 func (gc *GMClient) HandleMatrixEdit(ctx context.Context, msg *bridgev2.MatrixEdit) error {
 	target := msg.EditTarget
 	if target.Room != msg.Portal.PortalKey || string(target.SenderID) != gc.Meta.GMID || isPollVoteID(target.ID) {
-		return fmt.Errorf("only your own messages in this GroupMe conversation can be edited")
+		return permanentFailure(event.MessageStatusNoPermission, "only your own messages in this GroupMe conversation can be edited")
 	}
 	if time.Since(target.Timestamp) > 15*time.Minute {
-		return fmt.Errorf("GroupMe messages can only be edited for 15 minutes")
+		return bridgev2.ErrEditTargetTooOld
 	}
 	kind, chatID := ParsePortalID(msg.Portal.ID)
 	if chatID == "" || (kind != PortalTypeGroup && kind != PortalTypeDM) {
@@ -47,7 +50,7 @@ func (gc *GMClient) HandleMatrixEdit(ctx context.Context, msg *bridgev2.MatrixEd
 		meta = &MessageMetadata{}
 	}
 	if meta.PollID != "" {
-		return fmt.Errorf("GroupMe polls cannot be edited as messages")
+		return permanentFailure(event.MessageStatusUnsupported, "GroupMe polls cannot be edited as messages")
 	}
 	original := meta.NativeContent
 	if original == nil {
@@ -57,7 +60,7 @@ func (gc *GMClient) HandleMatrixEdit(ctx context.Context, msg *bridgev2.MatrixEd
 		for original == nil {
 			page, err := gc.fetchMessagePage(ctx, msg.Portal.ID, before, "", 100)
 			if err != nil {
-				return err
+				return wrapGroupMeError(err, "failed to load the original message").WithIsCertain(true)
 			}
 			if len(page) == 0 {
 				break
@@ -74,7 +77,7 @@ func (gc *GMClient) HandleMatrixEdit(ctx context.Context, msg *bridgev2.MatrixEd
 			}
 		}
 		if original == nil {
-			return fmt.Errorf("could not find the native message to edit safely")
+			return permanentFailure(event.MessageStatusGenericError, "could not find the original GroupMe message to edit")
 		}
 	}
 	text := msg.Content.Body
@@ -89,24 +92,25 @@ func (gc *GMClient) HandleMatrixEdit(ctx context.Context, msg *bridgev2.MatrixEd
 		}
 		old := previous.Content.AsMessage()
 		if old.MsgType != msg.Content.MsgType || old.URL != msg.Content.URL || !reflect.DeepEqual(old.File, msg.Content.File) {
-			return fmt.Errorf("GroupMe supports editing captions, not replacing media")
+			return permanentFailure(event.MessageStatusUnsupported, "GroupMe supports editing captions, not replacing media")
 		}
 		text = msg.Content.GetCaption()
 	default:
 		return bridgev2.ErrUnsupportedMessageType
 	}
+	fmtCtx := format.NewContext(ctx)
 	if msg.Content.Format == event.FormatHTML && msg.Content.FormattedBody != "" {
-		text = groupmeHTMLParser.Parse(msg.Content.FormattedBody, format.NewContext(ctx))
+		text = gc.htmlParser().Parse(msg.Content.FormattedBody, fmtCtx)
 	}
 	if msg.Content.MsgType == event.MsgEmote {
 		text = "/me " + text
 	}
-	text = strings.TrimSpace(text)
+	text, mentions := takeMentions(strings.TrimSpace(text), fmtCtx)
 	if utf8.RuneCountInString(text) > 1000 {
-		return fmt.Errorf("GroupMe messages are limited to 1000 characters")
+		return permanentFailure(event.MessageStatusUnsupported, "GroupMe messages are limited to 1000 characters")
 	}
 	if text == "" {
-		return fmt.Errorf("GroupMe edits require non-empty text")
+		return permanentFailure(event.MessageStatusUnsupported, "GroupMe edits require non-empty text")
 	}
 	content := groupmeext.MessageContent{Text: text, Attachments: []*groupme.Attachment{}}
 	for _, attachment := range original.Attachments {
@@ -116,12 +120,15 @@ func (gc *GMClient) HandleMatrixEdit(ctx context.Context, msg *bridgev2.MatrixEd
 			content.Attachments = append(content.Attachments, attachment)
 		}
 	}
+	if mentions != nil {
+		content.Attachments = append(content.Attachments, mentions)
+	}
 	updated, err := groupmeext.EditMessage(ctx, gc.Meta.Token, kind == PortalTypeDM, chatID, ParseMessageID(target.ID), content)
 	if err != nil {
-		return err
+		return wrapGroupMeError(err, "failed to edit message")
 	}
 	if updated.UserID != groupme.ID(gc.Meta.GMID) || gc.portalKeyForMessage(&updated.Message) != msg.Portal.PortalKey {
-		return fmt.Errorf("GroupMe edit response belongs to another sender or conversation")
+		return wrapGroupMeError(errors.New("GroupMe edit response belongs to another sender or conversation"), "unexpected response from GroupMe")
 	}
 	meta.NativeContent = nativeContent(&updated.Message)
 	meta.EditedAt = updated.UpdatedAt
@@ -227,6 +234,19 @@ func (gc *GMClient) convertEdit(ctx context.Context, portal *bridgev2.Portal, in
 	for _, part := range existing {
 		byPart[part.PartID] = part
 	}
+	if byPart["text"] == nil {
+		// Parts stored before the first part became the default part still use
+		// the first attachment's own ID, which the converted message lacks.
+		for partID, part := range byPart {
+			if strings.HasPrefix(string(partID), "attachment-") && !slices.ContainsFunc(converted.Parts, func(converted *bridgev2.ConvertedMessagePart) bool {
+				return converted.ID == partID
+			}) {
+				byPart["text"], byPart[""] = byPart[""], part
+				delete(byPart, partID)
+				break
+			}
+		}
+	}
 	for _, part := range converted.Parts {
 		part.DBMetadata.(*MessageMetadata).EditedAt = update.UpdatedAt
 		if old := byPart[part.ID]; old != nil {
@@ -239,8 +259,9 @@ func (gc *GMClient) convertEdit(ctx context.Context, portal *bridgev2.Portal, in
 			result.AddedParts.Parts = append(result.AddedParts.Parts, part)
 		}
 	}
+	unmatched := slices.Collect(maps.Values(byPart))
 	for _, old := range existing {
-		if byPart[old.PartID] != nil {
+		if slices.Contains(unmatched, old) {
 			result.DeletedParts = append(result.DeletedParts, old)
 		}
 	}

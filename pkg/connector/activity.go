@@ -3,6 +3,7 @@ package connector
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -62,9 +63,12 @@ func (gc *GMClient) HandleMatrixTyping(ctx context.Context, msg *bridgev2.Matrix
 	transport := gc.pushTransport
 	gc.pushMu.Unlock()
 	if transport == nil {
-		return fmt.Errorf("GroupMe push is disconnected")
+		return wrapGroupMeError(errors.New("GroupMe push is disconnected"), "not connected to GroupMe").WithIsCertain(true)
 	}
-	return transport.SendTyping(ctx, channel, gc.Meta.Token, gc.Meta.GMID)
+	if err = transport.SendTyping(ctx, channel, gc.Meta.Token, gc.Meta.GMID); err != nil {
+		return wrapGroupMeError(err, "failed to send typing notification")
+	}
+	return nil
 }
 
 func (gc *GMClient) HandleMatrixReadReceipt(ctx context.Context, msg *bridgev2.MatrixReadReceipt) error {
@@ -91,17 +95,21 @@ func (gc *GMClient) HandleMatrixReadReceipt(ctx context.Context, msg *bridgev2.M
 		return err
 	}
 	if err = groupmeext.MarkRead(ctx, gc.Meta.Token, conversation, ParseMessageID(target.ID)); err != nil {
-		return err
+		return wrapGroupMeError(err, "failed to mark as read")
 	}
+	gc.recordReadCheckpoint(conversation, ParseMessageID(target.ID))
 	// bridgev2 invokes this for public m.read only. Implicit receipts from
 	// sending a message update our checkpoint without publishing a seen event.
 	if kind, _ := ParsePortalID(msg.Portal.ID); kind == PortalTypeDM && !msg.Implicit {
-		return groupmeext.SendDMReadReceipt(ctx, gc.Meta.Token, conversation)
+		if err = groupmeext.SendDMReadReceipt(ctx, gc.Meta.Token, conversation); err != nil {
+			return wrapGroupMeError(err, "failed to send read receipt")
+		}
 	}
 	return nil
 }
 
 func (gc *GMClient) readCheckpointEvent(receipt groupmeext.ReadCheckpoint) *nativeReceipt {
+	gc.recordReadCheckpoint(receipt.ConversationID, receipt.LastReadMessageID)
 	key := gc.portalForConversation(receipt.ConversationID)
 	if key.ID == "" || receipt.LastReadMessageID == "" {
 		return nil
@@ -111,6 +119,45 @@ func (gc *GMClient) readCheckpointEvent(receipt groupmeext.ReadCheckpoint) *nati
 			Sender: bridgev2.EventSender{IsFromMe: true, Sender: MakeUserID(groupme.ID(gc.Meta.GMID))}},
 		LastTarget: MakeMessageID(receipt.LastReadMessageID),
 	}}
+}
+
+func (gc *GMClient) loadReadCheckpoints(ctx context.Context) {
+	receipts, err := groupmeext.GetReadCheckpoints(ctx, gc.Meta.Token)
+	if err != nil {
+		gc.UserLogin.Log.Warn().Err(err).Msg("Failed to load GroupMe read checkpoints for backfill")
+		return
+	}
+	for _, receipt := range receipts {
+		gc.recordReadCheckpoint(receipt.ConversationID, receipt.LastReadMessageID)
+	}
+}
+
+func (gc *GMClient) recordReadCheckpoint(conversation, lastRead groupme.ID) {
+	if conversation == "" || lastRead == "" {
+		return
+	}
+	gc.readCheckpointsMu.Lock()
+	defer gc.readCheckpointsMu.Unlock()
+	if gc.readCheckpoints == nil {
+		gc.readCheckpoints = make(map[groupme.ID]groupme.ID)
+	}
+	if existing, ok := gc.readCheckpoints[conversation]; !ok || compareMessageIDs(lastRead, existing) > 0 {
+		gc.readCheckpoints[conversation] = lastRead
+	}
+}
+
+func (gc *GMClient) readCheckpointBehind(portalID networkid.PortalID, newest groupme.ID) *groupmeext.ReadCheckpoint {
+	conversation, err := gc.conversationID(portalID)
+	if err != nil {
+		return nil
+	}
+	gc.readCheckpointsMu.Lock()
+	lastRead, ok := gc.readCheckpoints[conversation]
+	gc.readCheckpointsMu.Unlock()
+	if !ok || compareMessageIDs(lastRead, newest) >= 0 {
+		return nil
+	}
+	return &groupmeext.ReadCheckpoint{ConversationID: conversation, LastReadMessageID: lastRead}
 }
 
 func (gc *GMClient) syncReadCheckpoints(ctx context.Context) {
@@ -147,7 +194,6 @@ func (gc *GMClient) parseActivity(msg groupme.PushMessage) ([]bridgev2.RemoteEve
 	}
 	var data struct {
 		UserID  groupme.ID `json:"user_id"`
-		Started int64      `json:"started"`
 		Subject struct {
 			ID        groupme.ID                  `json:"id"`
 			ChatID    groupme.ID                  `json:"chat_id"`
@@ -186,16 +232,12 @@ func (gc *GMClient) parseActivity(msg groupme.PushMessage) ([]bridgev2.RemoteEve
 		} else if group, ok := strings.CutPrefix(msg.Channel(), "/group/"); ok {
 			key = gc.portalKeyForGroup(groupme.ID(group))
 		}
-		timeout := time.Until(time.UnixMilli(data.Started).Add(5 * time.Second))
-		if key.ID == "" || timeout <= 0 {
+		if key.ID == "" {
 			return nil, true
-		}
-		if timeout > 5*time.Second {
-			timeout = 5 * time.Second
 		}
 		events = append(events, &simplevent.Typing{
 			EventMeta: simplevent.EventMeta{Type: bridgev2.RemoteEventTyping, PortalKey: key, Sender: bridgev2.EventSender{Sender: MakeUserID(data.UserID)}},
-			Timeout:   timeout, Type: bridgev2.TypingTypeText,
+			Timeout:   5 * time.Second, Type: bridgev2.TypingTypeText,
 		})
 	case "read_receipt.create":
 		subject := data.Subject
@@ -203,6 +245,11 @@ func (gc *GMClient) parseActivity(msg groupme.PushMessage) ([]bridgev2.RemoteEve
 		_, peer := ParsePortalID(key.ID)
 		if key.ID == "" || subject.MessageID == "" || (subject.UserID != peer && string(subject.UserID) != gc.Meta.GMID) {
 			return nil, true
+		}
+		if string(subject.UserID) == gc.Meta.GMID {
+			if conversation, err := gc.conversationID(key.ID); err == nil {
+				gc.recordReadCheckpoint(conversation, subject.MessageID)
+			}
 		}
 		events = append(events, &nativeReceipt{client: gc, Receipt: &simplevent.Receipt{
 			EventMeta: simplevent.EventMeta{Type: bridgev2.RemoteEventReadReceipt, PortalKey: key,
@@ -234,9 +281,9 @@ func (r *nativeReceipt) PreHandleWithResult(ctx context.Context, portal *bridgev
 	return nil
 }
 
-// Web's read cursor includes hidden message.update system records. Translate
-// that native cursor to the preceding visible message inside the portal queue;
-// don't create a second Matrix message or mapping for an edit notification.
+// Web's read cursor includes hidden message.update and message.deleted records.
+// Translate that native cursor to the preceding visible message inside the
+// portal queue; those records have no Matrix message or mapping.
 func (r *nativeReceipt) PreHandle(ctx context.Context, portal *bridgev2.Portal) {
 	lookup := func(id groupme.ID) bool {
 		mapped, err := portal.Bridge.DB.Message.GetLastPartByID(ctx, portal.Receiver, MakeMessageID(id))
@@ -246,29 +293,29 @@ func (r *nativeReceipt) PreHandle(ctx context.Context, portal *bridgev2.Portal) 
 		return
 	}
 	var before groupme.ID
-	foundEdit := false
+	foundHidden := false
 	for page := 0; page < 2; page++ {
 		messages, err := r.client.fetchMessagePage(ctx, portal.ID, before, "", 100)
 		if err != nil {
-			r.client.UserLogin.Log.Warn().Err(err).Msg("Failed to resolve GroupMe edit receipt")
+			r.client.UserLogin.Log.Warn().Err(err).Msg("Failed to resolve GroupMe receipt on a hidden record")
 			return
 		}
 		if len(messages) == 0 {
 			return
 		}
 		for _, msg := range messages {
-			if !foundEdit {
+			if !foundHidden {
 				comparison := compareMessageIDs(msg.ID, ParseMessageID(r.LastTarget))
 				if comparison > 0 {
 					continue
 				}
-				if comparison < 0 || msg.Event == nil || msg.Event.Type != "message.update" {
+				if comparison < 0 || !isHiddenRecord(msg) {
 					return
 				}
-				foundEdit = true
+				foundHidden = true
 				continue
 			}
-			if msg.Event != nil && msg.Event.Type == "message.update" {
+			if isHiddenRecord(msg) {
 				continue
 			}
 			if lookup(msg.ID) {

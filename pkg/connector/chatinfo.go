@@ -17,7 +17,9 @@
 package connector
 
 import (
+	"cmp"
 	"context"
+	"crypto/sha256"
 	"fmt"
 
 	"github.com/rs/zerolog"
@@ -47,6 +49,8 @@ func (gc *GMClient) avatarFor(ctx context.Context, url string) *bridgev2.Avatar 
 		avatar.MXC, err = gc.Main.directMediaURI(ctx, "1i", url)
 		if err != nil {
 			zerolog.Ctx(ctx).Warn().Err(err).Msg("Failed to generate GroupMe avatar media URI")
+		} else {
+			avatar.Hash = sha256.Sum256([]byte(url))
 		}
 	}
 	return avatar
@@ -114,11 +118,12 @@ func (gc *GMClient) GetChatInfo(ctx context.Context, portal *bridgev2.Portal) (*
 		}
 		roomType := database.RoomTypeDefault
 		return &bridgev2.ChatInfo{
-			Name:    ptr.Ptr(group.Name),
-			Topic:   ptr.Ptr(group.Description),
-			Avatar:  gc.avatarFor(ctx, group.ImageURL),
-			Members: members,
-			Type:    &roomType,
+			Name:        ptr.Ptr(group.Name),
+			Topic:       ptr.Ptr(group.Description),
+			Avatar:      gc.avatarFor(ctx, group.ImageURL),
+			Members:     members,
+			Type:        &roomType,
+			CanBackfill: true,
 		}, nil
 	case PortalTypeDM:
 		// Existing DM partners may be absent from personal contacts.
@@ -195,6 +200,7 @@ func (gc *GMClient) dmChatInfo(ctx context.Context, gmid groupme.ID, partner *gr
 		Avatar:         gc.avatarIfSet(ctx, avatarURL),
 		Members:        members,
 		Type:           &roomType,
+		CanBackfill:    true,
 	}
 }
 
@@ -217,7 +223,7 @@ func (gc *GMClient) GetUserInfo(ctx context.Context, ghost *bridgev2.Ghost) (*br
 		if err == nil && me != nil && me.ID == gmid {
 			return &bridgev2.UserInfo{
 				Name:   ptr.Ptr(me.Name),
-				Avatar: gc.avatarIfSet(ctx, me.AvatarURL),
+				Avatar: gc.avatarIfSet(ctx, cmp.Or(me.ImageURL, me.AvatarURL)),
 			}, nil
 		}
 	}

@@ -17,12 +17,16 @@
 package connector
 
 import (
+	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
+	"math/rand/v2"
 	"strings"
 	"sync"
 	"time"
 
+	"go.mau.fi/util/ptr"
 	"maunium.net/go/mautrix/bridgev2"
 	"maunium.net/go/mautrix/bridgev2/networkid"
 	"maunium.net/go/mautrix/bridgev2/status"
@@ -51,6 +55,9 @@ type GMClient struct {
 
 	blockMu      sync.Mutex
 	blockChanged map[groupme.ID]time.Time
+
+	readCheckpointsMu sync.Mutex
+	readCheckpoints   map[groupme.ID]groupme.ID
 }
 
 var _ bridgev2.NetworkAPI = (*GMClient)(nil)
@@ -85,6 +92,7 @@ func (gc *GMClient) Connect(ctx context.Context) {
 		gc.UserLogin.BridgeState.Send(status.BridgeState{
 			StateEvent: status.StateBadCredentials,
 			Error:      "groupme-not-logged-in",
+			Message:    "you're not logged in to GroupMe",
 		})
 		return
 	}
@@ -96,14 +104,65 @@ func (gc *GMClient) Connect(ctx context.Context) {
 	go func() {
 		defer close(done)
 		defer cancel()
+		if !gc.Main.Config.DisablePollPolling {
+			pollsDone := make(chan struct{})
+			go func() {
+				defer close(pollsDone)
+				gc.pollActivePolls(runCtx)
+			}()
+			defer func() {
+				cancel()
+				<-pollsDone
+			}()
+		}
 		gc.runSession(runCtx)
 	}()
 }
 
+const (
+	connectRetryMin = 5 * time.Second
+	connectRetryMax = 5 * time.Minute
+)
+
+func isTransientConnectError(err error) bool {
+	var meta *groupme.Meta
+	if errors.As(err, &meta) {
+		return meta.Code == 429 || meta.Code >= 500
+	}
+	var syntaxErr *json.SyntaxError
+	var typeErr *json.UnmarshalTypeError
+	return !errors.As(err, &syntaxErr) && !errors.As(err, &typeErr)
+}
+
 func (gc *GMClient) runSession(ctx context.Context) {
-	me, err := gc.Client.MyUser(ctx)
-	if ctx.Err() != nil {
-		return
+	var me *groupme.User
+	var err error
+	retried := false
+	for delay := connectRetryMin; ; delay = min(delay*2, connectRetryMax) {
+		me, err = gc.Client.MyUser(ctx)
+		if ctx.Err() != nil {
+			return
+		}
+		if err == nil || !isTransientConnectError(err) {
+			break
+		}
+		wait := delay/2 + rand.N(delay/2)
+		gc.UserLogin.Log.Warn().Err(err).Dur("retry_in", wait).Msg("Failed to fetch GroupMe user, retrying")
+		gc.UserLogin.BridgeState.Send(status.BridgeState{
+			StateEvent: status.StateTransientDisconnect,
+			Error:      "groupme-connect-failed",
+			Message:    "couldn't reach GroupMe, retrying",
+			Info:       map[string]any{"go_error": err.Error()},
+		})
+		select {
+		case <-time.After(wait):
+		case <-ctx.Done():
+			return
+		}
+		retried = true
+	}
+	if retried && err == nil {
+		gc.UserLogin.BridgeState.Send(status.BridgeState{StateEvent: status.StateConnecting})
 	}
 	if err != nil {
 		state := status.BridgeState{StateEvent: status.StateUnknownError, Error: "groupme-connect-failed"}
@@ -111,17 +170,24 @@ func (gc *GMClient) runSession(ctx context.Context) {
 		if errors.As(err, &meta) && (meta.Code == 401 || meta.Code == 403) {
 			state.StateEvent = status.StateBadCredentials
 			state.Error = "groupme-session-expired"
+			state.Message = "your GroupMe session expired, please log in again"
+			state.Info = map[string]any{"go_error": err.Error()}
 		}
 		gc.UserLogin.BridgeState.Send(state)
 		return
 	}
 	if me == nil || string(me.ID) != gc.Meta.GMID || string(me.ID) != string(gc.UserLogin.ID) {
-		gc.UserLogin.BridgeState.Send(status.BridgeState{StateEvent: status.StateBadCredentials, Error: "groupme-account-mismatch"})
+		gc.UserLogin.BridgeState.Send(status.BridgeState{
+			StateEvent: status.StateBadCredentials,
+			Error:      "groupme-account-mismatch",
+			Message:    "the saved token belongs to a different GroupMe account, please log in again",
+		})
 		return
 	}
 	// Live pushes wait until catch-up is queued, so a gap is filled before
 	// newer messages move the bridged history past it. Live messages only
 	// arrive over push, so the login is connected only while the user channel is.
+	gc.syncRemoteProfile(ctx, me)
 	userChannel := groupme.UserChannel(me.ID)
 	var reactionRefreshes sync.WaitGroup
 	sub := groupme.NewPushSubscription(ctx)
@@ -145,7 +211,8 @@ func (gc *GMClient) runSession(ctx context.Context) {
 		gc.UserLogin.BridgeState.Send(status.BridgeState{
 			StateEvent: status.StateTransientDisconnect,
 			Error:      "groupme-push-disconnected",
-			Message:    err.Error(),
+			Message:    "lost connection to GroupMe, reconnecting",
+			Info:       map[string]any{"go_error": err.Error()},
 		})
 	})
 	transport.OnEvent = gc.handleActivity
@@ -164,6 +231,24 @@ func (gc *GMClient) runSession(ctx context.Context) {
 	gc.pushMu.Unlock()
 	sub.Wait()
 	reactionRefreshes.Wait()
+}
+
+func (gc *GMClient) syncRemoteProfile(ctx context.Context, me *groupme.User) {
+	ghost, err := gc.Main.br.GetGhostByID(ctx, MakeUserID(me.ID))
+	if err != nil {
+		gc.UserLogin.Log.Err(err).Msg("Failed to get own GroupMe ghost")
+		return
+	}
+	ghost.UpdateInfo(ctx, &bridgev2.UserInfo{Name: ptr.Ptr(me.Name), Avatar: gc.avatarIfSet(ctx, cmp.Or(me.ImageURL, me.AvatarURL))})
+	profile := gc.UserLogin.RemoteProfile
+	profile.Name, profile.Avatar = me.Name, ghost.AvatarMXC
+	if gc.UserLogin.RemoteName == me.Name && gc.UserLogin.RemoteProfile == profile {
+		return
+	}
+	gc.UserLogin.RemoteName, gc.UserLogin.RemoteProfile = me.Name, profile
+	if err = gc.UserLogin.Save(ctx); err != nil {
+		gc.UserLogin.Log.Err(err).Msg("Failed to save GroupMe account profile")
+	}
 }
 
 func (gc *GMClient) disconnectLocked() {
@@ -186,7 +271,9 @@ func (gc *GMClient) IsLoggedIn() bool {
 }
 
 func (gc *GMClient) LogoutRemote(ctx context.Context) {
-	gc.Disconnect()
+	gc.sessionMu.Lock()
+	defer gc.sessionMu.Unlock()
+	gc.disconnectLocked()
 	gc.Meta.Token = ""
 	gc.Client = nil
 }
