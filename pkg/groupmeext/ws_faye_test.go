@@ -3,13 +3,62 @@ package groupmeext
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
+	"time"
 
+	"github.com/coder/websocket"
+	"github.com/coder/websocket/wsjson"
 	"github.com/rs/zerolog"
 
 	"github.com/beeper/groupme-lib"
 )
+
+// The server answers the first connect, then never answers the held one
+// while the socket stays open.
+func TestReconnectsWhenHeldConnectGoesUnanswered(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.CloseNow()
+		connects := 0
+		for {
+			var msgs []*bayeuxMessage
+			if wsjson.Read(r.Context(), conn, &msgs) != nil {
+				return
+			}
+			for _, m := range msgs {
+				reply := &bayeuxMessage{ReqID: m.ReqID, Chan: m.Chan, Successful: true}
+				switch m.Chan {
+				case metaHandshake:
+					reply.ClientID = "client"
+					reply.MsgAdvice = &bayeuxAdvice{Reconnect: "retry", Timeout: 50}
+				case metaConnect:
+					if connects++; connects > 1 {
+						continue
+					}
+				}
+				_ = wsjson.Write(r.Context(), conn, []*bayeuxMessage{reply})
+			}
+		}
+	}))
+	defer srv.Close()
+	previous := wsPushServer
+	wsPushServer = "ws" + strings.TrimPrefix(srv.URL, "http")
+	t.Cleanup(func() { wsPushServer = previous })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	handshook, err := NewWSFayeClient(zerolog.Nop(), nil, nil).connectAndRun(ctx)
+	if !handshook || err == nil || !strings.Contains(err.Error(), "connect unanswered") {
+		t.Fatalf("connectAndRun = %v, %v; want a reconnect for the unanswered connect", handshook, err)
+	}
+}
 
 func TestActivityHookRespectsSubscriptionGate(t *testing.T) {
 	ctx := context.Background()

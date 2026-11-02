@@ -61,7 +61,17 @@ type bayeuxMessage struct {
 }
 
 type bayeuxAdvice struct {
-	Reconnect string `json:"reconnect,omitempty"`
+	Reconnect string  `json:"reconnect,omitempty"`
+	Timeout   float64 `json:"timeout,omitempty"`
+}
+
+const defaultConnectHold = 10 * time.Minute
+
+func connectHold(advice *bayeuxAdvice, current time.Duration) time.Duration {
+	if advice == nil || advice.Timeout <= 0 {
+		return current
+	}
+	return time.Duration(advice.Timeout * float64(time.Millisecond))
 }
 
 // Adapt native messages to the GroupMe library's push dispatcher.
@@ -287,14 +297,14 @@ func (c *WSFayeClient) request(ctx context.Context, conn *websocket.Conn, msg *b
 }
 
 // The native handshake must advertise the WebSocket connection type.
-func (c *WSFayeClient) handshake(ctx context.Context, conn *websocket.Conn) error {
+func (c *WSFayeClient) handshake(ctx context.Context, conn *websocket.Conn) (*bayeuxAdvice, error) {
 	resp, err := c.request(ctx, conn, &bayeuxMessage{
 		Chan:                     metaHandshake,
 		Version:                  "1.0",
 		SupportedConnectionTypes: []string{"websocket"},
 	})
 	if err != nil {
-		return err
+		return nil, err
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -302,7 +312,7 @@ func (c *WSFayeClient) handshake(ctx context.Context, conn *websocket.Conn) erro
 	for channel := range c.subs {
 		c.subscribeLocked(channel)
 	}
-	return nil
+	return resp.MsgAdvice, nil
 }
 
 // Starts the channel's subscription on the current connection, if there is one.
@@ -379,7 +389,7 @@ func (c *WSFayeClient) subscribe(ctx context.Context, conn *websocket.Conn, clie
 }
 
 // Bayeux requires a continuous /meta/connect cycle alongside push delivery.
-func (c *WSFayeClient) connectLoop(ctx context.Context, conn *websocket.Conn) error {
+func (c *WSFayeClient) connectLoop(ctx context.Context, conn *websocket.Conn, hold time.Duration) error {
 	for {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -394,8 +404,6 @@ func (c *WSFayeClient) connectLoop(ctx context.Context, conn *websocket.Conn) er
 		}
 		respCh := c.registerPending(id)
 
-		// Only bound the send: GroupMe holds healthy /meta/connect requests
-		// open indefinitely. WebSocket pings detect transport failures.
 		sendCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 		err := c.writeMessage(sendCtx, conn, msg)
 		cancel()
@@ -404,6 +412,9 @@ func (c *WSFayeClient) connectLoop(ctx context.Context, conn *websocket.Conn) er
 			return fmt.Errorf("sending connect: %w", err)
 		}
 
+		// GroupMe answers a held connect within the advised timeout. Like GroupMe
+		// web's Faye client, treat no answer by 1.2× that as a dead connection:
+		// pings can keep passing while no pushes arrive.
 		select {
 		case resp := <-respCh:
 			if resp.MsgAdvice != nil {
@@ -413,10 +424,14 @@ func (c *WSFayeClient) connectLoop(ctx context.Context, conn *websocket.Conn) er
 				case "handshake":
 					return fmt.Errorf("server advised re-handshake")
 				}
+				hold = connectHold(resp.MsgAdvice, hold)
 			}
 			if !resp.Successful {
 				c.log.Warn().Str("error", resp.MsgError).Msg("GroupMe push connect was not successful")
 			}
+		case <-time.After(hold * 6 / 5):
+			c.unregisterPending(id)
+			return fmt.Errorf("connect unanswered after %s", hold*6/5)
 		case <-ctx.Done():
 			c.unregisterPending(id)
 			return ctx.Err()
@@ -478,14 +493,18 @@ func (c *WSFayeClient) connectAndRun(ctx context.Context) (handshook bool, err e
 	workers.Add(1)
 	go func() { defer workers.Done(); readErrCh <- c.readLoop(runCtx, conn) }()
 
-	if err := c.handshake(runCtx, conn); err != nil {
+	advice, err := c.handshake(runCtx, conn)
+	if err != nil {
 		return false, fmt.Errorf("handshake: %w", err)
 	}
 	c.log.Info().Str("client_id", c.getClientID()).Msg("GroupMe push websocket handshake succeeded")
 
 	connectErrCh := make(chan error, 1)
 	workers.Add(1)
-	go func() { defer workers.Done(); connectErrCh <- c.connectLoop(runCtx, conn) }()
+	go func() {
+		defer workers.Done()
+		connectErrCh <- c.connectLoop(runCtx, conn, connectHold(advice, defaultConnectHold))
+	}()
 
 	pingErrCh := make(chan error, 1)
 	workers.Add(1)
