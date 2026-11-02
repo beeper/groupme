@@ -21,6 +21,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math/rand/v2"
 	"strconv"
 	"strings"
 	"sync"
@@ -36,6 +37,8 @@ import (
 
 // GroupMe uses the same Faye endpoint for WebSocket and HTTP transports.
 var wsPushServer = "wss" + strings.TrimPrefix(groupme.PushServer, "https")
+
+var pushEchoInterval, pushEchoTimeout = 2 * time.Minute, 30 * time.Second
 
 const (
 	metaHandshake   = "/meta/handshake"
@@ -81,10 +84,15 @@ func (m *bayeuxMessage) Error() string { return m.MsgError }
 type WSFayeClient struct {
 	// OnEvent handles native events absent from groupme-lib's dispatcher. Set
 	// before Listen; returning true consumes the event after subscription gating.
-	OnEvent        func(context.Context, groupme.PushMessage) bool
-	log            zerolog.Logger
-	onSubscribed   func(ctx context.Context, channel string)
-	onDisconnected func(err error)
+	OnEvent func(context.Context, groupme.PushMessage) bool
+	// EchoChannel gets a ping published to it periodically. GroupMe can stop
+	// routing pushes to a connection while its socket and connects stay
+	// healthy; a ping that doesn't echo back means that happened. Set before Listen.
+	EchoChannel       string
+	log               zerolog.Logger
+	onSubscribed      func(ctx context.Context, channel string)
+	onSubscribeFailed func(ctx context.Context, channel string)
+	onDisconnected    func(err error)
 
 	mu          sync.Mutex
 	conn        *websocket.Conn
@@ -92,6 +100,7 @@ type WSFayeClient struct {
 	connWorkers *sync.WaitGroup
 	clientID    string
 	subs        map[string]*pushSubscription
+	echoes      chan string
 
 	pendingMu sync.Mutex
 	pending   map[string]chan *bayeuxMessage
@@ -115,14 +124,21 @@ var _ groupme.FayeClient = (*WSFayeClient)(nil)
 // groupme.PushSubscription.StartListening) to begin connecting.
 //
 // onSubscribed runs each time a channel is subscribed on a new connection.
-// That channel's pushes are delivered only after it returns. onDisconnected
+// That channel's pushes are delivered only after it returns. onSubscribeFailed
+// runs before each retry of a channel's failed subscription. onDisconnected
 // runs each time a connection attempt fails or an established connection drops.
-func NewWSFayeClient(logger zerolog.Logger, onSubscribed func(ctx context.Context, channel string), onDisconnected func(err error)) *WSFayeClient {
+func NewWSFayeClient(
+	logger zerolog.Logger,
+	onSubscribed func(ctx context.Context, channel string),
+	onSubscribeFailed func(ctx context.Context, channel string),
+	onDisconnected func(err error),
+) *WSFayeClient {
 	return &WSFayeClient{
-		log:            logger.With().Str("component", "WSFayeClient").Logger(),
-		onSubscribed:   onSubscribed,
-		onDisconnected: onDisconnected,
-		subs:           map[string]*pushSubscription{},
+		log:               logger.With().Str("component", "WSFayeClient").Logger(),
+		onSubscribed:      onSubscribed,
+		onSubscribeFailed: onSubscribeFailed,
+		onDisconnected:    onDisconnected,
+		subs:              map[string]*pushSubscription{},
 	}
 }
 
@@ -189,7 +205,7 @@ func decodeBayeuxFrame(raw []byte) ([]*bayeuxMessage, error) {
 
 // Route replies by request ID, and push events by subscription channel.
 func (c *WSFayeClient) handleIncoming(ctx context.Context, m *bayeuxMessage) {
-	if m == nil {
+	if m == nil || c.takeEcho(m) {
 		return
 	}
 	if m.ReqID != "" {
@@ -324,8 +340,13 @@ func (c *WSFayeClient) isCurrent(conn *websocket.Conn, channel string, sub *push
 	return c.conn == conn && c.subs[channel] == sub
 }
 
+const (
+	subscribeRetryMin = 2 * time.Second
+	subscribeRetryMax = 60 * time.Second
+)
+
 func (c *WSFayeClient) subscribe(ctx context.Context, conn *websocket.Conn, clientID, channel string, sub *pushSubscription) {
-	for {
+	for delay := subscribeRetryMin; ; delay = min(delay*2, subscribeRetryMax) {
 		msg := &bayeuxMessage{Chan: metaSubscribe, ClientID: clientID, Subscription: channel}
 		msg.Ext()["access_token"] = sub.token
 		msg.Ext()["timestamp"] = time.Now().Unix()
@@ -339,9 +360,13 @@ func (c *WSFayeClient) subscribe(ctx context.Context, conn *websocket.Conn, clie
 		if ctx.Err() != nil || !current {
 			return
 		}
-		c.log.Warn().Err(err).Str("channel", channel).Msg("Failed to subscribe to GroupMe push channel, retrying")
+		wait := delay/2 + rand.N(delay/2)
+		c.log.Warn().Err(err).Str("channel", channel).Dur("retry_in", wait).Msg("Failed to subscribe to GroupMe push channel, retrying")
+		if c.onSubscribeFailed != nil {
+			c.onSubscribeFailed(ctx, channel)
+		}
 		select {
-		case <-time.After(2 * time.Second):
+		case <-time.After(wait):
 		case <-ctx.Done():
 			return
 		}
@@ -424,6 +449,70 @@ func (c *WSFayeClient) connectLoop(ctx context.Context, conn *websocket.Conn) er
 	}
 }
 
+// Other connections' pings pass through to groupme-lib, which ignores them.
+func (c *WSFayeClient) takeEcho(m *bayeuxMessage) bool {
+	id, _ := m.MsgData["ping_id"].(string)
+	if id == "" || m.Chan != c.EchoChannel {
+		return false
+	}
+	c.mu.Lock()
+	echoes, own := c.echoes, c.clientID != "" && strings.HasPrefix(id, c.clientID+":")
+	c.mu.Unlock()
+	if !own {
+		return false
+	}
+	select {
+	case echoes <- id:
+	default:
+	}
+	return true
+}
+
+func (c *WSFayeClient) echoLoop(ctx context.Context, conn *websocket.Conn, echoes <-chan string) error {
+	if c.EchoChannel == "" {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	ticker := time.NewTicker(pushEchoInterval)
+	defer ticker.Stop()
+	sent := 0
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+		c.mu.Lock()
+		sub, clientID := c.subs[c.EchoChannel], c.clientID
+		ready := sub != nil && sub.ready
+		c.mu.Unlock()
+		if !ready {
+			continue
+		}
+		sent++
+		id := fmt.Sprintf("%s:%d", clientID, sent)
+		_, err := c.request(ctx, conn, &bayeuxMessage{
+			Chan: c.EchoChannel, ClientID: clientID,
+			MsgData: map[string]interface{}{"type": "ping", "ping_id": id},
+			MsgExt:  map[string]interface{}{"access_token": sub.token},
+		})
+		if err != nil {
+			return fmt.Errorf("publishing ping: %w", err)
+		}
+		timeout := time.After(pushEchoTimeout)
+		for echoed := false; !echoed; {
+			select {
+			case got := <-echoes:
+				echoed = got == id
+			case <-timeout:
+				return fmt.Errorf("ping %s was not echoed within %s", id, pushEchoTimeout)
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+	}
+}
+
 // Check transport liveness independently of Bayeux message traffic.
 func (c *WSFayeClient) pingLoop(ctx context.Context, conn *websocket.Conn) error {
 	const interval = 30 * time.Second
@@ -458,9 +547,10 @@ func (c *WSFayeClient) connectAndRun(ctx context.Context) (handshook bool, err e
 
 	runCtx, cancelRun := context.WithCancel(ctx)
 	var workers sync.WaitGroup
+	echoes := make(chan string, 1)
 
 	c.mu.Lock()
-	c.conn, c.connCtx, c.connWorkers, c.clientID = conn, runCtx, &workers, ""
+	c.conn, c.connCtx, c.connWorkers, c.clientID, c.echoes = conn, runCtx, &workers, "", echoes
 	c.mu.Unlock()
 	defer func() {
 		cancelRun()
@@ -491,6 +581,10 @@ func (c *WSFayeClient) connectAndRun(ctx context.Context) (handshook bool, err e
 	workers.Add(1)
 	go func() { defer workers.Done(); pingErrCh <- c.pingLoop(runCtx, conn) }()
 
+	echoErrCh := make(chan error, 1)
+	workers.Add(1)
+	go func() { defer workers.Done(); echoErrCh <- c.echoLoop(runCtx, conn, echoes) }()
+
 	select {
 	case <-ctx.Done():
 		return true, ctx.Err()
@@ -500,6 +594,8 @@ func (c *WSFayeClient) connectAndRun(ctx context.Context) (handshook bool, err e
 		return true, fmt.Errorf("connect loop: %w", err)
 	case err := <-pingErrCh:
 		return true, fmt.Errorf("ping loop: %w", err)
+	case err := <-echoErrCh:
+		return true, fmt.Errorf("echo loop: %w", err)
 	}
 }
 

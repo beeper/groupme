@@ -72,7 +72,7 @@ var fileMimes = map[string]event.CapabilitySupportLevel{
 }
 
 var roomCaps = &event.RoomFeatures{
-	ID: "fi.mau.groupme.capabilities.2026_10_27.1",
+	ID: "fi.mau.groupme.capabilities.2026_11_02.1",
 	Formatting: event.FormattingFeatureMap{
 		event.FmtUserLink: event.CapLevelFullySupported,
 	},
@@ -124,6 +124,7 @@ var dmRoomCaps = func() *event.RoomFeatures {
 	caps.Poll = event.CapLevelUnsupported
 	caps.ReadReceipts = true
 	caps.DeleteChat = true
+	caps.BlockUser = true
 	caps.MessageRequest = &event.MessageRequestFeatures{
 		AcceptWithMessage: event.CapLevelPartialSupport,
 		AcceptWithButton:  event.CapLevelFullySupported,

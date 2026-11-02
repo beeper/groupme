@@ -42,7 +42,7 @@ func (gc *GMClient) HandleMatrixPollStart(ctx context.Context, msg *bridgev2.Mat
 	}
 	poll, messageID, err := gc.Client.CreatePoll(ctx, string(groupID), request)
 	if err != nil {
-		status := wrapGroupMeError(err, "failed to create poll")
+		status := gc.wrapGroupMeError(err, "failed to create poll")
 		var meta *groupme.Meta
 		if status.Status == event.MessageStatusFail && errors.As(err, &meta) && len(meta.Errors) > 0 {
 			status = status.WithMessage(strings.Join(meta.Errors, "; "))
@@ -76,7 +76,7 @@ func (gc *GMClient) HandleMatrixPollVote(ctx context.Context, msg *bridgev2.Matr
 	}
 	poll, err := gc.Client.GetPoll(ctx, string(groupID), meta.PollID)
 	if err != nil {
-		return nil, wrapGroupMeError(err, "failed to load poll").WithIsCertain(true)
+		return nil, gc.wrapGroupMeError(err, "failed to load poll").WithIsCertain(true)
 	}
 	if poll.Status != "active" || (poll.Expiration > 0 && !poll.Expiration.ToTime().After(time.Now())) {
 		return nil, pollVoteError("This GroupMe poll has ended")
@@ -124,13 +124,13 @@ func (gc *GMClient) HandleMatrixPollVote(ctx context.Context, msg *bridgev2.Matr
 	}()
 	result, err := gc.Client.VotePoll(ctx, string(groupID), meta.PollID, answers, poll.Type == "multi")
 	if err != nil {
-		return nil, wrapGroupMeError(err, "failed to vote in poll")
+		return nil, gc.wrapGroupMeError(err, "failed to vote in poll")
 	}
 	confirmed, expected := slices.Clone(result.MyVotes), slices.Clone(answers)
 	slices.Sort(confirmed)
 	slices.Sort(expected)
 	if !slices.Equal(confirmed, expected) {
-		return nil, wrapGroupMeError(errors.New("GroupMe did not confirm the requested poll selection"), "unexpected response from GroupMe")
+		return nil, gc.wrapGroupMeError(errors.New("GroupMe did not confirm the requested poll selection"), "unexpected response from GroupMe")
 	}
 	active.Lock()
 	tracked = active.polls[poll.ID]

@@ -3,17 +3,76 @@ package groupmeext
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
+	"time"
 
+	"github.com/coder/websocket"
+	"github.com/coder/websocket/wsjson"
 	"github.com/rs/zerolog"
 
 	"github.com/beeper/groupme-lib"
 )
 
+// The server keeps the connection healthy but stops routing pushes to it after
+// echoing the first ping.
+func TestReconnectsWhenPingIsNotEchoed(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.CloseNow()
+		connects, pings := 0, 0
+		for {
+			var msgs []*bayeuxMessage
+			if wsjson.Read(r.Context(), conn, &msgs) != nil {
+				return
+			}
+			for _, m := range msgs {
+				replies := []*bayeuxMessage{{ReqID: m.ReqID, Chan: m.Chan, Successful: true}}
+				switch m.Chan {
+				case metaHandshake:
+					replies[0].ClientID = "client"
+				case metaConnect:
+					if connects++; connects > 1 {
+						continue
+					}
+				case "/user/1":
+					if pings++; pings == 1 {
+						replies = append(replies, &bayeuxMessage{ReqID: m.ReqID, Chan: m.Chan, MsgData: m.MsgData})
+					}
+				}
+				_ = wsjson.Write(r.Context(), conn, replies)
+			}
+		}
+	}))
+	defer srv.Close()
+	previous, interval, timeout := wsPushServer, pushEchoInterval, pushEchoTimeout
+	wsPushServer, pushEchoInterval, pushEchoTimeout = "ws"+strings.TrimPrefix(srv.URL, "http"), 20*time.Millisecond, 200*time.Millisecond
+	t.Cleanup(func() { wsPushServer, pushEchoInterval, pushEchoTimeout = previous, interval, timeout })
+
+	client := NewWSFayeClient(zerolog.Nop(), nil, nil, nil)
+	client.EchoChannel = "/user/1"
+	messages := make(chan groupme.PushMessage, 4)
+	client.Subscribe("/user/1", "token", messages)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	handshook, err := client.connectAndRun(ctx)
+	if !handshook || err == nil || !strings.Contains(err.Error(), "client:2 was not echoed") {
+		t.Fatalf("connectAndRun = %v, %v; want a reconnect for the second, unechoed ping", handshook, err)
+	}
+	if len(messages) != 0 {
+		t.Fatal("an echoed ping reached the library dispatcher")
+	}
+}
+
 func TestActivityHookRespectsSubscriptionGate(t *testing.T) {
 	ctx := context.Background()
-	client := NewWSFayeClient(zerolog.Nop(), nil, nil)
+	client := NewWSFayeClient(zerolog.Nop(), nil, nil, nil)
 	sub := &pushSubscription{messages: make(chan groupme.PushMessage, 1)}
 	client.subs["/user/20"] = sub
 	var handled []groupme.PushMessage
@@ -45,7 +104,7 @@ func TestActivityHookRespectsSubscriptionGate(t *testing.T) {
 }
 
 func TestTypingRequiresPushConnection(t *testing.T) {
-	client := NewWSFayeClient(zerolog.Nop(), nil, nil)
+	client := NewWSFayeClient(zerolog.Nop(), nil, nil, nil)
 	if err := client.SendTyping(context.Background(), "/group/88", "test-token", "20"); err == nil {
 		t.Fatal("typing succeeded without a push connection")
 	}

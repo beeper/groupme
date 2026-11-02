@@ -41,7 +41,7 @@ func (gc *GMClient) HandleMatrixMessageRemove(ctx context.Context, msg *bridgev2
 		return err
 	}
 	if err = groupmeext.DeleteMessage(ctx, gc.Meta.Token, conversation, ParseMessageID(target.ID)); err != nil {
-		return wrapGroupMeError(err, "failed to delete message")
+		return gc.wrapGroupMeError(err, "failed to delete message")
 	}
 	return nil
 }
