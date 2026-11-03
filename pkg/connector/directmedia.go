@@ -31,6 +31,9 @@ func (gc *GMConnector) SetUseDirectMedia() {
 //	1v: login ID, video or voice note URL
 //	1f: login ID, group ID, file ID
 func (gc *GMConnector) directMediaURI(ctx context.Context, fields ...string) (id.ContentURIString, error) {
+	for i, field := range fields {
+		fields[i] = groupmeext.NormalizeMediaURL(field)
+	}
 	mediaID := networkid.MediaID(strings.Join(fields, "\x00"))
 	if _, err := parseDirectMediaID(mediaID); err != nil {
 		return "", err
