@@ -128,10 +128,10 @@ func wrapTokenValidationError(err error) error {
 		case 401, 403:
 			return bridgev2.RespError(mautrix.MForbidden.WithMessage("GroupMe rejected that access token"))
 		case 429:
-			return bridgev2.RespError(mautrix.MLimitExceeded.WithMessage("GroupMe is rate limiting sign-ins, try again later"))
+			return bridgev2.RespError(mautrix.MLimitExceeded.WithMessage("GroupMe is rate limiting sign-ins, try again later").WithStatus(http.StatusBadRequest))
 		}
 	}
-	return bridgev2.RespError(mautrix.MUnknown.WithMessage("could not validate your GroupMe session; try signing in again").WithStatus(http.StatusBadGateway))
+	return bridgev2.RespError(mautrix.MUnknown.WithMessage("could not validate your GroupMe session; try signing in again"))
 }
 
 func (gl *GMLogin) submitToken(ctx context.Context, token string) (*bridgev2.LoginStep, error) {
@@ -162,7 +162,7 @@ func (gl *GMLogin) submitToken(ctx context.Context, token string) (*bridgev2.Log
 		return nil, wrapTokenValidationError(err)
 	}
 	if me == nil || me.ID == "" {
-		return nil, bridgev2.RespError(mautrix.MUnknown.WithMessage("GroupMe did not return an account ID").WithStatus(http.StatusBadGateway))
+		return nil, bridgev2.RespError(mautrix.MUnknown.WithMessage("GroupMe did not return an account ID"))
 	}
 	if err = ctx.Err(); err != nil {
 		return nil, err

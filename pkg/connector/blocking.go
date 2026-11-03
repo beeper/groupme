@@ -35,10 +35,11 @@ func (gc *GMClient) HandleMatrixBlockUser(ctx context.Context, msg *bridgev2.Mat
 	} else {
 		err = gc.Client.Unblock(ctx, gc.Meta.GMID, string(peer))
 	}
-	if err == nil {
-		gc.markBlockChanged(peer)
+	if err != nil {
+		return gc.wrapGroupMeError(err, "failed to update GroupMe block")
 	}
-	return err
+	gc.markBlockChanged(peer)
+	return nil
 }
 
 func (gc *GMClient) markBlockChanged(peer groupme.ID) {

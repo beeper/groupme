@@ -60,7 +60,7 @@ func wrapGroupMeRespError(err error, message string) error {
 	case http.StatusUnauthorized, http.StatusForbidden:
 		return bridgev2.RespError(mautrix.MForbidden.WithMessage("your GroupMe session expired, please log in again"))
 	case http.StatusTooManyRequests:
-		return bridgev2.RespError(mautrix.MLimitExceeded.WithMessage("GroupMe is rate limiting requests, try again later"))
+		return bridgev2.RespError(mautrix.MLimitExceeded.WithMessage("GroupMe is rate limiting requests, try again later").WithStatus(http.StatusBadRequest))
 	}
-	return bridgev2.RespError(mautrix.MUnknown.WithMessage(message).WithStatus(http.StatusBadGateway))
+	return bridgev2.RespError(mautrix.MUnknown.WithMessage(message))
 }
