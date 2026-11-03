@@ -25,7 +25,7 @@ func DownloadVideo(ctx context.Context, videoURL, token string) ([]byte, string,
 }
 
 func downloadMediaURL(ctx context.Context, mediaURL, token string) ([]byte, string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, mediaURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, NormalizeMediaURL(mediaURL), nil)
 	if err != nil {
 		return nil, "", fmt.Errorf("invalid GroupMe media URL")
 	}

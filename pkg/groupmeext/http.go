@@ -113,6 +113,14 @@ func mediaURLHostClass(host string) string {
 	}
 }
 
+func NormalizeMediaURL(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Scheme != "http" || !strings.HasSuffix(u.Hostname(), ".groupme.com") {
+		return rawURL
+	}
+	return "https" + rawURL[len("http"):]
+}
+
 // ValidateMediaURL checks a native attachment URL before putting it in a media ID.
 func ValidateMediaURL(rawURL string) error {
 	u, err := url.Parse(rawURL)
