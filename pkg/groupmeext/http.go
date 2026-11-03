@@ -61,9 +61,56 @@ func ValidateImageURL(rawURL string) error {
 
 func validateMediaURL(u *url.URL) error {
 	if u.Scheme != "https" || u.User != nil || u.Port() != "" || !strings.HasSuffix(u.Hostname(), ".groupme.com") {
-		return fmt.Errorf("invalid GroupMe media host")
+		return &MediaURLError{
+			Scheme:      mediaURLSchemeClass(u.Scheme),
+			Host:        mediaURLHostClass(u.Hostname()),
+			Credentials: u.User != nil,
+			Port:        u.Port() != "",
+		}
 	}
 	return nil
+}
+
+type MediaURLError struct {
+	Scheme      string
+	Host        string
+	Credentials bool
+	Port        bool
+}
+
+func (e *MediaURLError) Error() string {
+	return fmt.Sprintf("invalid GroupMe media URL (scheme %s, host %s, credentials %t, port %t)", e.Scheme, e.Host, e.Credentials, e.Port)
+}
+
+func mediaURLSchemeClass(scheme string) string {
+	switch scheme {
+	case "https", "http":
+		return scheme
+	case "":
+		return "empty"
+	default:
+		return "other"
+	}
+}
+
+func mediaURLHostClass(host string) string {
+	lower := strings.ToLower(host)
+	switch {
+	case host == "":
+		return "empty"
+	case lower == "groupme.com":
+		return "groupme.com"
+	case strings.HasSuffix(host, ".groupme.com"):
+		return "groupme subdomain"
+	case strings.HasSuffix(lower, ".groupme.com"):
+		return "groupme subdomain with uppercase"
+	case strings.HasSuffix(lower, ".groupme.com."):
+		return "groupme subdomain with trailing dot"
+	case strings.HasSuffix(lower, ".giphy.com"):
+		return "giphy"
+	default:
+		return "other"
+	}
 }
 
 // ValidateMediaURL checks a native attachment URL before putting it in a media ID.

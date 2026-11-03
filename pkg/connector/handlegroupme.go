@@ -190,7 +190,7 @@ func (gc *GMClient) convertGroupMeMessage(ctx context.Context, portal *bridgev2.
 				var err error
 				content, err = gc.directMediaContent(ctx, msg, att)
 				if err != nil {
-					log.Warn().Err(err).Msg("Failed to convert GroupMe direct media attachment")
+					log.Warn().Err(err).Str("attachment_type", string(att.Type)).Msg("Failed to convert GroupMe direct media attachment")
 					cm.Parts = append(cm.Parts, failedAttachment(partID))
 					continue
 				}

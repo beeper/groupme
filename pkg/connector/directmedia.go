@@ -2,6 +2,7 @@ package connector
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"maunium.net/go/mautrix"
@@ -39,18 +40,24 @@ func (gc *GMConnector) directMediaURI(ctx context.Context, fields ...string) (id
 
 func parseDirectMediaID(mediaID networkid.MediaID) ([]string, error) {
 	fields := strings.Split(string(mediaID), "\x00")
-	for _, field := range fields {
+	for i, field := range fields {
 		if field == "" {
-			return nil, mediaproxy.ErrInvalidMediaIDSyntax
+			return nil, fmt.Errorf("%w: field %d of %d is empty", mediaproxy.ErrInvalidMediaIDSyntax, i, len(fields))
 		}
 	}
 	switch fields[0] {
 	case "1i":
-		if len(fields) == 2 && groupmeext.ValidateImageURL(fields[1]) == nil {
+		if len(fields) == 2 {
+			if err := groupmeext.ValidateImageURL(fields[1]); err != nil {
+				return nil, fmt.Errorf("%w: %w", mediaproxy.ErrInvalidMediaIDSyntax, err)
+			}
 			return fields, nil
 		}
 	case "1v":
-		if len(fields) == 3 && groupmeext.ValidateMediaURL(fields[2]) == nil {
+		if len(fields) == 3 {
+			if err := groupmeext.ValidateMediaURL(fields[2]); err != nil {
+				return nil, fmt.Errorf("%w: %w", mediaproxy.ErrInvalidMediaIDSyntax, err)
+			}
 			return fields, nil
 		}
 	case "1f":
