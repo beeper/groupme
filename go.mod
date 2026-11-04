@@ -5,7 +5,7 @@ go 1.26.0
 toolchain go1.27.1
 
 require (
-	github.com/beeper/groupme-lib v0.2.1-0.20261104083902-d45456f225f4
+	github.com/beeper/groupme-lib v0.2.1-0.20261104111520-2db4bd457dcf
 	github.com/coder/websocket v1.8.15
 	github.com/google/uuid v1.2.0
 	github.com/mattn/go-sqlite3 v1.14.52

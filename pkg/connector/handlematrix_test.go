@@ -66,7 +66,7 @@ func TestSendReactionPreservesEmoji(t *testing.T) {
 		{"❤", "❤️"},
 		{"❤️", "❤️"},
 		{"🔥\ufe0f", "🔥"},
-		{"🦄", ""},
+		{"🦄", "🦄"},
 	} {
 		t.Run(tc.key, func(t *testing.T) {
 			calls := 0
