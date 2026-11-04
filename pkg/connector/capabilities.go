@@ -18,14 +18,11 @@ package connector
 
 import (
 	"context"
-	"maps"
-	"slices"
 	"time"
 
 	"go.mau.fi/util/jsontime"
 	"go.mau.fi/util/ptr"
 
-	"github.com/beeper/groupme-lib"
 	"github.com/beeper/groupme/pkg/groupmeext"
 
 	"maunium.net/go/mautrix/bridgev2"
@@ -72,7 +69,7 @@ var fileMimes = map[string]event.CapabilitySupportLevel{
 }
 
 var roomCaps = &event.RoomFeatures{
-	ID: "fi.mau.groupme.capabilities.2026_11_02.1",
+	ID: "fi.mau.groupme.capabilities.2026_11_04.1",
 	Formatting: event.FormattingFeatureMap{
 		event.FmtUserLink: event.CapLevelFullySupported,
 	},
@@ -111,7 +108,6 @@ var roomCaps = &event.RoomFeatures{
 	Reply:               event.CapLevelFullySupported,
 	Reaction:            event.CapLevelFullySupported,
 	ReactionCount:       1,
-	AllowedReactions:    slices.Sorted(maps.Keys(groupme.UnicodeLikeIcons)),
 	LocationMessage:     event.CapLevelPartialSupport,
 	// Beeper also uses this capability to enable voting on received polls.
 	Poll: event.CapLevelPartialSupport,
