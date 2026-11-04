@@ -35,6 +35,18 @@ func (gc *GMClient) setSubgroupParent(subgroupID, parentID groupme.ID) {
 	gc.subgroupParents[subgroupID] = parentID
 }
 
+func (gc *GMClient) subgroupsOf(parentID groupme.ID) []groupme.ID {
+	gc.subgroupMu.Lock()
+	defer gc.subgroupMu.Unlock()
+	var ids []groupme.ID
+	for subgroupID, parent := range gc.subgroupParents {
+		if parent == parentID {
+			ids = append(ids, subgroupID)
+		}
+	}
+	return ids
+}
+
 func (gc *GMClient) subgroupParent(portal *bridgev2.Portal, subgroupID groupme.ID) groupme.ID {
 	gc.subgroupMu.Lock()
 	parentID := gc.subgroupParents[subgroupID]
