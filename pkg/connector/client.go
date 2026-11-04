@@ -63,6 +63,9 @@ type GMClient struct {
 
 	readCheckpointsMu sync.Mutex
 	readCheckpoints   map[groupme.ID]groupme.ID
+
+	subgroupMu      sync.Mutex
+	subgroupParents map[groupme.ID]groupme.ID
 }
 
 var _ bridgev2.NetworkAPI = (*GMClient)(nil)

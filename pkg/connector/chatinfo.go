@@ -76,6 +76,9 @@ func (gc *GMClient) GetChatInfo(ctx context.Context, portal *bridgev2.Portal) (*
 	portalType, gmid := ParsePortalID(portal.ID)
 	switch portalType {
 	case PortalTypeGroup:
+		if parentID := gc.subgroupParent(portal, gmid); parentID != "" {
+			return gc.subgroupChatInfo(ctx, parentID, gmid)
+		}
 		group, err := gc.Client.ShowGroup(ctx, gmid)
 		if err != nil {
 			return nil, fmt.Errorf("failed to fetch GroupMe group: %w", err)
@@ -83,48 +86,7 @@ func (gc *GMClient) GetChatInfo(ctx context.Context, portal *bridgev2.Portal) (*
 		if group == nil || group.ID != gmid {
 			return nil, fmt.Errorf("GroupMe returned invalid group metadata")
 		}
-		members := &bridgev2.ChatMemberList{
-			IsFull:    true,
-			MemberMap: make(bridgev2.ChatMemberMap, len(group.Members)),
-		}
-		for _, m := range group.Members {
-			if m == nil || m.UserID == "" {
-				continue
-			}
-			isFromMe := m.UserID == groupme.ID(gc.Meta.GMID)
-			// Personal contacts do not include every group member.
-			name := m.Name
-			if name == "" {
-				name = m.Nickname
-			}
-			if name == "" {
-				name = string(m.UserID)
-			}
-			info := &bridgev2.UserInfo{Name: ptr.Ptr(name)}
-			if m.ImageURL != "" {
-				ghost, err := gc.Main.br.GetExistingGhostByID(ctx, MakeUserID(m.UserID))
-				if err == nil && (ghost == nil || ghost.AvatarMXC == "") {
-					info.Avatar = gc.avatarFor(ctx, m.ImageURL)
-				}
-			}
-			members.MemberMap.Set(bridgev2.ChatMember{
-				EventSender: bridgev2.EventSender{
-					IsFromMe: isFromMe,
-					Sender:   MakeUserID(m.UserID),
-				},
-				Membership: "join",
-				UserInfo:   info,
-			})
-		}
-		roomType := database.RoomTypeDefault
-		return &bridgev2.ChatInfo{
-			Name:        ptr.Ptr(group.Name),
-			Topic:       ptr.Ptr(group.Description),
-			Avatar:      gc.avatarFor(ctx, group.ImageURL),
-			Members:     members,
-			Type:        &roomType,
-			CanBackfill: true,
-		}, nil
+		return gc.groupChatInfo(ctx, group), nil
 	case PortalTypeDM:
 		// Existing DM partners may be absent from personal contacts.
 		var partner *groupme.User
@@ -233,4 +195,49 @@ func (gc *GMClient) GetUserInfo(ctx context.Context, ghost *bridgev2.Ghost) (*br
 		return &bridgev2.UserInfo{}, nil
 	}
 	return &bridgev2.UserInfo{Name: ptr.Ptr(string(gmid))}, nil
+}
+
+func (gc *GMClient) groupChatInfo(ctx context.Context, group *groupme.Group) *bridgev2.ChatInfo {
+	members := &bridgev2.ChatMemberList{
+		IsFull:    true,
+		MemberMap: make(bridgev2.ChatMemberMap, len(group.Members)),
+	}
+	for _, m := range group.Members {
+		if m == nil || m.UserID == "" {
+			continue
+		}
+		isFromMe := m.UserID == groupme.ID(gc.Meta.GMID)
+		// Personal contacts do not include every group member.
+		name := m.Name
+		if name == "" {
+			name = m.Nickname
+		}
+		if name == "" {
+			name = string(m.UserID)
+		}
+		info := &bridgev2.UserInfo{Name: ptr.Ptr(name)}
+		if m.ImageURL != "" {
+			ghost, err := gc.Main.br.GetExistingGhostByID(ctx, MakeUserID(m.UserID))
+			if err == nil && (ghost == nil || ghost.AvatarMXC == "") {
+				info.Avatar = gc.avatarFor(ctx, m.ImageURL)
+			}
+		}
+		members.MemberMap.Set(bridgev2.ChatMember{
+			EventSender: bridgev2.EventSender{
+				IsFromMe: isFromMe,
+				Sender:   MakeUserID(m.UserID),
+			},
+			Membership: "join",
+			UserInfo:   info,
+		})
+	}
+	roomType := database.RoomTypeDefault
+	return &bridgev2.ChatInfo{
+		Name:        ptr.Ptr(group.Name),
+		Topic:       ptr.Ptr(group.Description),
+		Avatar:      gc.avatarFor(ctx, group.ImageURL),
+		Members:     members,
+		Type:        &roomType,
+		CanBackfill: true,
+	}
 }
