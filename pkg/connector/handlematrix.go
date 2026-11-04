@@ -30,6 +30,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/google/uuid"
+	"go.mau.fi/util/emojirunes"
 	"go.mau.fi/util/variationselector"
 	"maunium.net/go/mautrix/bridgev2"
 	"maunium.net/go/mautrix/bridgev2/database"
@@ -48,7 +49,7 @@ var (
 
 func (gc *GMClient) PreHandleMatrixReaction(ctx context.Context, msg *bridgev2.MatrixReaction) (bridgev2.MatrixReactionPreResponse, error) {
 	emoji := variationselector.FullyQualify(msg.Content.RelatesTo.Key)
-	if emoji == "" || strings.HasPrefix(emoji, "mxc://") {
+	if emoji == "" || !emojirunes.IsOnlyEmojis(emoji) {
 		return bridgev2.MatrixReactionPreResponse{}, permanentFailure(event.MessageStatusUnsupported, "GroupMe only supports emoji reactions")
 	}
 	return bridgev2.MatrixReactionPreResponse{
