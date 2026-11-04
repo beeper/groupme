@@ -82,7 +82,8 @@ const (
 
 // PortalMetadata is stored on the bridgev2 Portal row.
 type PortalMetadata struct {
-	Type PortalType `json:"type"`
+	Type     PortalType `json:"type"`
+	ParentID groupme.ID `json:"parent_id,omitempty"`
 }
 
 // MessageMetadata contains native protocol identifiers used by later actions.

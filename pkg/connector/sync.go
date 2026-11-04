@@ -48,8 +48,12 @@ func (gc *GMClient) listChats(ctx context.Context) ([]nativeChat, error) {
 		zerolog.Ctx(ctx).Err(err).Msg("Failed to list GroupMe groups")
 	}
 	for _, group := range groups {
-		if group != nil && len(group.ID) > 0 {
-			chats = append(chats, nativeChat{portalKey: gc.portalKeyForGroup(group.ID), latestID: group.Messages.LastMessageID})
+		if group == nil || len(group.ID) == 0 {
+			continue
+		}
+		chats = append(chats, nativeChat{portalKey: gc.portalKeyForGroup(group.ID), latestID: group.Messages.LastMessageID})
+		if group.ChildrenCount > 0 {
+			chats = append(chats, gc.listSubgroups(ctx, group.ID)...)
 		}
 	}
 

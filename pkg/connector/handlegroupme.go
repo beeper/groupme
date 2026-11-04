@@ -44,6 +44,9 @@ func (gc *GMClient) HandleError(err error) {
 }
 
 func (gc *GMClient) HandleTextMessage(msg groupme.Message) {
+	if msg.ParentID != "" && msg.GroupID != "" {
+		gc.setSubgroupParent(msg.GroupID, msg.ParentID)
+	}
 	if gc.handleMessageUpdate(msg) {
 		return
 	}
