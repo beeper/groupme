@@ -44,6 +44,9 @@ func (gc *GMClient) HandleError(err error) {
 }
 
 func (gc *GMClient) HandleTextMessage(msg groupme.Message) {
+	if msg.ParentID != "" && msg.GroupID != "" {
+		gc.setSubgroupParent(msg.GroupID, msg.ParentID)
+	}
 	if gc.handleMessageUpdate(msg) {
 		return
 	}
@@ -513,12 +516,14 @@ func (gc *GMClient) HandleMembers(group groupme.ID, members []groupme.Member, ad
 // information to apply an incremental update, so the legacy bridge always
 // refetched the whole group; this preserves that behavior.
 func (gc *GMClient) resyncGroup(id groupme.ID) {
-	gc.Main.br.QueueRemoteEvent(gc.UserLogin, &simplevent.ChatResync{
-		EventMeta: simplevent.EventMeta{
-			Type:      bridgev2.RemoteEventChatResync,
-			PortalKey: gc.portalKeyForGroup(id),
-			Timestamp: time.Now(),
-		},
-		GetChatInfoFunc: gc.GetChatInfo,
-	})
+	for _, chatID := range append([]groupme.ID{id}, gc.subgroupsOf(id)...) {
+		gc.Main.br.QueueRemoteEvent(gc.UserLogin, &simplevent.ChatResync{
+			EventMeta: simplevent.EventMeta{
+				Type:      bridgev2.RemoteEventChatResync,
+				PortalKey: gc.portalKeyForGroup(chatID),
+				Timestamp: time.Now(),
+			},
+			GetChatInfoFunc: gc.GetChatInfo,
+		})
+	}
 }
