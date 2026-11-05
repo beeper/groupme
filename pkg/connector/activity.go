@@ -178,9 +178,28 @@ func (gc *GMClient) syncReadCheckpoints(ctx context.Context) {
 func (gc *GMClient) handleActivity(ctx context.Context, msg groupme.PushMessage) bool {
 	events, handled := gc.parseActivity(msg)
 	for _, evt := range events {
+		if del, ok := evt.(*simplevent.ChatDelete); ok {
+			if kind, groupID := ParsePortalID(del.PortalKey.ID); kind == PortalTypeGroup {
+				go gc.unsubscribeFromGroup(ctx, groupID)
+			}
+		}
 		gc.Main.br.QueueRemoteEvent(gc.UserLogin, evt)
 	}
 	return handled
+}
+
+func (gc *GMClient) unsubscribeFromGroup(ctx context.Context, groupID groupme.ID) {
+	gc.pushMu.Lock()
+	push := gc.push
+	gc.pushMu.Unlock()
+	if push == nil {
+		return
+	}
+	for _, id := range append([]groupme.ID{groupID}, gc.subgroupsOf(groupID)...) {
+		if err := push.UnsubscribeFromGroup(ctx, id); err != nil {
+			gc.UserLogin.Log.Warn().Err(err).Str("group_id", string(id)).Msg("Failed to unsubscribe from left GroupMe group")
+		}
+	}
 }
 
 func (gc *GMClient) parseActivity(msg groupme.PushMessage) ([]bridgev2.RemoteEvent, bool) {
