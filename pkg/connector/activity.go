@@ -195,8 +195,10 @@ func (gc *GMClient) unsubscribeFromGroup(ctx context.Context, groupID groupme.ID
 	if push == nil {
 		return
 	}
-	if err := push.UnsubscribeFromGroup(ctx, groupID); err != nil {
-		gc.UserLogin.Log.Warn().Err(err).Str("group_id", string(groupID)).Msg("Failed to unsubscribe from left GroupMe group")
+	for _, id := range append([]groupme.ID{groupID}, gc.subgroupsOf(groupID)...) {
+		if err := push.UnsubscribeFromGroup(ctx, id); err != nil {
+			gc.UserLogin.Log.Warn().Err(err).Str("group_id", string(id)).Msg("Failed to unsubscribe from left GroupMe group")
+		}
 	}
 }
 
