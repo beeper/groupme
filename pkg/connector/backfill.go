@@ -79,8 +79,33 @@ func (gc *GMClient) fetchMessagePage(ctx context.Context, portalID networkid.Por
 		if msg == nil || msg.ID == "" {
 			return nil, fmt.Errorf("GroupMe history response is missing a message ID")
 		}
-		if msg.UserID != "" && (gc.portalKeyForMessage(msg).ID != portalID || (kind == PortalTypeDM && msg.UserID != groupme.ID(gc.Meta.GMID) && msg.UserID != chatID && msg.UserID != "system")) {
-			return nil, fmt.Errorf("GroupMe history response belongs to another conversation")
+		if msg.UserID != "" {
+			mapped := gc.portalKeyForMessage(msg).ID
+			mismatch := ""
+			if mapped != portalID {
+				mismatch = "portal"
+			} else if kind == PortalTypeDM && msg.UserID != groupme.ID(gc.Meta.GMID) && msg.UserID != chatID && msg.UserID != "system" {
+				mismatch = "sender"
+			}
+			if mismatch != "" {
+				mappedKind, _ := ParsePortalID(mapped)
+				zerolog.Ctx(ctx).Warn().
+					Str("message_id", string(msg.ID)).
+					Str("mismatch", mismatch).
+					Str("portal_type", string(kind)).
+					Str("mapped_portal_type", string(mappedKind)).
+					Bool("has_group_id", msg.GroupID != "").
+					Bool("has_conversation_id", msg.ConversationID != "").
+					Bool("has_chat_id", msg.ChatID != "").
+					Bool("has_recipient_id", msg.RecipientID != "").
+					Bool("sender_is_self", msg.UserID == groupme.ID(gc.Meta.GMID)).
+					Bool("sender_is_partner", msg.UserID == chatID).
+					Bool("sender_id_matches_user_id", msg.SenderID == msg.UserID).
+					Str("sender_type", string(msg.SenderType)).
+					Bool("system", msg.System).
+					Msg("GroupMe history message doesn't match the requested conversation")
+				return nil, fmt.Errorf("GroupMe history response belongs to another conversation (%s mismatch)", mismatch)
+			}
 		}
 		if before != "" && compareMessageIDs(msg.ID, before) >= 0 || after != "" && compareMessageIDs(msg.ID, after) <= 0 {
 			return nil, fmt.Errorf("GroupMe history pagination did not advance")
