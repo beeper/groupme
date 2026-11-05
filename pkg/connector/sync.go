@@ -178,10 +178,20 @@ func (gc *GMClient) refreshRecentReactions(ctx context.Context, chats []nativeCh
 			if isHiddenRecord(msg) {
 				continue
 			}
-			if msg.Reactions != nil || msg.FavoritedBy != nil {
+			if gc.needsReactionRefresh(ctx, chat.portalKey.Receiver, msg) {
 				gc.HandleLike(*msg)
 			}
 		}
 		zerolog.Ctx(ctx).Debug().Str("portal_id", string(portalID)).Int("message_count", len(messages)).Msg("Refreshed recent GroupMe reactions")
 	}
+}
+
+func (gc *GMClient) needsReactionRefresh(ctx context.Context, receiver networkid.UserLoginID, msg *groupme.Message) bool {
+	msgID := MakeMessageID(msg.ID)
+	if len(gc.messageReactions(msg).Users) == 0 {
+		existing, err := gc.Main.br.DB.Reaction.GetAllToMessage(ctx, receiver, msgID)
+		return err != nil || len(existing) > 0
+	}
+	target, err := gc.Main.br.DB.Message.GetFirstPartByID(ctx, receiver, msgID)
+	return err != nil || target != nil
 }
