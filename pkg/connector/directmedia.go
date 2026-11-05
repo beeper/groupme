@@ -2,7 +2,9 @@ package connector
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 
 	"maunium.net/go/mautrix"
@@ -101,6 +103,10 @@ func (gc *GMConnector) Download(ctx context.Context, mediaID networkid.MediaID, 
 	if err != nil {
 		// A Matrix response error also keeps the framework from logging the
 		// full media ID (which contains a native attachment URL).
+		var httpErr *groupmeext.HTTPError
+		if errors.As(err, &httpErr) && (httpErr.StatusCode == http.StatusForbidden || httpErr.StatusCode == http.StatusNotFound || httpErr.StatusCode == http.StatusGone) {
+			return nil, mautrix.MNotFound.WithMessage("GroupMe media is no longer available: %v", err)
+		}
 		return nil, mautrix.MUnknown.WithMessage("Failed to download GroupMe media: %v", err)
 	}
 	response := mediaproxy.GetMediaResponseRawData(data)
