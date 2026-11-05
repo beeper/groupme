@@ -78,7 +78,7 @@ func (gc *GMClient) makeRemoteMessage(msg groupme.Message) *simplevent.Message[*
 		},
 		ID:                 MakeMessageID(msg.ID),
 		Data:               &msg,
-		ConvertMessageFunc: gc.convertMessage,
+		ConvertMessageFunc: gc.convertLiveMessage,
 	}
 }
 
@@ -109,6 +109,18 @@ func (gc *GMClient) messageSender(msg *groupme.Message) bridgev2.EventSender {
 		return bridgev2.EventSender{}
 	}
 	return bridgev2.EventSender{IsFromMe: string(msg.UserID) == gc.Meta.GMID, Sender: MakeUserID(msg.UserID)}
+}
+
+func (gc *GMClient) convertLiveMessage(ctx context.Context, portal *bridgev2.Portal, intent bridgev2.MatrixAPI, msg *groupme.Message) (*bridgev2.ConvertedMessage, error) {
+	if msg.SenderType == groupme.SenderTypeBot && msg.UserID != "" {
+		if meta, ok := portal.Metadata.(*PortalMetadata); ok && !slices.Contains(meta.BotIDs, msg.UserID) {
+			meta.BotIDs = append(meta.BotIDs, msg.UserID)
+			if err := portal.Save(ctx); err != nil {
+				zerolog.Ctx(ctx).Err(err).Msg("Failed to save GroupMe bot in portal metadata")
+			}
+		}
+	}
+	return gc.convertMessage(ctx, portal, intent, msg)
 }
 
 func (gc *GMClient) convertMessage(ctx context.Context, portal *bridgev2.Portal, intent bridgev2.MatrixAPI, msg *groupme.Message) (*bridgev2.ConvertedMessage, error) {

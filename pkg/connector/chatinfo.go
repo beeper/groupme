@@ -77,7 +77,7 @@ func (gc *GMClient) GetChatInfo(ctx context.Context, portal *bridgev2.Portal) (*
 	switch portalType {
 	case PortalTypeGroup:
 		if parentID := gc.subgroupParent(portal, gmid); parentID != "" {
-			return gc.subgroupChatInfo(ctx, parentID, gmid)
+			return gc.subgroupChatInfo(ctx, portal, parentID, gmid)
 		}
 		group, err := gc.Client.ShowGroup(ctx, gmid)
 		if err != nil {
@@ -86,7 +86,7 @@ func (gc *GMClient) GetChatInfo(ctx context.Context, portal *bridgev2.Portal) (*
 		if group == nil || group.ID != gmid {
 			return nil, fmt.Errorf("GroupMe returned invalid group metadata")
 		}
-		return gc.groupChatInfo(ctx, group), nil
+		return gc.groupChatInfo(ctx, portal, group), nil
 	case PortalTypeDM:
 		// Existing DM partners may be absent from personal contacts.
 		var partner *groupme.User
@@ -197,7 +197,7 @@ func (gc *GMClient) GetUserInfo(ctx context.Context, ghost *bridgev2.Ghost) (*br
 	return &bridgev2.UserInfo{Name: ptr.Ptr(string(gmid))}, nil
 }
 
-func (gc *GMClient) groupChatInfo(ctx context.Context, group *groupme.Group) *bridgev2.ChatInfo {
+func (gc *GMClient) groupChatInfo(ctx context.Context, portal *bridgev2.Portal, group *groupme.Group) *bridgev2.ChatInfo {
 	members := &bridgev2.ChatMemberList{
 		IsFull:    true,
 		MemberMap: make(bridgev2.ChatMemberMap, len(group.Members)),
@@ -230,6 +230,14 @@ func (gc *GMClient) groupChatInfo(ctx context.Context, group *groupme.Group) *br
 			Membership: "join",
 			UserInfo:   info,
 		})
+	}
+	if meta, ok := portal.Metadata.(*PortalMetadata); ok {
+		for _, botID := range meta.BotIDs {
+			members.MemberMap.Set(bridgev2.ChatMember{
+				EventSender: bridgev2.EventSender{Sender: MakeUserID(botID)},
+				Membership:  "join",
+			})
+		}
 	}
 	roomType := database.RoomTypeDefault
 	return &bridgev2.ChatInfo{

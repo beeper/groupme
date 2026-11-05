@@ -77,7 +77,7 @@ func (gc *GMClient) listSubgroups(ctx context.Context, parentID groupme.ID) []na
 	return chats
 }
 
-func (gc *GMClient) subgroupChatInfo(ctx context.Context, parentID, subgroupID groupme.ID) (*bridgev2.ChatInfo, error) {
+func (gc *GMClient) subgroupChatInfo(ctx context.Context, portal *bridgev2.Portal, parentID, subgroupID groupme.ID) (*bridgev2.ChatInfo, error) {
 	sub, err := gc.Client.ShowSubgroup(ctx, parentID, subgroupID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch GroupMe subgroup: %w", err)
@@ -92,7 +92,7 @@ func (gc *GMClient) subgroupChatInfo(ctx context.Context, parentID, subgroupID g
 	if parent == nil || parent.ID != parentID {
 		return nil, fmt.Errorf("GroupMe returned invalid group metadata")
 	}
-	info := gc.groupChatInfo(ctx, parent)
+	info := gc.groupChatInfo(ctx, portal, parent)
 	if sub.Topic != "" {
 		info.Name = ptr.Ptr(fmt.Sprintf("%s / %s", parent.Name, sub.Topic))
 	}
