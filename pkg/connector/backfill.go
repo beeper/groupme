@@ -84,7 +84,7 @@ func (gc *GMClient) fetchMessagePage(ctx context.Context, portalID networkid.Por
 			mismatch := ""
 			if mapped != portalID {
 				mismatch = "portal"
-			} else if kind == PortalTypeDM && msg.UserID != groupme.ID(gc.Meta.GMID) && msg.UserID != chatID && msg.UserID != "system" {
+			} else if kind == PortalTypeDM && msg.UserID != groupme.ID(gc.Meta.GMID) && msg.UserID != chatID && msg.UserID != "system" && msg.SenderType != "service" {
 				mismatch = "sender"
 			}
 			if mismatch != "" {
