@@ -153,13 +153,24 @@ func (gc *GMClient) refreshPoll(ctx context.Context, pollID string) {
 	if ctx.Err() != nil {
 		return
 	}
+	notMember := false
+	if groupMeHTTPStatus(err) == http.StatusUnauthorized {
+		_, meErr := gc.Client.MyUser(ctx)
+		if ctx.Err() != nil {
+			return
+		} else if isAuthError(meErr) {
+			gc.rejectToken(meErr)
+			return
+		}
+		notMember = meErr == nil
+	}
 	active.Lock()
 	if active.polls[pollID] != tracked || tracked.revision != revision {
 		active.Unlock()
 		return
 	}
 	if err != nil {
-		gone := pollIsGone(err)
+		gone := notMember || pollIsGone(err)
 		if gone {
 			delete(active.polls, pollID)
 		}
