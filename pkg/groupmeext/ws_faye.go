@@ -371,12 +371,15 @@ func (c *WSFayeClient) subscribe(ctx context.Context, conn *websocket.Conn, clie
 		}
 		if c.onSubscribeFailed != nil && c.onSubscribeFailed(ctx, channel, err) {
 			c.mu.Lock()
-			drop := c.isCurrent(conn, channel, sub) && !sub.requested
+			current = c.isCurrent(conn, channel, sub)
+			drop := current && !sub.requested
 			if drop {
 				delete(c.subs, channel)
 			}
 			c.mu.Unlock()
-			if drop {
+			if !current {
+				return
+			} else if drop {
 				c.log.Warn().Err(err).Str("channel", channel).Msg("Dropping rejected GroupMe push channel")
 				return
 			}
