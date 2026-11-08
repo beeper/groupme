@@ -261,13 +261,15 @@ func (gc *GMClient) runSession(ctx context.Context) {
 			gc.refreshRecentReactions(ctx, chats)
 			gc.syncReadCheckpoints(ctx)
 		}()
-	}, func(ctx context.Context, channel string) {
-		if channel != userChannel {
-			return
+	}, func(ctx context.Context, channel string, err error) bool {
+		if channel != userChannel && !groupmeext.IsRejected(err) {
+			return false
 		}
-		if _, err := gc.Client.MyUser(ctx); isAuthError(err) {
-			gc.rejectToken(err)
+		_, meErr := gc.Client.MyUser(ctx)
+		if isAuthError(meErr) {
+			gc.rejectToken(meErr)
 		}
+		return channel != userChannel && meErr == nil
 	}, func(err error) {
 		gc.UserLogin.BridgeState.Send(status.BridgeState{
 			StateEvent: status.StateTransientDisconnect,
