@@ -120,6 +120,7 @@ type pushSubscription struct {
 	token       string
 	subscribing bool
 	ready       bool
+	requested   bool
 	held        []*bayeuxMessage
 }
 
@@ -363,18 +364,22 @@ func (c *WSFayeClient) subscribe(ctx context.Context, conn *websocket.Conn, clie
 		}
 		c.mu.Lock()
 		current := c.isCurrent(conn, channel, sub)
+		sub.requested = false
 		c.mu.Unlock()
 		if ctx.Err() != nil || !current {
 			return
 		}
 		if c.onSubscribeFailed != nil && c.onSubscribeFailed(ctx, channel, err) {
 			c.mu.Lock()
-			if c.isCurrent(conn, channel, sub) {
+			drop := c.isCurrent(conn, channel, sub) && !sub.requested
+			if drop {
 				delete(c.subs, channel)
 			}
 			c.mu.Unlock()
-			c.log.Warn().Err(err).Str("channel", channel).Msg("Dropping rejected GroupMe push channel")
-			return
+			if drop {
+				c.log.Warn().Err(err).Str("channel", channel).Msg("Dropping rejected GroupMe push channel")
+				return
+			}
 		}
 		wait := delay/2 + rand.N(delay/2)
 		c.log.Warn().Err(err).Str("channel", channel).Dur("retry_in", wait).Msg("Failed to subscribe to GroupMe push channel, retrying")
@@ -649,6 +654,7 @@ func (c *WSFayeClient) Subscribe(channel, token string, msgChannel chan groupme.
 	// Inventory and message discovery can name the same chat repeatedly. Keep
 	// its pending frames and readiness instead of starting another subscription.
 	if sub := c.subs[channel]; sub != nil && sub.token == token && sub.messages == msgChannel {
+		sub.requested = true
 		return
 	}
 	c.subs[channel] = &pushSubscription{messages: msgChannel, token: token}
