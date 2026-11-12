@@ -185,6 +185,7 @@ func (gc *GMClient) convertGroupMeMessage(ctx context.Context, portal *bridgev2.
 		if att == nil {
 			continue
 		}
+		nativeType := att.Type
 		switch att.Type {
 		case "linked_image":
 			att = &groupme.Attachment{Type: groupme.Image, URL: att.URL}
@@ -205,7 +206,7 @@ func (gc *GMClient) convertGroupMeMessage(ctx context.Context, portal *bridgev2.
 				var err error
 				content, err = gc.directMediaContent(ctx, msg, att)
 				if err != nil {
-					log.Warn().Err(err).Str("attachment_type", string(att.Type)).Msg("Failed to convert GroupMe direct media attachment")
+					log.Warn().Err(err).Str("attachment_type", string(att.Type)).Str("native_attachment_type", string(nativeType)).Msg("Failed to convert GroupMe direct media attachment")
 					cm.Parts = append(cm.Parts, failedAttachment(partID))
 					continue
 				}
