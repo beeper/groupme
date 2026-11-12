@@ -177,6 +177,9 @@ func (gc *GMClient) syncReadCheckpoints(ctx context.Context) {
 // fields and keep routing, room creation, and Matrix delivery in bridgev2.
 func (gc *GMClient) handleActivity(ctx context.Context, msg groupme.PushMessage) bool {
 	events, handled := gc.parseActivity(msg)
+	if typ, _ := msg.Data()["type"].(string); !handled && typ != "ping" && groupme.RealTimeHandlers[typ] == nil {
+		gc.UserLogin.Log.Debug().Str("push_type", typ).Str("channel", msg.Channel()).Msg("Unhandled GroupMe push type")
+	}
 	for _, evt := range events {
 		if del, ok := evt.(*simplevent.ChatDelete); ok {
 			if kind, groupID := ParsePortalID(del.PortalKey.ID); kind == PortalTypeGroup {

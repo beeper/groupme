@@ -255,11 +255,15 @@ func (gc *GMClient) runSession(ctx context.Context) {
 			return
 		}
 		gc.UserLogin.BridgeState.Send(status.BridgeState{StateEvent: status.StateConnected})
-		reactionRefreshes.Add(1)
+		reactionRefreshes.Add(2)
 		go func() {
 			defer reactionRefreshes.Done()
 			gc.refreshRecentReactions(ctx, chats)
 			gc.syncReadCheckpoints(ctx)
+		}()
+		go func() {
+			defer reactionRefreshes.Done()
+			gc.checkMissedMessages(ctx)
 		}()
 	}, func(ctx context.Context, channel string, err error) bool {
 		if channel != userChannel && !groupmeext.IsRejected(err) {
