@@ -113,8 +113,13 @@ func GetFileMetadata(ctx context.Context, groupID groupme.ID, fileID, token stri
 	if err := json.NewDecoder(io.LimitReader(metaResp.Body, 1024*1024)).Decode(&meta); err != nil {
 		return nil, fmt.Errorf("failed to decode file metadata: %w", err)
 	}
-	if len(meta) != 1 || meta[0].FileData.FileName == "" || meta[0].FileData.FileSize < 0 || meta[0].FileData.FileSize > MaxMediaSize {
-		return nil, fmt.Errorf("GroupMe returned invalid file metadata")
+	switch {
+	case len(meta) != 1:
+		return nil, fmt.Errorf("GroupMe returned invalid file metadata: %d entries", len(meta))
+	case meta[0].FileData.FileName == "":
+		return nil, fmt.Errorf("GroupMe returned invalid file metadata: empty file name (size %d, mime type set %t)", meta[0].FileData.FileSize, meta[0].FileData.Mime != "")
+	case meta[0].FileData.FileSize < 0 || meta[0].FileData.FileSize > MaxMediaSize:
+		return nil, fmt.Errorf("GroupMe returned invalid file metadata: size %d outside 0-%d", meta[0].FileData.FileSize, MaxMediaSize)
 	}
 	return &meta[0].FileData, nil
 }
