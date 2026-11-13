@@ -92,8 +92,10 @@ func visibleText(msg *groupme.Message) string {
 	}) {
 		return ""
 	}
-	if groupmeext.IsGiphyImageURL(strings.TrimSpace(text)) && slices.ContainsFunc(msg.Attachments, func(att *groupme.Attachment) bool {
-		return att != nil && (att.Type == "linked_image" || att.Type == "postprocessing")
+	trimmed := strings.TrimSpace(text)
+	sticker := groupmeext.IsStickerURL(trimmed)
+	if (sticker || groupmeext.IsGiphyImageURL(trimmed)) && slices.ContainsFunc(msg.Attachments, func(att *groupme.Attachment) bool {
+		return att != nil && (att.Type == "linked_image" || att.Type == "postprocessing" || (sticker && att.Type == groupme.Image))
 	}) {
 		return ""
 	}

@@ -16,7 +16,7 @@ func TestGroupMeEmojiConversion(t *testing.T) {
 		name, text, placeholder, want string
 		charmap                       [][]int
 	}{
-		{"alone", "�", "�", "[smiley face]", [][]int{{1, 0}}},
+		{"only emoji", "��", "�", "[smiley face][happy face]", [][]int{{1, 0}, {1, 1}}},
 		{"text", "�hi", "�", "[happy face]hi", [][]int{{1, 1}}},
 		{"mixed", "😀 � 👩‍💻 �", "�", "😀 [pleased face] 👩‍💻 [heart eyes]", [][]int{{1, 2}, {18, 1}}},
 		{"literal replacement", "�", "", "�", nil},

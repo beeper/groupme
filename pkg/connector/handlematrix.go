@@ -132,7 +132,7 @@ func (gc *GMClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.Matri
 	switch content.MsgType {
 	case event.MsgImage, event.MsgVideo, event.MsgFile:
 		text = content.GetCaption()
-	case event.MsgAudio:
+	case event.MsgAudio, event.CapMsgSticker:
 		text = ""
 	}
 	fmtCtx := format.NewContext(ctx)
@@ -158,6 +158,13 @@ func (gc *GMClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.Matri
 
 	switch content.MsgType {
 	case event.MsgText, event.MsgNotice, event.MsgEmote:
+	case event.CapMsgSticker:
+		if emoji := nativeEmojiSticker(content.Info); emoji != nil {
+			out.Text = emoji.Placeholder
+			out.Attachments = []*groupme.Attachment{emoji}
+			break
+		}
+		fallthrough
 	case event.MsgImage, event.MsgVideo, event.MsgAudio, event.MsgFile:
 		attachment, err := gc.uploadMatrixMedia(ctx, content, portalType, gmid)
 		if err != nil {
@@ -241,12 +248,16 @@ func (gc *GMClient) uploadMatrixMedia(ctx context.Context, content *event.Messag
 		mimeType = content.Info.MimeType
 	}
 	switch content.MsgType {
-	case event.MsgImage:
-		url, err := gc.Client.UploadImage(ctx, data, mimeType)
-		if err != nil {
-			return nil, gc.wrapGroupMeError(err, "failed to upload media").WithIsCertain(true)
+	case event.MsgImage, event.CapMsgSticker:
+		// GroupMe web only sends JPEG, PNG and GIF to the image service; WebP goes through upload sessions.
+		if content.MsgType == event.MsgImage || mimeType != "image/webp" {
+			url, err := gc.Client.UploadImage(ctx, data, mimeType)
+			if err != nil {
+				return nil, gc.wrapGroupMeError(err, "failed to upload media").WithIsCertain(true)
+			}
+			return &groupme.Attachment{Type: groupme.Image, URL: url}, nil
 		}
-		return &groupme.Attachment{Type: groupme.Image, URL: url}, nil
+		fallthrough
 	case event.MsgVideo, event.MsgAudio:
 		var extension string
 		mimeType, extension = mediaUploadType(content, mimeType)
@@ -256,7 +267,7 @@ func (gc *GMClient) uploadMatrixMedia(ctx context.Context, content *event.Messag
 		} else {
 			req.GroupId = string(gmid)
 		}
-		if content.MsgType == event.MsgVideo && content.Info != nil {
+		if content.MsgType != event.MsgAudio && content.Info != nil {
 			req.Width, req.Height = content.Info.Width, content.Info.Height
 		}
 		uploaded, err := groupmeext.UploadMedia(ctx, gc.Meta.Token, req, data, mimeType)
@@ -265,6 +276,8 @@ func (gc *GMClient) uploadMatrixMedia(ctx context.Context, content *event.Messag
 		}
 		if content.MsgType == event.MsgAudio {
 			return voiceNoteAttachment(content, uploaded), nil
+		} else if content.MsgType == event.CapMsgSticker {
+			return &groupme.Attachment{Type: groupme.Image, URL: uploaded.RenderURL}, nil
 		}
 		return &groupme.Attachment{Type: groupme.Video, URL: uploaded.RenderURL, VideoPreviewURL: uploaded.ThumbnailURL}, nil
 	case event.MsgFile:
@@ -280,7 +293,9 @@ func (gc *GMClient) uploadMatrixMedia(ctx context.Context, content *event.Messag
 
 // The media upload session requires an extension before it receives any bytes.
 func mediaUploadType(content *event.MessageEventContent, mimeType string) (string, string) {
-	if content.MsgType == event.MsgAudio {
+	if content.MsgType == event.CapMsgSticker {
+		return mimeType, "webp"
+	} else if content.MsgType == event.MsgAudio {
 		mimeType = cmp.Or(mimeType, "audio/mp4")
 	} else {
 		mimeType = cmp.Or(mimeType, "video/mp4")

@@ -1,12 +1,14 @@
 package groupmeext
 
 import (
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 )
@@ -44,8 +46,30 @@ func IsGiphyImageURL(rawURL string) bool {
 		giphyImageHost.MatchString(u.Hostname()) && strings.HasSuffix(u.Path, ".gif")
 }
 
+var giphyEncodedParams = regexp.MustCompile(`^/media/v1\.([^/]+)`)
+
+// IsStickerURL matches what GroupMe web renders as a sticker: Tenor, or GIPHY with ct=s.
+func IsStickerURL(rawURL string) bool {
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Scheme != "https" || u.User != nil || u.Port() != "" {
+		return false
+	} else if u.Hostname() == "media.tenor.com" {
+		return true
+	} else if !IsGiphyImageURL(rawURL) {
+		return false
+	} else if u.Query().Get("ct") == "s" {
+		return true
+	}
+	match := giphyEncodedParams.FindStringSubmatch(u.Path)
+	if match == nil {
+		return false
+	}
+	params, err := base64.RawURLEncoding.DecodeString(strings.TrimRight(match[1], "="))
+	return err == nil && slices.Contains(strings.Split(string(params), "&"), "ct=s")
+}
+
 func validateImageURL(u *url.URL) error {
-	if IsGiphyImageURL(u.String()) {
+	if IsGiphyImageURL(u.String()) || (u.Scheme == "https" && u.User == nil && (u.Host == "media.tenor.com" || u.Host == "powerups.s3.amazonaws.com")) {
 		return nil
 	}
 	return validateMediaURL(u)
