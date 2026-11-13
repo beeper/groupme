@@ -31,6 +31,8 @@ import (
 	"github.com/beeper/groupme-lib"
 )
 
+const missedMessageCheckInterval = 5 * time.Minute
+
 type nativeChat struct {
 	portalKey networkid.PortalKey
 	latestID  groupme.ID
@@ -103,31 +105,88 @@ func (gc *GMClient) catchUp(ctx context.Context) ([]nativeChat, error) {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-		getChatInfo := gc.GetChatInfo
-		if chat.dmPartner != nil {
-			getChatInfo = func(ctx context.Context, portal *bridgev2.Portal) (*bridgev2.ChatInfo, error) {
-				return gc.dmChatInfo(ctx, chat.dmPartner.ID, chat.dmPartner, nil), nil
-			}
-		}
-		gc.Main.br.QueueRemoteEvent(gc.UserLogin, &simplevent.ChatResync{
-			EventMeta: simplevent.EventMeta{
-				Type:         bridgev2.RemoteEventChatResync,
-				PortalKey:    chat.portalKey,
-				CreatePortal: true,
-				Timestamp:    time.Now(),
-			},
-			GetChatInfoFunc: getChatInfo,
-			CheckNeedsBackfillFunc: func(ctx context.Context, latest *database.Message) (bool, error) {
-				latest, err := gc.nearestNativeMessage(ctx, chat.portalKey, latest, false)
-				if err != nil {
-					return false, err
-				}
-				return chat.latestID != "" && (latest == nil || compareMessageIDs(chat.latestID, ParseMessageID(latest.ID)) > 0), nil
-			},
-		})
+		gc.Main.br.QueueRemoteEvent(gc.UserLogin, gc.chatResync(chat, func(ctx context.Context, latest *database.Message) (bool, error) {
+			return gc.chatNeedsBackfill(ctx, chat, latest)
+		}))
 		gc.subscribeToChat(chat.portalKey.ID)
 	}
 	return chats, nil
+}
+
+func (gc *GMClient) chatResync(chat nativeChat, checkNeedsBackfill func(context.Context, *database.Message) (bool, error)) *simplevent.ChatResync {
+	getChatInfo := gc.GetChatInfo
+	if chat.dmPartner != nil {
+		getChatInfo = func(ctx context.Context, portal *bridgev2.Portal) (*bridgev2.ChatInfo, error) {
+			return gc.dmChatInfo(ctx, chat.dmPartner.ID, chat.dmPartner, nil), nil
+		}
+	}
+	return &simplevent.ChatResync{
+		EventMeta: simplevent.EventMeta{
+			Type:         bridgev2.RemoteEventChatResync,
+			PortalKey:    chat.portalKey,
+			CreatePortal: true,
+			Timestamp:    time.Now(),
+		},
+		GetChatInfoFunc:        getChatInfo,
+		CheckNeedsBackfillFunc: checkNeedsBackfill,
+	}
+}
+
+func (gc *GMClient) chatNeedsBackfill(ctx context.Context, chat nativeChat, latest *database.Message) (bool, error) {
+	latest, err := gc.nearestNativeMessage(ctx, chat.portalKey, latest, false)
+	if err != nil {
+		return false, err
+	}
+	return chat.latestID != "" && (latest == nil || compareMessageIDs(chat.latestID, ParseMessageID(latest.ID)) > 0), nil
+}
+
+// GroupMe can keep the user channel subscribed and echoing our pings while
+// never publishing message pushes to it, which leaves catch-up on the next
+// reconnect as the only delivery. While connected, compare each chat's newest
+// native message with the bridged one and resync a chat once per newer ID.
+func (gc *GMClient) checkMissedMessages(ctx context.Context) {
+	ctx = gc.UserLogin.Log.With().Str("action", "check missed messages").Logger().WithContext(ctx)
+	ticker := time.NewTicker(missedMessageCheckInterval)
+	defer ticker.Stop()
+	resynced := make(map[networkid.PortalKey]groupme.ID)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		chats, err := gc.listChats(ctx)
+		if ctx.Err() != nil {
+			return
+		} else if err != nil {
+			zerolog.Ctx(ctx).Warn().Err(err).Msg("Failed to list GroupMe chats to check for missed messages")
+			continue
+		}
+		for _, chat := range chats {
+			if ctx.Err() != nil {
+				return
+			}
+			if chat.latestID == "" || resynced[chat.portalKey] == chat.latestID {
+				continue
+			}
+			latest, err := gc.Main.br.DB.Message.GetLastPartAtOrBeforeTime(ctx, chat.portalKey, time.Now().Add(10*time.Second))
+			if err != nil {
+				zerolog.Ctx(ctx).Err(err).Msg("Failed to get last bridged GroupMe message")
+				continue
+			}
+			if needed, err := gc.chatNeedsBackfill(ctx, chat, latest); err != nil || !needed {
+				continue
+			}
+			resynced[chat.portalKey] = chat.latestID
+			gc.Main.br.QueueRemoteEvent(gc.UserLogin, gc.chatResync(chat, func(ctx context.Context, latest *database.Message) (bool, error) {
+				needed, err := gc.chatNeedsBackfill(ctx, chat, latest)
+				if needed {
+					zerolog.Ctx(ctx).Warn().Msg("Newest GroupMe message did not arrive over push, backfilling")
+				}
+				return needed, err
+			}))
+		}
+	}
 }
 
 // Appservices never receive chat-view notifications. Keep the native group and

@@ -241,6 +241,7 @@ func (gc *GMClient) runSession(ctx context.Context) {
 	userChannel := groupme.UserChannel(me.ID)
 	var reactionRefreshes sync.WaitGroup
 	sub := groupme.NewPushSubscription(ctx)
+	sub.SetLogger(gc.UserLogin.Log.With().Str("component", "groupme push").Logger())
 	sub.AddFullHandler(gc)
 	transport := groupmeext.NewWSFayeClient(gc.UserLogin.Log, func(ctx context.Context, channel string) {
 		if channel != userChannel {
@@ -255,11 +256,15 @@ func (gc *GMClient) runSession(ctx context.Context) {
 			return
 		}
 		gc.UserLogin.BridgeState.Send(status.BridgeState{StateEvent: status.StateConnected})
-		reactionRefreshes.Add(1)
+		reactionRefreshes.Add(2)
 		go func() {
 			defer reactionRefreshes.Done()
 			gc.refreshRecentReactions(ctx, chats)
 			gc.syncReadCheckpoints(ctx)
+		}()
+		go func() {
+			defer reactionRefreshes.Done()
+			gc.checkMissedMessages(ctx)
 		}()
 	}, func(ctx context.Context, channel string, err error) bool {
 		if channel != userChannel && !groupmeext.IsRejected(err) {
