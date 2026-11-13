@@ -13,7 +13,7 @@ import (
 	"github.com/beeper/groupme-lib"
 )
 
-// DownloadImage fetches an unauthenticated image, avatar, or GIPHY sticker.
+// DownloadImage fetches an unauthenticated image, avatar, or sticker.
 func DownloadImage(ctx context.Context, imageURL string) ([]byte, string, error) {
 	return downloadMediaURL(ctx, imageURL, "")
 }

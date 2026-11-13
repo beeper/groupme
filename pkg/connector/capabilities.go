@@ -34,6 +34,7 @@ var generalCaps = &bridgev2.NetworkGeneralCapabilities{
 	AggressiveUpdateInfo: false,
 	Provisioning: bridgev2.ProvisioningCapabilities{
 		ResolveIdentifier: bridgev2.ResolveIdentifierCapabilities{CreateDM: true, ContactList: true},
+		ImagePackImport:   true,
 	},
 }
 
@@ -48,6 +49,13 @@ var imageMimes = map[string]event.CapabilitySupportLevel{
 	"image/png":  event.CapLevelFullySupported,
 	"image/jpeg": event.CapLevelFullySupported,
 	"image/gif":  event.CapLevelFullySupported,
+}
+
+var stickerMimes = map[string]event.CapabilitySupportLevel{
+	"image/png":  event.CapLevelFullySupported,
+	"image/jpeg": event.CapLevelFullySupported,
+	"image/gif":  event.CapLevelFullySupported,
+	"image/webp": event.CapLevelFullySupported,
 }
 
 var gifMimes = map[string]event.CapabilitySupportLevel{
@@ -69,7 +77,7 @@ var fileMimes = map[string]event.CapabilitySupportLevel{
 }
 
 var roomCaps = &event.RoomFeatures{
-	ID: "fi.mau.groupme.capabilities.2026_11_04.1",
+	ID: "fi.mau.groupme.capabilities.2026_11_10.1",
 	Formatting: event.FormattingFeatureMap{
 		event.FmtUserLink: event.CapLevelFullySupported,
 	},
@@ -82,6 +90,10 @@ var roomCaps = &event.RoomFeatures{
 		event.CapMsgGIF: {
 			MimeTypes: gifMimes,
 			Caption:   event.CapLevelFullySupported,
+			MaxSize:   MaxFileSize,
+		},
+		event.CapMsgSticker: {
+			MimeTypes: stickerMimes,
 			MaxSize:   MaxFileSize,
 		},
 		event.MsgVideo: {

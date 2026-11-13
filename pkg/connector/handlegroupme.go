@@ -17,9 +17,12 @@
 package connector
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"image"
+	_ "image/gif"
 	"net/http"
 	"slices"
 	"strconv"
@@ -181,6 +184,15 @@ func (gc *GMClient) convertGroupMeMessage(ctx context.Context, portal *bridgev2.
 		log.Warn().Str("event_type", msg.Event.Type).Msg("Failed to convert GroupMe poll event, falling back to bare message text")
 	}
 
+	if part, err := gc.emojiStickerPart(ctx, portal, intent, msg); err != nil {
+		return nil, err
+	} else if part != nil {
+		cm.Parts = append(cm.Parts, part)
+		return cm, nil
+	}
+
+	stickerURL := strings.TrimSpace(msg.Text)
+	isSticker := groupmeext.IsStickerURL(stickerURL)
 	for i, att := range msg.Attachments {
 		if att == nil {
 			continue
@@ -190,7 +202,7 @@ func (gc *GMClient) convertGroupMeMessage(ctx context.Context, portal *bridgev2.
 		case "linked_image":
 			att = &groupme.Attachment{Type: groupme.Image, URL: att.URL}
 		case "postprocessing":
-			if stickerURL := strings.TrimSpace(msg.Text); groupmeext.IsGiphyImageURL(stickerURL) {
+			if isSticker || groupmeext.IsGiphyImageURL(stickerURL) {
 				att = &groupme.Attachment{Type: groupme.Image, URL: stickerURL}
 			}
 		}
@@ -241,6 +253,11 @@ func (gc *GMClient) convertGroupMeMessage(ctx context.Context, portal *bridgev2.
 				if urlInfo := imageInfoFromURL(att.URL); urlInfo != nil {
 					info.Width, info.Height = urlInfo.Width, urlInfo.Height
 				}
+				if isSticker && info.Width == 0 {
+					if config, _, err := image.DecodeConfig(bytes.NewReader(data)); err == nil {
+						info.Width, info.Height = config.Width, config.Height
+					}
+				}
 			}
 			content = &event.MessageEventContent{
 				MsgType: event.MessageType("m." + att.Type),
@@ -283,10 +300,14 @@ func (gc *GMClient) convertGroupMeMessage(ctx context.Context, portal *bridgev2.
 		if att.Type == groupme.Audio {
 			addVoiceNoteInfo(content, att)
 		}
+		partType := event.EventMessage
+		if isSticker && att.Type == groupme.Image {
+			partType, content.MsgType, content.Body = event.EventSticker, "", "sticker"
+		}
 
 		cm.Parts = append(cm.Parts, &bridgev2.ConvertedMessagePart{
 			ID:      partID,
-			Type:    event.EventMessage,
+			Type:    partType,
 			Content: content,
 		})
 	}
