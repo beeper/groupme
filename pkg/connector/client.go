@@ -241,6 +241,7 @@ func (gc *GMClient) runSession(ctx context.Context) {
 	userChannel := groupme.UserChannel(me.ID)
 	var reactionRefreshes sync.WaitGroup
 	sub := groupme.NewPushSubscription(ctx)
+	sub.SetLogger(gc.UserLogin.Log.With().Str("component", "groupme push").Logger())
 	sub.AddFullHandler(gc)
 	transport := groupmeext.NewWSFayeClient(gc.UserLogin.Log, func(ctx context.Context, channel string) {
 		if channel != userChannel {
