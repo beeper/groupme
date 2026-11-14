@@ -19,7 +19,6 @@ package connector
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"slices"
 	"time"
 
@@ -163,7 +162,7 @@ func (gc *GMClient) checkMissedMessages(ctx context.Context, caughtUp []nativeCh
 		if ctx.Err() != nil {
 			return
 		} else if err != nil {
-			if groupMeHTTPStatus(err) == http.StatusUnauthorized {
+			if isAuthError(err) {
 				gc.rejectToken(err)
 				return
 			}
