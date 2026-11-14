@@ -174,7 +174,7 @@ func (gc *GMClient) checkMissedMessages(ctx context.Context, caughtUp []nativeCh
 			if ctx.Err() != nil {
 				return
 			}
-			if chat.latestID == "" || resynced[chat.portalKey] == chat.latestID {
+			if chat.latestID == "" || resynced[chat.portalKey] == chat.latestID || gc.pushedAtOrAfter(chat.portalKey, chat.latestID) {
 				continue
 			}
 			latest, err := gc.Main.br.DB.Message.GetLastPartAtOrBeforeTime(ctx, chat.portalKey, time.Now().Add(10*time.Second))
@@ -195,6 +195,28 @@ func (gc *GMClient) checkMissedMessages(ctx context.Context, caughtUp []nativeCh
 			}))
 		}
 	}
+}
+
+func (gc *GMClient) notePushedMessage(msg *groupme.Message) {
+	key := gc.portalKeyForMessage(msg)
+	if msg.ID == "" || key.ID == "" {
+		return
+	}
+	gc.pushedMu.Lock()
+	defer gc.pushedMu.Unlock()
+	if gc.pushedLatest == nil {
+		gc.pushedLatest = make(map[networkid.PortalKey]groupme.ID)
+	}
+	if prev, ok := gc.pushedLatest[key]; !ok || compareMessageIDs(msg.ID, prev) > 0 {
+		gc.pushedLatest[key] = msg.ID
+	}
+}
+
+func (gc *GMClient) pushedAtOrAfter(key networkid.PortalKey, id groupme.ID) bool {
+	gc.pushedMu.Lock()
+	defer gc.pushedMu.Unlock()
+	pushed, ok := gc.pushedLatest[key]
+	return ok && compareMessageIDs(pushed, id) >= 0
 }
 
 // Appservices never receive chat-view notifications. Keep the native group and

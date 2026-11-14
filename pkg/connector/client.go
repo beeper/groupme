@@ -66,6 +66,9 @@ type GMClient struct {
 
 	subgroupMu      sync.Mutex
 	subgroupParents map[groupme.ID]groupme.ID
+
+	pushedMu     sync.Mutex
+	pushedLatest map[networkid.PortalKey]groupme.ID
 }
 
 var _ bridgev2.NetworkAPI = (*GMClient)(nil)
