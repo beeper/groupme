@@ -264,7 +264,7 @@ func (gc *GMClient) runSession(ctx context.Context) {
 		}()
 		go func() {
 			defer reactionRefreshes.Done()
-			gc.checkMissedMessages(ctx)
+			gc.checkMissedMessages(ctx, chats)
 		}()
 	}, func(ctx context.Context, channel string, err error) bool {
 		if channel != userChannel && !groupmeext.IsRejected(err) {

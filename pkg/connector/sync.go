@@ -19,6 +19,7 @@ package connector
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"slices"
 	"time"
 
@@ -144,11 +145,14 @@ func (gc *GMClient) chatNeedsBackfill(ctx context.Context, chat nativeChat, late
 // never publishing message pushes to it, which leaves catch-up on the next
 // reconnect as the only delivery. While connected, compare each chat's newest
 // native message with the bridged one and resync a chat once per newer ID.
-func (gc *GMClient) checkMissedMessages(ctx context.Context) {
+func (gc *GMClient) checkMissedMessages(ctx context.Context, caughtUp []nativeChat) {
 	ctx = gc.UserLogin.Log.With().Str("action", "check missed messages").Logger().WithContext(ctx)
 	ticker := time.NewTicker(missedMessageCheckInterval)
 	defer ticker.Stop()
-	resynced := make(map[networkid.PortalKey]groupme.ID)
+	resynced := make(map[networkid.PortalKey]groupme.ID, len(caughtUp))
+	for _, chat := range caughtUp {
+		resynced[chat.portalKey] = chat.latestID
+	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -159,6 +163,10 @@ func (gc *GMClient) checkMissedMessages(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		} else if err != nil {
+			if groupMeHTTPStatus(err) == http.StatusUnauthorized {
+				gc.rejectToken(err)
+				return
+			}
 			zerolog.Ctx(ctx).Warn().Err(err).Msg("Failed to list GroupMe chats to check for missed messages")
 			continue
 		}
