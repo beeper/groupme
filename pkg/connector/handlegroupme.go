@@ -47,6 +47,7 @@ func (gc *GMClient) HandleTextMessage(msg groupme.Message) {
 	if msg.ParentID != "" && msg.GroupID != "" {
 		gc.setSubgroupParent(msg.GroupID, msg.ParentID)
 	}
+	gc.notePushedMessage(&msg)
 	if gc.handleMessageUpdate(msg) {
 		return
 	}

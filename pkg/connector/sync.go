@@ -144,11 +144,14 @@ func (gc *GMClient) chatNeedsBackfill(ctx context.Context, chat nativeChat, late
 // never publishing message pushes to it, which leaves catch-up on the next
 // reconnect as the only delivery. While connected, compare each chat's newest
 // native message with the bridged one and resync a chat once per newer ID.
-func (gc *GMClient) checkMissedMessages(ctx context.Context) {
+func (gc *GMClient) checkMissedMessages(ctx context.Context, caughtUp []nativeChat) {
 	ctx = gc.UserLogin.Log.With().Str("action", "check missed messages").Logger().WithContext(ctx)
 	ticker := time.NewTicker(missedMessageCheckInterval)
 	defer ticker.Stop()
-	resynced := make(map[networkid.PortalKey]groupme.ID)
+	resynced := make(map[networkid.PortalKey]groupme.ID, len(caughtUp))
+	for _, chat := range caughtUp {
+		resynced[chat.portalKey] = chat.latestID
+	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -159,6 +162,10 @@ func (gc *GMClient) checkMissedMessages(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		} else if err != nil {
+			if isAuthError(err) {
+				gc.rejectToken(err)
+				return
+			}
 			zerolog.Ctx(ctx).Warn().Err(err).Msg("Failed to list GroupMe chats to check for missed messages")
 			continue
 		}
@@ -166,7 +173,7 @@ func (gc *GMClient) checkMissedMessages(ctx context.Context) {
 			if ctx.Err() != nil {
 				return
 			}
-			if chat.latestID == "" || resynced[chat.portalKey] == chat.latestID {
+			if chat.latestID == "" || resynced[chat.portalKey] == chat.latestID || gc.pushedAtOrAfter(chat.portalKey, chat.latestID) {
 				continue
 			}
 			latest, err := gc.Main.br.DB.Message.GetLastPartAtOrBeforeTime(ctx, chat.portalKey, time.Now().Add(10*time.Second))
@@ -187,6 +194,28 @@ func (gc *GMClient) checkMissedMessages(ctx context.Context) {
 			}))
 		}
 	}
+}
+
+func (gc *GMClient) notePushedMessage(msg *groupme.Message) {
+	key := gc.portalKeyForMessage(msg)
+	if msg.ID == "" || key.ID == "" {
+		return
+	}
+	gc.pushedMu.Lock()
+	defer gc.pushedMu.Unlock()
+	if gc.pushedLatest == nil {
+		gc.pushedLatest = make(map[networkid.PortalKey]groupme.ID)
+	}
+	if prev, ok := gc.pushedLatest[key]; !ok || compareMessageIDs(msg.ID, prev) > 0 {
+		gc.pushedLatest[key] = msg.ID
+	}
+}
+
+func (gc *GMClient) pushedAtOrAfter(key networkid.PortalKey, id groupme.ID) bool {
+	gc.pushedMu.Lock()
+	defer gc.pushedMu.Unlock()
+	pushed, ok := gc.pushedLatest[key]
+	return ok && compareMessageIDs(pushed, id) >= 0
 }
 
 // Appservices never receive chat-view notifications. Keep the native group and

@@ -66,6 +66,9 @@ type GMClient struct {
 
 	subgroupMu      sync.Mutex
 	subgroupParents map[groupme.ID]groupme.ID
+
+	pushedMu     sync.Mutex
+	pushedLatest map[networkid.PortalKey]groupme.ID
 }
 
 var _ bridgev2.NetworkAPI = (*GMClient)(nil)
@@ -264,7 +267,7 @@ func (gc *GMClient) runSession(ctx context.Context) {
 		}()
 		go func() {
 			defer reactionRefreshes.Done()
-			gc.checkMissedMessages(ctx)
+			gc.checkMissedMessages(ctx, chats)
 		}()
 	}, func(ctx context.Context, channel string, err error) bool {
 		if channel != userChannel && !groupmeext.IsRejected(err) {
