@@ -419,6 +419,7 @@ func (gc *GMClient) HandleLike(msg groupme.Message) {
 	if msg.ID == "" || gc.portalKeyForMessage(&msg).ID == "" {
 		return
 	}
+	gc.logUnbridgedReactionTarget(&msg, "snapshot")
 	gc.Main.br.QueueRemoteEvent(gc.UserLogin, &simplevent.ReactionSync{
 		EventMeta:     simplevent.EventMeta{Type: bridgev2.RemoteEventReactionSync, PortalKey: gc.portalKeyForMessage(&msg), Timestamp: time.Now()},
 		TargetMessage: MakeMessageID(msg.ID), Reactions: gc.messageReactions(&msg),
@@ -433,6 +434,7 @@ func (gc *GMClient) HandleReaction(msg groupme.Message, userID groupme.ID, react
 	if msg.ID == "" || userID == "" || portalKey.ID == "" {
 		return
 	}
+	gc.logUnbridgedReactionTarget(&msg, "single")
 	evt := &simplevent.Reaction{
 		EventMeta: simplevent.EventMeta{
 			Type:      bridgev2.RemoteEventReactionRemove,
@@ -447,6 +449,39 @@ func (gc *GMClient) HandleReaction(msg groupme.Message, userID groupme.ID, react
 		evt.Emoji = reaction.Code
 	}
 	gc.Main.br.QueueRemoteEvent(gc.UserLogin, evt)
+}
+
+func (gc *GMClient) logUnbridgedReactionTarget(msg *groupme.Message, reactionType string) {
+	ctx := gc.UserLogin.Log.WithContext(context.Background())
+	existing, err := gc.Main.br.DB.Message.GetFirstPartByID(ctx, gc.UserLogin.ID, MakeMessageID(msg.ID))
+	if err != nil || existing != nil {
+		return
+	}
+	portalKey := gc.portalKeyForMessage(msg)
+	attachmentTypes := make([]string, 0, len(msg.Attachments))
+	for _, att := range msg.Attachments {
+		if att != nil {
+			attachmentTypes = append(attachmentTypes, string(att.Type))
+		}
+	}
+	log := gc.UserLogin.Log.Warn().
+		Str("reaction_type", reactionType).
+		Str("portal_id", string(portalKey.ID)).
+		Str("message_id", string(msg.ID)).
+		Bool("newer_message_pushed", gc.pushedAtOrAfter(portalKey, msg.ID)).
+		Bool("has_sender", msg.UserID != "").
+		Bool("has_text", msg.Text != "").
+		Strs("attachment_types", attachmentTypes).
+		Str("sender_type", string(msg.SenderType)).
+		Bool("system", isSystemMessage(msg)).
+		Bool("has_parent", msg.ParentID != "")
+	if msg.Event != nil {
+		log = log.Str("event_type", msg.Event.Type)
+	}
+	if msg.CreatedAt > 0 {
+		log = log.Dur("message_age", time.Since(msg.CreatedAt.ToTime()))
+	}
+	log.Msg("GroupMe reaction targets a message that was never bridged")
 }
 
 func (gc *GMClient) messageReactions(msg *groupme.Message) *bridgev2.ReactionSyncData {
