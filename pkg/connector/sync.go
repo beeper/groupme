@@ -211,6 +211,16 @@ func (gc *GMClient) notePushedMessage(msg *groupme.Message) {
 	}
 }
 
+func (gc *GMClient) comparePushedLatest(key networkid.PortalKey, id groupme.ID) (int, bool) {
+	gc.pushedMu.Lock()
+	defer gc.pushedMu.Unlock()
+	pushed, ok := gc.pushedLatest[key]
+	if !ok {
+		return 0, false
+	}
+	return compareMessageIDs(pushed, id), true
+}
+
 func (gc *GMClient) pushedAtOrAfter(key networkid.PortalKey, id groupme.ID) bool {
 	gc.pushedMu.Lock()
 	defer gc.pushedMu.Unlock()
