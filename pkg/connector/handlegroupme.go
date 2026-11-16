@@ -464,11 +464,13 @@ func (gc *GMClient) logUnbridgedReactionTarget(msg *groupme.Message, reactionTyp
 			attachmentTypes = append(attachmentTypes, string(att.Type))
 		}
 	}
+	pushedCmp, anyPushed := gc.comparePushedLatest(portalKey, msg.ID)
 	log := gc.UserLogin.Log.Warn().
 		Str("reaction_type", reactionType).
 		Str("portal_id", string(portalKey.ID)).
 		Str("message_id", string(msg.ID)).
-		Bool("newer_message_pushed", gc.pushedAtOrAfter(portalKey, msg.ID)).
+		Bool("newer_message_pushed", anyPushed && pushedCmp > 0).
+		Bool("target_is_latest_push", anyPushed && pushedCmp == 0).
 		Bool("has_sender", msg.UserID != "").
 		Bool("has_text", msg.Text != "").
 		Strs("attachment_types", attachmentTypes).
