@@ -12,23 +12,19 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 )
 
 // Password sign-in as the GroupMe Android app (com.groupme.android 16.36.2)
 // does it. Its LoginRequest signs the request with a hash of a constant key,
 // the app ID, the device ID and the username in X-Access-Token instead of the
-// web client's Arkose captcha token.
+// web client's Arkose captcha token. Web tokens expire 14 days after sign-in.
 const (
-	androidVersionCode = 263140604
+	androidVersionCode = "263140604"
+	androidAppID       = "Android-" + androidVersionCode
 	androidLoginKey    = "48ea3317-4a12-4a30-9b87-efdf2dc1b9ec"
 	androidUserAgent   = "Dalvik/2.1.0 (Linux; U; Android 14; Pixel 8 Build/AP2A.240905.003)"
 )
-
-var AndroidAppID = "Android-" + strconv.Itoa(androidVersionCode)
-
-var loginHTTPClient = activityHTTPClient
 
 // GroupMe keeps one token per user, app ID and device ID, so a stable device
 // ID stops repeated sign-ins from piling up entries in the account's device list.
@@ -38,23 +34,15 @@ func AndroidDeviceID(matrixUser, username string) string {
 }
 
 func androidLoginSignature(deviceID, username string) string {
-	sum := sha256.Sum256([]byte(androidLoginKey + AndroidAppID + deviceID + username))
+	sum := sha256.Sum256([]byte(androidLoginKey + androidAppID + deviceID + username))
 	return base64.StdEncoding.EncodeToString(sum[:])
 }
 
-type Verification struct {
-	Code    string `json:"code"`
-	Type    string `json:"type"`
-	Methods struct {
-		SMS   string `json:"sms"`
-		Email string `json:"email"`
-	} `json:"methods"`
-}
-
 type PasswordLoginResult struct {
-	AccessToken  string        `json:"access_token"`
-	UserID       string        `json:"user_id"`
-	Verification *Verification `json:"verification"`
+	AccessToken  string `json:"access_token"`
+	Verification *struct {
+		Code string `json:"code"`
+	} `json:"verification"`
 }
 
 type AuthError struct {
@@ -90,7 +78,7 @@ func authRequest(ctx context.Context, name, endpoint string, header http.Header,
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", androidUserAgent)
-	resp, err := loginHTTPClient.Do(req)
+	resp, err := activityHTTPClient.Do(req)
 	if err != nil {
 		var uerr *url.Error
 		if errors.As(err, &uerr) {
@@ -122,8 +110,8 @@ func PasswordLogin(ctx context.Context, username, password, deviceID, verificati
 		"username":    username,
 		"password":    password,
 		"grant_type":  "password",
-		"app_id":      AndroidAppID,
-		"app_version": strconv.Itoa(androidVersionCode),
+		"app_id":      androidAppID,
+		"app_version": androidVersionCode,
 		"device_id":   deviceID,
 	}
 	if verificationCode != "" {
