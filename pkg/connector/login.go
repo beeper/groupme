@@ -221,6 +221,24 @@ func wrapPasswordLoginError(err error) error {
 	return bridgev2.RespError(mautrix.MUnknown.WithMessage("GroupMe sign-in failed; try again later"))
 }
 
+// Meta codes from the Android app's multi_factor_auth.ConfirmPinRequest;
+// 40002 (incorrect PIN) is handled in submitVerificationPIN.
+func wrapVerificationError(err error) error {
+	var authErr *groupmeext.AuthError
+	if !errors.As(err, &authErr) {
+		return bridgev2.RespError(mautrix.MUnknown.WithMessage("GroupMe sign-in failed; try again later"))
+	}
+	switch {
+	case authErr.MetaCode == 40003:
+		return bridgev2.RespError(mautrix.MLimitExceeded.WithMessage("too many incorrect codes; start the GroupMe login again later").WithStatus(http.StatusBadRequest))
+	case authErr.MetaCode == 40602:
+		return bridgev2.RespError(mautrix.MForbidden.WithMessage("the GroupMe verification code expired; start the login again"))
+	case authErr.StatusCode == http.StatusTooManyRequests:
+		return bridgev2.RespError(mautrix.MLimitExceeded.WithMessage("GroupMe is rate limiting sign-ins, try again later").WithStatus(http.StatusBadRequest))
+	}
+	return bridgev2.RespError(mautrix.MUnknown.WithMessage("GroupMe could not send or check the verification code; start the login again"))
+}
+
 func (gl *GMLogin) submitPassword(ctx context.Context, username, password string) (*bridgev2.LoginStep, error) {
 	username = strings.TrimSpace(username)
 	if username == "" || password == "" {
@@ -243,7 +261,7 @@ func (gl *GMLogin) submitPassword(ctx context.Context, username, password string
 		return nil, ctx.Err()
 	} else if err != nil {
 		zerolog.Ctx(ctx).Err(err).Msg("Failed to send GroupMe verification code")
-		return nil, wrapPasswordLoginError(err)
+		return nil, wrapVerificationError(err)
 	}
 	gl.username, gl.password, gl.verificationCode = username, password, result.Verification.Code
 	instructions := "Enter the code GroupMe sent you by SMS."
@@ -264,18 +282,10 @@ func (gl *GMLogin) submitVerificationPIN(ctx context.Context, pin string) (*brid
 	} else if err != nil {
 		zerolog.Ctx(ctx).Err(err).Msg("GroupMe verification failed")
 		var authErr *groupmeext.AuthError
-		if errors.As(err, &authErr) {
-			// Meta codes from the Android app's multi_factor_auth.ConfirmPinRequest.
-			switch authErr.MetaCode {
-			case 40002:
-				return gl.verifyStep("That code was incorrect. Enter the code GroupMe sent you by SMS."), nil
-			case 40003:
-				return nil, bridgev2.RespError(mautrix.MLimitExceeded.WithMessage("too many incorrect codes; start the GroupMe login again later").WithStatus(http.StatusBadRequest))
-			case 40602:
-				return nil, bridgev2.RespError(mautrix.MForbidden.WithMessage("the GroupMe verification code expired; start the login again"))
-			}
+		if errors.As(err, &authErr) && authErr.MetaCode == 40002 {
+			return gl.verifyStep("That code was incorrect. Enter the code GroupMe sent you by SMS."), nil
 		}
-		return nil, wrapPasswordLoginError(err)
+		return nil, wrapVerificationError(err)
 	}
 	result, err := groupmeext.PasswordLogin(ctx, gl.username, gl.password, gl.deviceID, gl.verificationCode)
 	if ctx.Err() != nil {
