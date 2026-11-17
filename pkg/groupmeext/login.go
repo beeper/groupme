@@ -134,8 +134,6 @@ func InitiateVerification(ctx context.Context, code string) (string, error) {
 	return result.Hint, err
 }
 
-const VerificationIncorrectPIN = 40002
-
 // ConfirmVerification only reports success; the app then repeats the sign-in
 // with the verification code.
 func ConfirmVerification(ctx context.Context, code, pin string) error {

@@ -42,13 +42,13 @@ const (
 
 func (gc *GMConnector) GetLoginFlows() []bridgev2.LoginFlow {
 	return []bridgev2.LoginFlow{{
-		Name:        "GroupMe password",
-		Description: "Sign in with your GroupMe email or phone number and password",
-		ID:          LoginFlowIDPassword,
-	}, {
 		Name:        "GroupMe",
 		Description: "Sign in to GroupMe in your browser",
 		ID:          LoginFlowIDWeb,
+	}, {
+		Name:        "GroupMe password",
+		Description: "Sign in with your GroupMe email or phone number and password",
+		ID:          LoginFlowIDPassword,
 	}, {
 		Name:        "GroupMe access token",
 		Description: "Use a session from your browser, including Google sign-in",
@@ -57,7 +57,9 @@ func (gc *GMConnector) GetLoginFlows() []bridgev2.LoginFlow {
 }
 
 func (gc *GMConnector) CreateLogin(ctx context.Context, user *bridgev2.User, flowID string) (bridgev2.LoginProcess, error) {
-	if flowID != LoginFlowIDToken && flowID != LoginFlowIDWeb && flowID != LoginFlowIDPassword {
+	switch flowID {
+	case LoginFlowIDWeb, LoginFlowIDPassword, LoginFlowIDToken:
+	default:
 		return nil, bridgev2.ErrInvalidLoginFlowID
 	}
 	loginCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
@@ -88,7 +90,8 @@ func (gl *GMLogin) Start(ctx context.Context) (*bridgev2.LoginStep, error) {
 	if err := gl.ctx.Err(); err != nil {
 		return nil, err
 	}
-	if gl.FlowID == LoginFlowIDPassword {
+	switch gl.FlowID {
+	case LoginFlowIDPassword:
 		return &bridgev2.LoginStep{
 			Type:         bridgev2.LoginStepTypeUserInput,
 			StepID:       "fi.mau.groupme.login.credentials",
@@ -105,8 +108,7 @@ func (gl *GMLogin) Start(ctx context.Context) (*bridgev2.LoginStep, error) {
 				}},
 			},
 		}, nil
-	}
-	if gl.FlowID == LoginFlowIDWeb {
+	case LoginFlowIDWeb:
 		return &bridgev2.LoginStep{
 			Type:         bridgev2.LoginStepTypeCookies,
 			StepID:       "fi.mau.groupme.login.web",
@@ -125,20 +127,21 @@ func (gl *GMLogin) Start(ctx context.Context) (*bridgev2.LoginStep, error) {
 				}},
 			},
 		}, nil
+	default:
+		return &bridgev2.LoginStep{
+			Type:         bridgev2.LoginStepTypeUserInput,
+			StepID:       "fi.mau.groupme.login.enter_token",
+			Instructions: "Sign in at https://web.groupme.com/ in your normal browser. For Google sign-in, use this browser rather than the embedded login window. In Chrome, open DevTools, then Application, Local Storage, and https://web.groupme.com. Copy the access_token value and paste it below. You can also use a developer token from dev.groupme.com.",
+			UserInputParams: &bridgev2.LoginUserInputParams{
+				Fields: []bridgev2.LoginInputDataField{{
+					Type:        bridgev2.LoginInputFieldTypeToken,
+					ID:          "token",
+					Name:        "Access token",
+					Description: "GroupMe session token (access_token)",
+				}},
+			},
+		}, nil
 	}
-	return &bridgev2.LoginStep{
-		Type:         bridgev2.LoginStepTypeUserInput,
-		StepID:       "fi.mau.groupme.login.enter_token",
-		Instructions: "Sign in at https://web.groupme.com/ in your normal browser. For Google sign-in, use this browser rather than the embedded login window. In Chrome, open DevTools, then Application, Local Storage, and https://web.groupme.com. Copy the access_token value and paste it below. You can also use a developer token from dev.groupme.com.",
-		UserInputParams: &bridgev2.LoginUserInputParams{
-			Fields: []bridgev2.LoginInputDataField{{
-				Type:        bridgev2.LoginInputFieldTypeToken,
-				ID:          "token",
-				Name:        "Access token",
-				Description: "GroupMe session token (access_token)",
-			}},
-		},
-	}, nil
 }
 
 func (gl *GMLogin) SubmitUserInput(ctx context.Context, input map[string]string) (*bridgev2.LoginStep, error) {
@@ -189,34 +192,33 @@ func wrapTokenValidationError(err error) error {
 	return bridgev2.RespError(mautrix.MUnknown.WithMessage("could not validate your GroupMe session; try signing in again"))
 }
 
+// Statuses and meta codes as the GroupMe Android app maps them in
+// SignInViewModel.signInErrorReason (com.groupme.android 16.36.2).
 func wrapPasswordLoginError(err error) error {
 	var authErr *groupmeext.AuthError
 	if !errors.As(err, &authErr) {
 		return bridgev2.RespError(mautrix.MUnknown.WithMessage("GroupMe sign-in failed; try again later"))
 	}
-	switch {
-	case authErr.MetaCode == 40121:
-		return bridgev2.RespError(mautrix.MForbidden.WithMessage("GroupMe has banned this account"))
-	case authErr.StatusCode == http.StatusUnauthorized:
+	switch authErr.StatusCode {
+	case http.StatusUnauthorized:
+		if authErr.MetaCode == 40121 {
+			return bridgev2.RespError(mautrix.MForbidden.WithMessage("GroupMe has banned this account"))
+		}
 		return bridgev2.RespError(mautrix.MForbidden.WithMessage("incorrect GroupMe email, phone number or password"))
-	case authErr.StatusCode == http.StatusForbidden:
+	case http.StatusForbidden:
 		return bridgev2.RespError(mautrix.MForbidden.WithMessage("GroupMe has locked this account; sign in on web.groupme.com to unlock it"))
-	case authErr.StatusCode == http.StatusNotFound:
+	case http.StatusNotFound:
 		return bridgev2.RespError(mautrix.MForbidden.WithMessage("no GroupMe account matches that email or phone number"))
-	case authErr.StatusCode == http.StatusTooManyRequests:
+	case http.StatusNotAcceptable:
+		return bridgev2.RespError(mautrix.MForbidden.WithMessage("GroupMe needs to verify your age; sign in on web.groupme.com first"))
+	case http.StatusConflict:
+		return bridgev2.RespError(mautrix.MForbidden.WithMessage("this GroupMe account is scheduled for deletion; sign in on web.groupme.com to keep it"))
+	case http.StatusGone:
+		return bridgev2.RespError(mautrix.MForbidden.WithMessage("GroupMe needs you to verify your phone number; sign in on web.groupme.com first"))
+	case http.StatusTooManyRequests:
 		return bridgev2.RespError(mautrix.MLimitExceeded.WithMessage("GroupMe is rate limiting sign-ins, try again later").WithStatus(http.StatusBadRequest))
-	case authErr.StatusCode == http.StatusNotAcceptable, authErr.StatusCode == http.StatusConflict, authErr.StatusCode == http.StatusGone:
-		return bridgev2.RespError(mautrix.MForbidden.WithMessage("GroupMe needs you to finish signing in on web.groupme.com first"))
 	}
 	return bridgev2.RespError(mautrix.MUnknown.WithMessage("GroupMe sign-in failed; try again later"))
-}
-
-func wrapVerificationError(err error) error {
-	var authErr *groupmeext.AuthError
-	if errors.As(err, &authErr) && authErr.StatusCode >= 400 && authErr.StatusCode < 500 && authErr.StatusCode != http.StatusTooManyRequests {
-		return bridgev2.RespError(mautrix.MForbidden.WithMessage("GroupMe rejected that code"))
-	}
-	return wrapPasswordLoginError(err)
 }
 
 func (gl *GMLogin) submitPassword(ctx context.Context, username, password string) (*bridgev2.LoginStep, error) {
@@ -257,14 +259,23 @@ func (gl *GMLogin) submitVerificationPIN(ctx context.Context, pin string) (*brid
 		return nil, bridgev2.RespError(mautrix.MInvalidParam.WithMessage("verification code is required"))
 	}
 	err := groupmeext.ConfirmVerification(ctx, gl.verificationCode, pin)
-	var authErr *groupmeext.AuthError
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
-	} else if errors.As(err, &authErr) && authErr.MetaCode == groupmeext.VerificationIncorrectPIN {
-		return gl.verifyStep("That code was incorrect. Enter the code GroupMe sent you by SMS."), nil
 	} else if err != nil {
 		zerolog.Ctx(ctx).Err(err).Msg("GroupMe verification failed")
-		return nil, wrapVerificationError(err)
+		var authErr *groupmeext.AuthError
+		if errors.As(err, &authErr) {
+			// Meta codes from the Android app's multi_factor_auth.ConfirmPinRequest.
+			switch authErr.MetaCode {
+			case 40002:
+				return gl.verifyStep("That code was incorrect. Enter the code GroupMe sent you by SMS."), nil
+			case 40003:
+				return nil, bridgev2.RespError(mautrix.MLimitExceeded.WithMessage("too many incorrect codes; start the GroupMe login again later").WithStatus(http.StatusBadRequest))
+			case 40602:
+				return nil, bridgev2.RespError(mautrix.MForbidden.WithMessage("the GroupMe verification code expired; start the login again"))
+			}
+		}
+		return nil, wrapPasswordLoginError(err)
 	}
 	result, err := groupmeext.PasswordLogin(ctx, gl.username, gl.password, gl.deviceID, gl.verificationCode)
 	if ctx.Err() != nil {
