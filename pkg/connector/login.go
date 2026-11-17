@@ -35,8 +35,9 @@ import (
 )
 
 const (
-	LoginFlowIDWeb   = "web"
-	LoginFlowIDToken = "access-token"
+	LoginFlowIDPassword = "password"
+	LoginFlowIDWeb      = "web"
+	LoginFlowIDToken    = "access-token"
 )
 
 func (gc *GMConnector) GetLoginFlows() []bridgev2.LoginFlow {
@@ -45,6 +46,10 @@ func (gc *GMConnector) GetLoginFlows() []bridgev2.LoginFlow {
 		Description: "Sign in to GroupMe in your browser",
 		ID:          LoginFlowIDWeb,
 	}, {
+		Name:        "GroupMe password",
+		Description: "Sign in with your GroupMe email or phone number and password",
+		ID:          LoginFlowIDPassword,
+	}, {
 		Name:        "GroupMe access token",
 		Description: "Use a session from your browser, including Google sign-in",
 		ID:          LoginFlowIDToken,
@@ -52,7 +57,9 @@ func (gc *GMConnector) GetLoginFlows() []bridgev2.LoginFlow {
 }
 
 func (gc *GMConnector) CreateLogin(ctx context.Context, user *bridgev2.User, flowID string) (bridgev2.LoginProcess, error) {
-	if flowID != LoginFlowIDToken && flowID != LoginFlowIDWeb {
+	switch flowID {
+	case LoginFlowIDWeb, LoginFlowIDPassword, LoginFlowIDToken:
+	default:
 		return nil, bridgev2.ErrInvalidLoginFlowID
 	}
 	loginCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
@@ -67,6 +74,11 @@ type GMLogin struct {
 	cancel   context.CancelFunc
 	mu       sync.Mutex
 	complete bool
+
+	username         string
+	password         string
+	deviceID         string
+	verificationCode string
 }
 
 var _ bridgev2.LoginProcessUserInput = (*GMLogin)(nil)
@@ -78,7 +90,25 @@ func (gl *GMLogin) Start(ctx context.Context) (*bridgev2.LoginStep, error) {
 	if err := gl.ctx.Err(); err != nil {
 		return nil, err
 	}
-	if gl.FlowID == LoginFlowIDWeb {
+	switch gl.FlowID {
+	case LoginFlowIDPassword:
+		return &bridgev2.LoginStep{
+			Type:         bridgev2.LoginStepTypeUserInput,
+			StepID:       "fi.mau.groupme.login.credentials",
+			Instructions: "Sign in with your GroupMe account. If you sign in to GroupMe with Google, Microsoft or Apple, set a password in the GroupMe app first or use another login option.",
+			UserInputParams: &bridgev2.LoginUserInputParams{
+				Fields: []bridgev2.LoginInputDataField{{
+					Type: bridgev2.LoginInputFieldTypeUsername,
+					ID:   "username",
+					Name: "Email or phone number",
+				}, {
+					Type: bridgev2.LoginInputFieldTypePassword,
+					ID:   "password",
+					Name: "Password",
+				}},
+			},
+		}, nil
+	case LoginFlowIDWeb:
 		return &bridgev2.LoginStep{
 			Type:         bridgev2.LoginStepTypeCookies,
 			StepID:       "fi.mau.groupme.login.web",
@@ -97,28 +127,56 @@ func (gl *GMLogin) Start(ctx context.Context) (*bridgev2.LoginStep, error) {
 				}},
 			},
 		}, nil
+	default:
+		return &bridgev2.LoginStep{
+			Type:         bridgev2.LoginStepTypeUserInput,
+			StepID:       "fi.mau.groupme.login.enter_token",
+			Instructions: "Sign in at https://web.groupme.com/ in your normal browser. For Google sign-in, use this browser rather than the embedded login window. In Chrome, open DevTools, then Application, Local Storage, and https://web.groupme.com. Copy the access_token value and paste it below. You can also use a developer token from dev.groupme.com.",
+			UserInputParams: &bridgev2.LoginUserInputParams{
+				Fields: []bridgev2.LoginInputDataField{{
+					Type:        bridgev2.LoginInputFieldTypeToken,
+					ID:          "token",
+					Name:        "Access token",
+					Description: "GroupMe session token (access_token)",
+				}},
+			},
+		}, nil
 	}
-	return &bridgev2.LoginStep{
-		Type:         bridgev2.LoginStepTypeUserInput,
-		StepID:       "fi.mau.groupme.login.enter_token",
-		Instructions: "Sign in at https://web.groupme.com/ in your normal browser. For Google sign-in, use this browser rather than the embedded login window. In Chrome, open DevTools, then Application, Local Storage, and https://web.groupme.com. Copy the access_token value and paste it below. You can also use a developer token from dev.groupme.com.",
-		UserInputParams: &bridgev2.LoginUserInputParams{
-			Fields: []bridgev2.LoginInputDataField{{
-				Type:        bridgev2.LoginInputFieldTypeToken,
-				ID:          "token",
-				Name:        "Access token",
-				Description: "GroupMe session token (access_token)",
-			}},
-		},
-	}, nil
 }
 
 func (gl *GMLogin) SubmitUserInput(ctx context.Context, input map[string]string) (*bridgev2.LoginStep, error) {
-	return gl.submitToken(ctx, input["token"])
+	return gl.submit(ctx, func(ctx context.Context) (*bridgev2.LoginStep, error) {
+		switch {
+		case gl.FlowID != LoginFlowIDPassword:
+			return gl.finishLogin(ctx, input["token"])
+		case gl.verificationCode != "":
+			return gl.submitVerificationPIN(ctx, input["code"])
+		default:
+			return gl.submitPassword(ctx, input["username"], input["password"])
+		}
+	})
 }
 
 func (gl *GMLogin) SubmitCookies(ctx context.Context, cookies map[string]string) (*bridgev2.LoginStep, error) {
-	return gl.submitToken(ctx, cookies["token"])
+	return gl.submit(ctx, func(ctx context.Context) (*bridgev2.LoginStep, error) {
+		return gl.finishLogin(ctx, cookies["token"])
+	})
+}
+
+func (gl *GMLogin) submit(ctx context.Context, fn func(context.Context) (*bridgev2.LoginStep, error)) (*bridgev2.LoginStep, error) {
+	gl.mu.Lock()
+	defer gl.mu.Unlock()
+	if gl.complete {
+		return nil, bridgev2.RespError(mautrix.MBadState.WithMessage("login already completed").WithStatus(http.StatusBadRequest))
+	}
+	if err := gl.ctx.Err(); err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	stop := context.AfterFunc(gl.ctx, cancel)
+	defer stop()
+	return fn(ctx)
 }
 
 func wrapTokenValidationError(err error) error {
@@ -134,19 +192,129 @@ func wrapTokenValidationError(err error) error {
 	return bridgev2.RespError(mautrix.MUnknown.WithMessage("could not validate your GroupMe session; try signing in again"))
 }
 
-func (gl *GMLogin) submitToken(ctx context.Context, token string) (*bridgev2.LoginStep, error) {
-	gl.mu.Lock()
-	defer gl.mu.Unlock()
-	if gl.complete {
-		return nil, bridgev2.RespError(mautrix.MBadState.WithMessage("login already completed").WithStatus(http.StatusBadRequest))
+// Statuses and meta codes as the GroupMe Android app maps them in
+// SignInViewModel.signInErrorReason (com.groupme.android 16.36.2).
+func wrapPasswordLoginError(err error) error {
+	var authErr *groupmeext.AuthError
+	if !errors.As(err, &authErr) {
+		return bridgev2.RespError(mautrix.MUnknown.WithMessage("GroupMe sign-in failed; try again later"))
 	}
-	if err := gl.ctx.Err(); err != nil {
-		return nil, err
+	switch authErr.StatusCode {
+	case http.StatusUnauthorized:
+		if authErr.MetaCode == 40121 {
+			return bridgev2.RespError(mautrix.MForbidden.WithMessage("GroupMe has banned this account"))
+		}
+		return bridgev2.RespError(mautrix.MForbidden.WithMessage("incorrect GroupMe email, phone number or password"))
+	case http.StatusForbidden:
+		return bridgev2.RespError(mautrix.MForbidden.WithMessage("GroupMe has locked this account; sign in on web.groupme.com to unlock it"))
+	case http.StatusNotFound:
+		return bridgev2.RespError(mautrix.MForbidden.WithMessage("no GroupMe account matches that email or phone number"))
+	case http.StatusNotAcceptable:
+		return bridgev2.RespError(mautrix.MForbidden.WithMessage("GroupMe needs to verify your age; sign in on web.groupme.com first"))
+	case http.StatusConflict:
+		return bridgev2.RespError(mautrix.MForbidden.WithMessage("this GroupMe account is scheduled for deletion; sign in on web.groupme.com to keep it"))
+	case http.StatusGone:
+		return bridgev2.RespError(mautrix.MForbidden.WithMessage("GroupMe needs you to verify your phone number; sign in on web.groupme.com first"))
+	case http.StatusTooManyRequests:
+		return bridgev2.RespError(mautrix.MLimitExceeded.WithMessage("GroupMe is rate limiting sign-ins, try again later").WithStatus(http.StatusBadRequest))
 	}
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	stop := context.AfterFunc(gl.ctx, cancel)
-	defer stop()
+	return bridgev2.RespError(mautrix.MUnknown.WithMessage("GroupMe sign-in failed; try again later"))
+}
+
+// Meta codes from the Android app's multi_factor_auth.ConfirmPinRequest;
+// 40002 (incorrect PIN) is handled in submitVerificationPIN.
+func wrapVerificationError(err error) error {
+	var authErr *groupmeext.AuthError
+	if !errors.As(err, &authErr) {
+		return bridgev2.RespError(mautrix.MUnknown.WithMessage("GroupMe sign-in failed; try again later"))
+	}
+	switch {
+	case authErr.MetaCode == 40003:
+		return bridgev2.RespError(mautrix.MLimitExceeded.WithMessage("too many incorrect codes; start the GroupMe login again later").WithStatus(http.StatusBadRequest))
+	case authErr.MetaCode == 40602:
+		return bridgev2.RespError(mautrix.MForbidden.WithMessage("the GroupMe verification code expired; start the login again"))
+	case authErr.StatusCode == http.StatusTooManyRequests:
+		return bridgev2.RespError(mautrix.MLimitExceeded.WithMessage("GroupMe is rate limiting sign-ins, try again later").WithStatus(http.StatusBadRequest))
+	}
+	return bridgev2.RespError(mautrix.MUnknown.WithMessage("GroupMe could not send or check the verification code; start the login again"))
+}
+
+func (gl *GMLogin) submitPassword(ctx context.Context, username, password string) (*bridgev2.LoginStep, error) {
+	username = strings.TrimSpace(username)
+	if username == "" || password == "" {
+		return nil, bridgev2.RespError(mautrix.MInvalidParam.WithMessage("email or phone number and password are required"))
+	}
+	gl.deviceID = groupmeext.AndroidDeviceID(string(gl.User.MXID), username)
+	result, err := groupmeext.PasswordLogin(ctx, username, password, gl.deviceID, "")
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	} else if err != nil {
+		zerolog.Ctx(ctx).Err(err).Msg("GroupMe password sign-in failed")
+		return nil, wrapPasswordLoginError(err)
+	} else if result.AccessToken != "" {
+		return gl.finishLogin(ctx, result.AccessToken)
+	} else if result.Verification == nil || result.Verification.Code == "" {
+		return nil, bridgev2.RespError(mautrix.MUnknown.WithMessage("GroupMe did not return an access token"))
+	}
+	hint, err := groupmeext.InitiateVerification(ctx, result.Verification.Code)
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	} else if err != nil {
+		zerolog.Ctx(ctx).Err(err).Msg("Failed to send GroupMe verification code")
+		return nil, wrapVerificationError(err)
+	}
+	gl.username, gl.password, gl.verificationCode = username, password, result.Verification.Code
+	instructions := "Enter the code GroupMe sent you by SMS."
+	if hint != "" {
+		instructions = fmt.Sprintf("Enter the code GroupMe sent by SMS to the number ending in %s.", hint)
+	}
+	return gl.verifyStep(instructions), nil
+}
+
+func (gl *GMLogin) submitVerificationPIN(ctx context.Context, pin string) (*bridgev2.LoginStep, error) {
+	pin = strings.TrimSpace(pin)
+	if pin == "" {
+		return nil, bridgev2.RespError(mautrix.MInvalidParam.WithMessage("verification code is required"))
+	}
+	err := groupmeext.ConfirmVerification(ctx, gl.verificationCode, pin)
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	} else if err != nil {
+		zerolog.Ctx(ctx).Err(err).Msg("GroupMe verification failed")
+		var authErr *groupmeext.AuthError
+		if errors.As(err, &authErr) && authErr.MetaCode == 40002 {
+			return gl.verifyStep("That code was incorrect. Enter the code GroupMe sent you by SMS."), nil
+		}
+		return nil, wrapVerificationError(err)
+	}
+	result, err := groupmeext.PasswordLogin(ctx, gl.username, gl.password, gl.deviceID, gl.verificationCode)
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	} else if err != nil {
+		zerolog.Ctx(ctx).Err(err).Msg("GroupMe password sign-in after verification failed")
+		return nil, wrapPasswordLoginError(err)
+	} else if result.AccessToken == "" {
+		return nil, bridgev2.RespError(mautrix.MUnknown.WithMessage("GroupMe did not return an access token"))
+	}
+	return gl.finishLogin(ctx, result.AccessToken)
+}
+
+func (gl *GMLogin) verifyStep(instructions string) *bridgev2.LoginStep {
+	return &bridgev2.LoginStep{
+		Type:         bridgev2.LoginStepTypeUserInput,
+		StepID:       "fi.mau.groupme.login.verify",
+		Instructions: instructions,
+		UserInputParams: &bridgev2.LoginUserInputParams{
+			Fields: []bridgev2.LoginInputDataField{{
+				Type: bridgev2.LoginInputFieldType2FACode,
+				ID:   "code",
+				Name: "Verification code",
+			}},
+		},
+	}
+}
+
+func (gl *GMLogin) finishLogin(ctx context.Context, token string) (*bridgev2.LoginStep, error) {
 	token = strings.TrimSpace(token)
 	if token == "" {
 		return nil, bridgev2.RespError(mautrix.MInvalidParam.WithMessage("access token is required"))
