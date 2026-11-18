@@ -95,7 +95,7 @@ func (gl *GMLogin) Start(ctx context.Context) (*bridgev2.LoginStep, error) {
 		return &bridgev2.LoginStep{
 			Type:         bridgev2.LoginStepTypeUserInput,
 			StepID:       "fi.mau.groupme.login.credentials",
-			Instructions: "Sign in with your GroupMe account. If you sign in to GroupMe with Google, Microsoft or Apple, set a password in the GroupMe app first or use another login option.",
+			Instructions: "Sign in with your GroupMe account. If you sign in to GroupMe with Google, Microsoft or Apple, first set a password at https://web.groupme.com/forgot_password and use that here.",
 			UserInputParams: &bridgev2.LoginUserInputParams{
 				Fields: []bridgev2.LoginInputDataField{{
 					Type: bridgev2.LoginInputFieldTypeUsername,
@@ -204,7 +204,7 @@ func wrapPasswordLoginError(err error) error {
 		if authErr.MetaCode == 40121 {
 			return bridgev2.RespError(mautrix.MForbidden.WithMessage("GroupMe has banned this account"))
 		}
-		return bridgev2.RespError(mautrix.MForbidden.WithMessage("incorrect GroupMe email, phone number or password"))
+		return bridgev2.RespError(mautrix.MForbidden.WithMessage("incorrect GroupMe email, phone number or password. If you sign in to GroupMe with Google, Microsoft or Apple, set a password at https://web.groupme.com/forgot_password and use that instead"))
 	case http.StatusForbidden:
 		return bridgev2.RespError(mautrix.MForbidden.WithMessage("GroupMe has locked this account; sign in on web.groupme.com to unlock it"))
 	case http.StatusNotFound:
