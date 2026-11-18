@@ -40,7 +40,7 @@ type MediaStream struct {
 }
 
 func streamMediaURL(ctx context.Context, mediaURL, token string) (*MediaStream, error) {
-	resp, err := openMediaURL(ctx, mediaURL, token)
+	resp, err := openMediaURL(ctx, mediaURL, token, true)
 	if err != nil {
 		return nil, err
 	}
@@ -57,20 +57,26 @@ func streamMediaURL(ctx context.Context, mediaURL, token string) (*MediaStream, 
 	return stream, nil
 }
 
-func openMediaURL(ctx context.Context, mediaURL, token string) (*http.Response, error) {
+func openMediaURL(ctx context.Context, mediaURL, token string, stream bool) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, NormalizeMediaURL(mediaURL), nil)
 	if err != nil {
 		return nil, fmt.Errorf("invalid GroupMe media URL")
 	}
 	if token != "" {
 		req.AddCookie(&http.Cookie{Name: "token", Value: token})
+		if stream {
+			return requestMedia(req, mediaStreamHTTPClient, validateMediaURL)
+		}
 		return mediaRequest(req)
+	}
+	if stream {
+		return requestMedia(req, imageStreamHTTPClient, validateImageURL)
 	}
 	return requestMedia(req, imageHTTPClient, validateImageURL)
 }
 
 func downloadMediaURL(ctx context.Context, mediaURL, token string) ([]byte, string, error) {
-	resp, err := openMediaURL(ctx, mediaURL, token)
+	resp, err := openMediaURL(ctx, mediaURL, token, false)
 	if err != nil {
 		return nil, "", err
 	}

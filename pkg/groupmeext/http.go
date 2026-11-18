@@ -16,6 +16,8 @@ const MaxMediaSize = 50_000_000
 
 var mediaHTTPClient = newMediaHTTPClient(validateMediaURL)
 var imageHTTPClient = newMediaHTTPClient(validateImageURL)
+var mediaStreamHTTPClient = newMediaStreamHTTPClient(validateMediaURL)
+var imageStreamHTTPClient = newMediaStreamHTTPClient(validateImageURL)
 
 func newMediaHTTPClient(validate func(*url.URL) error) *http.Client {
 	return &http.Client{
@@ -34,6 +36,15 @@ func newMediaHTTPClient(validate func(*url.URL) error) *http.Client {
 			return nil
 		},
 	}
+}
+
+func newMediaStreamHTTPClient(validate func(*url.URL) error) *http.Client {
+	client := newMediaHTTPClient(validate)
+	client.Timeout = 0
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.ResponseHeaderTimeout = time.Minute
+	client.Transport = transport
+	return client
 }
 
 var giphyImageHost = regexp.MustCompile(`^(media[0-9]*|i)\.giphy\.com$`)
