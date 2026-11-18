@@ -1,6 +1,7 @@
 package groupmeext
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -24,20 +25,58 @@ func DownloadVideo(ctx context.Context, videoURL, token string) ([]byte, string,
 	return downloadMediaURL(ctx, videoURL, token)
 }
 
-func downloadMediaURL(ctx context.Context, mediaURL, token string) ([]byte, string, error) {
+func OpenImage(ctx context.Context, imageURL string) (*MediaStream, error) {
+	return streamMediaURL(ctx, imageURL, "")
+}
+
+func OpenVideo(ctx context.Context, videoURL, token string) (*MediaStream, error) {
+	return streamMediaURL(ctx, videoURL, token)
+}
+
+type MediaStream struct {
+	io.ReadCloser
+	MimeType string
+	Size     int64
+}
+
+func streamMediaURL(ctx context.Context, mediaURL, token string) (*MediaStream, error) {
+	resp, err := openMediaURL(ctx, mediaURL, token, true)
+	if err != nil {
+		return nil, err
+	}
+	stream := &MediaStream{ReadCloser: resp.Body, MimeType: resp.Header.Get("Content-Type"), Size: max(resp.ContentLength, 0)}
+	if stream.MimeType == "" {
+		buf := bufio.NewReader(resp.Body)
+		head, _ := buf.Peek(512)
+		stream.MimeType = http.DetectContentType(head)
+		stream.ReadCloser = struct {
+			io.Reader
+			io.Closer
+		}{buf, resp.Body}
+	}
+	return stream, nil
+}
+
+func openMediaURL(ctx context.Context, mediaURL, token string, stream bool) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, NormalizeMediaURL(mediaURL), nil)
 	if err != nil {
-		return nil, "", fmt.Errorf("invalid GroupMe media URL")
+		return nil, fmt.Errorf("invalid GroupMe media URL")
 	}
 	if token != "" {
 		req.AddCookie(&http.Cookie{Name: "token", Value: token})
+		if stream {
+			return requestMedia(req, mediaStreamHTTPClient, validateMediaURL)
+		}
+		return mediaRequest(req)
 	}
-	var resp *http.Response
-	if token == "" {
-		resp, err = requestMedia(req, imageHTTPClient, validateImageURL)
-	} else {
-		resp, err = mediaRequest(req)
+	if stream {
+		return requestMedia(req, imageStreamHTTPClient, validateImageURL)
 	}
+	return requestMedia(req, imageHTTPClient, validateImageURL)
+}
+
+func downloadMediaURL(ctx context.Context, mediaURL, token string) ([]byte, string, error) {
+	resp, err := openMediaURL(ctx, mediaURL, token, false)
 	if err != nil {
 		return nil, "", err
 	}
