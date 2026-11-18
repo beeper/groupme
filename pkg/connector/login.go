@@ -75,20 +75,30 @@ type GMLogin struct {
 	mu       sync.Mutex
 	complete bool
 
+	clientHTTP http.RoundTripper
+
 	username         string
 	password         string
 	deviceID         string
 	verificationCode string
 }
 
+var _ bridgev2.LoginProcessWithParams = (*GMLogin)(nil)
 var _ bridgev2.LoginProcessUserInput = (*GMLogin)(nil)
 var _ bridgev2.LoginProcessCookies = (*GMLogin)(nil)
 
 func (gl *GMLogin) Cancel() { gl.cancel() }
 
 func (gl *GMLogin) Start(ctx context.Context) (*bridgev2.LoginStep, error) {
+	return gl.StartWithParams(ctx, bridgev2.LoginStartParams{})
+}
+
+func (gl *GMLogin) StartWithParams(ctx context.Context, params bridgev2.LoginStartParams) (*bridgev2.LoginStep, error) {
 	if err := gl.ctx.Err(); err != nil {
 		return nil, err
+	}
+	if params.HTTP != nil {
+		gl.clientHTTP = params.HTTP
 	}
 	switch gl.FlowID {
 	case LoginFlowIDPassword:
@@ -245,7 +255,7 @@ func (gl *GMLogin) submitPassword(ctx context.Context, username, password string
 		return nil, bridgev2.RespError(mautrix.MInvalidParam.WithMessage("email or phone number and password are required"))
 	}
 	gl.deviceID = groupmeext.AndroidDeviceID(string(gl.User.MXID), username)
-	result, err := groupmeext.PasswordLogin(ctx, username, password, gl.deviceID, "")
+	result, err := groupmeext.PasswordLogin(ctx, gl.clientHTTP, username, password, gl.deviceID, "")
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
 	} else if err != nil {
@@ -256,7 +266,7 @@ func (gl *GMLogin) submitPassword(ctx context.Context, username, password string
 	} else if result.Verification == nil || result.Verification.Code == "" {
 		return nil, bridgev2.RespError(mautrix.MUnknown.WithMessage("GroupMe did not return an access token"))
 	}
-	hint, err := groupmeext.InitiateVerification(ctx, result.Verification.Code)
+	hint, err := groupmeext.InitiateVerification(ctx, gl.clientHTTP, result.Verification.Code)
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
 	} else if err != nil {
@@ -276,7 +286,7 @@ func (gl *GMLogin) submitVerificationPIN(ctx context.Context, pin string) (*brid
 	if pin == "" {
 		return nil, bridgev2.RespError(mautrix.MInvalidParam.WithMessage("verification code is required"))
 	}
-	err := groupmeext.ConfirmVerification(ctx, gl.verificationCode, pin)
+	err := groupmeext.ConfirmVerification(ctx, gl.clientHTTP, gl.verificationCode, pin)
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
 	} else if err != nil {
@@ -287,7 +297,7 @@ func (gl *GMLogin) submitVerificationPIN(ctx context.Context, pin string) (*brid
 		}
 		return nil, wrapVerificationError(err)
 	}
-	result, err := groupmeext.PasswordLogin(ctx, gl.username, gl.password, gl.deviceID, gl.verificationCode)
+	result, err := groupmeext.PasswordLogin(ctx, gl.clientHTTP, gl.username, gl.password, gl.deviceID, gl.verificationCode)
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
 	} else if err != nil {
