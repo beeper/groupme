@@ -64,7 +64,7 @@ type authEnvelope struct {
 	} `json:"meta"`
 }
 
-func authRequest(ctx context.Context, name, endpoint string, header http.Header, body, result any) error {
+func authRequest(ctx context.Context, transport http.RoundTripper, name, endpoint string, header http.Header, body, result any) error {
 	data, err := json.Marshal(body)
 	if err != nil {
 		return err
@@ -78,7 +78,11 @@ func authRequest(ctx context.Context, name, endpoint string, header http.Header,
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", androidUserAgent)
-	resp, err := activityHTTPClient.Do(req)
+	client := activityHTTPClient
+	if transport != nil {
+		client = &http.Client{Transport: transport}
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		var uerr *url.Error
 		if errors.As(err, &uerr) {
@@ -105,7 +109,7 @@ func authRequest(ctx context.Context, name, endpoint string, header http.Header,
 // with Verification set and no AccessToken means the account has two-step
 // verification on: confirm a PIN for Verification.Code, then call this again
 // with that code.
-func PasswordLogin(ctx context.Context, username, password, deviceID, verificationCode string) (*PasswordLoginResult, error) {
+func PasswordLogin(ctx context.Context, transport http.RoundTripper, username, password, deviceID, verificationCode string) (*PasswordLoginResult, error) {
 	body := map[string]any{
 		"username":    username,
 		"password":    password,
@@ -119,24 +123,24 @@ func PasswordLogin(ctx context.Context, username, password, deviceID, verificati
 	}
 	header := http.Header{"X-Access-Token": {androidLoginSignature(deviceID, username)}}
 	var result PasswordLoginResult
-	if err := authRequest(ctx, "GroupMe sign-in", "https://v2.groupme.com/access_tokens", header, body, &result); err != nil {
+	if err := authRequest(ctx, transport, "GroupMe sign-in", "https://v2.groupme.com/access_tokens", header, body, &result); err != nil {
 		return nil, err
 	}
 	return &result, nil
 }
 
-func InitiateVerification(ctx context.Context, code string) (string, error) {
+func InitiateVerification(ctx context.Context, transport http.RoundTripper, code string) (string, error) {
 	var result struct {
 		Hint string `json:"hint"`
 	}
 	body := map[string]any{"verification": map[string]string{"method": "sms"}}
-	err := authRequest(ctx, "GroupMe verification", "https://api.groupme.com/v3/verifications/"+url.PathEscape(code)+"/initiate", nil, body, &result)
+	err := authRequest(ctx, transport, "GroupMe verification", "https://api.groupme.com/v3/verifications/"+url.PathEscape(code)+"/initiate", nil, body, &result)
 	return result.Hint, err
 }
 
 // ConfirmVerification only reports success; the app then repeats the sign-in
 // with the verification code.
-func ConfirmVerification(ctx context.Context, code, pin string) error {
+func ConfirmVerification(ctx context.Context, transport http.RoundTripper, code, pin string) error {
 	body := map[string]any{"verification": map[string]string{"pin": pin}}
-	return authRequest(ctx, "GroupMe verification", "https://api.groupme.com/v3/verifications/"+url.PathEscape(code)+"/confirm", nil, body, nil)
+	return authRequest(ctx, transport, "GroupMe verification", "https://api.groupme.com/v3/verifications/"+url.PathEscape(code)+"/confirm", nil, body, nil)
 }
