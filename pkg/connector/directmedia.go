@@ -90,13 +90,14 @@ func (gc *GMConnector) Download(ctx context.Context, mediaID networkid.MediaID, 
 		}
 		token = meta.Token
 	}
+	var stream *groupmeext.MediaStream
 	var data []byte
 	var mime string
 	switch fields[0] {
 	case "1i":
-		data, mime, err = groupmeext.DownloadImage(ctx, fields[1])
+		stream, err = groupmeext.OpenImage(ctx, fields[1])
 	case "1v":
-		data, mime, err = groupmeext.DownloadVideo(ctx, fields[2], token)
+		stream, err = groupmeext.OpenVideo(ctx, fields[2], token)
 	case "1f":
 		data, _, mime, err = groupmeext.DownloadFile(ctx, groupme.ID(fields[2]), fields[3], token)
 	}
@@ -108,6 +109,8 @@ func (gc *GMConnector) Download(ctx context.Context, mediaID networkid.MediaID, 
 			return nil, mautrix.MNotFound.WithMessage("GroupMe media is no longer available: %v", err)
 		}
 		return nil, mautrix.MUnknown.WithMessage("Failed to download GroupMe media: %v", err)
+	} else if stream != nil {
+		return &mediaproxy.GetMediaResponseData{Reader: stream, ContentType: stream.MimeType, ContentLength: stream.Size}, nil
 	}
 	response := mediaproxy.GetMediaResponseRawData(data)
 	if mime != "" {
