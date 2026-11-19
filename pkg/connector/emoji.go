@@ -32,12 +32,7 @@ func groupMeEmojiReplacer(attachments []*groupme.Attachment) func(string) string
 			pair := emoji.Charmap[index]
 			name := "GroupMe emoji"
 			if len(pair) == 2 {
-				names := groupMeEmojiNames[pair[0]]
-				if pair[1] >= 0 && pair[1] < len(names) {
-					name = names[pair[1]]
-				} else {
-					name = fmt.Sprintf("GroupMe emoji %d:%d", pair[0], pair[1])
-				}
+				name = groupMeEmojiName(pair[0], pair[1])
 			}
 			out.WriteString("[" + name + "]")
 			text = after
@@ -46,4 +41,11 @@ func groupMeEmojiReplacer(attachments []*groupme.Attachment) func(string) string
 		out.WriteString(text)
 		return out.String()
 	}
+}
+
+func groupMeEmojiName(pack, index int) string {
+	if names := groupMeEmojiNames[pack]; index >= 0 && index < len(names) {
+		return names[index]
+	}
+	return fmt.Sprintf("GroupMe emoji %d:%d", pack, index)
 }

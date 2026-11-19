@@ -94,6 +94,7 @@ type MessageMetadata struct {
 	PollAnswerIDs  map[string]string          `json:"poll_answer_ids,omitempty"`
 	NativeContent  *groupmeext.MessageContent `json:"native_content,omitempty"`
 	EditedAt       groupme.Timestamp          `json:"edited_at,omitempty"`
+	Sticker        bool                       `json:"sticker,omitempty"`
 }
 
 func (gc *GMConnector) GetDBMetaTypes() database.MetaTypes {

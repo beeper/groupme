@@ -157,3 +157,40 @@ func TestMatrixEditRetainsReplyAndDropsStaleMentionOffsets(t *testing.T) {
 		t.Fatal("native revision not saved in mapping metadata")
 	}
 }
+
+func TestEditNeverProducesStickerEdit(t *testing.T) {
+	gc := &GMClient{Main: &GMConnector{}}
+	portal := &bridgev2.Portal{Portal: &database.Portal{PortalKey: networkid.PortalKey{ID: "group:88", Receiver: "9"}}}
+	emoji := []*groupme.Attachment{{Type: groupme.Emoji, Placeholder: "\ufffd", Charmap: [][]int{{1, 0}}}}
+	for _, tc := range []struct {
+		name    string
+		sticker bool
+		text    string
+		atts    []*groupme.Attachment
+	}{
+		{"text to lone emoji", false, "\ufffd", emoji},
+		{"lone emoji sticker to text", true, "hello", nil},
+		{"lone emoji sticker to lone emoji", true, "\ufffd", emoji},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			old := &database.Message{ID: "123", PartID: "", Metadata: &MessageMetadata{Sticker: tc.sticker}}
+			u := &groupmeext.MessageUpdate{RevisionID: "125", MessageID: "123", SenderID: "20", UpdatedAt: 1791916613, Message: groupmeext.MessageContent{Text: tc.text, Attachments: tc.atts}}
+			result, err := gc.convertEdit(context.Background(), portal, nil, []*database.Message{old}, u)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, part := range result.ModifiedParts {
+				if part.Type != event.EventMessage {
+					t.Fatalf("edit emitted %s", part.Type)
+				}
+			}
+			if tc.sticker {
+				if len(result.ModifiedParts) != 0 || len(result.DeletedParts) != 1 || result.AddedParts == nil || len(result.AddedParts.Parts) != 1 || result.AddedParts.Parts[0].Type != event.EventMessage {
+					t.Fatalf("sticker should be replaced by a new message: %+v", result)
+				}
+			} else if len(result.ModifiedParts) != 1 || len(result.DeletedParts) != 0 {
+				t.Fatalf("text message should be edited in place: %+v", result)
+			}
+		})
+	}
+}

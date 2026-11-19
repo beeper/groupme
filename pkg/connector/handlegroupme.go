@@ -17,9 +17,12 @@
 package connector
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"image"
+	_ "image/gif"
 	"net/http"
 	"slices"
 	"strconv"
@@ -149,6 +152,13 @@ func (gc *GMClient) convertMessage(ctx context.Context, portal *bridgev2.Portal,
 // convertGroupMeMessage builds the Matrix message parts for an incoming
 // GroupMe message, including any attachments or poll event.
 func (gc *GMClient) convertGroupMeMessage(ctx context.Context, portal *bridgev2.Portal, intent bridgev2.MatrixAPI, msg *groupme.Message) (*bridgev2.ConvertedMessage, error) {
+	return gc.convertGroupMeMessageParts(ctx, portal, intent, msg, true)
+}
+
+// convertGroupMeMessageParts is convertGroupMeMessage with control over
+// sticker output. Matrix cannot edit stickers or turn a message into a
+// sticker, so edits are converted with allowStickers=false.
+func (gc *GMClient) convertGroupMeMessageParts(ctx context.Context, portal *bridgev2.Portal, intent bridgev2.MatrixAPI, msg *groupme.Message, allowStickers bool) (*bridgev2.ConvertedMessage, error) {
 	cm := &bridgev2.ConvertedMessage{}
 	defer func() {
 		for _, part := range cm.Parts {
@@ -158,6 +168,7 @@ func (gc *GMClient) convertGroupMeMessage(ctx context.Context, portal *bridgev2.
 				part.DBMetadata = meta
 			}
 			meta.NativeContent = nativeContent(msg)
+			meta.Sticker = part.Type == event.EventSticker
 			// Clients render bridge bot notices as system lines rather than as chat messages.
 			if isSystemMessage(msg) && groupCallStarter(msg) == "" && part.Content.MsgType == event.MsgText {
 				part.Content.MsgType = event.MsgNotice
@@ -182,6 +193,17 @@ func (gc *GMClient) convertGroupMeMessage(ctx context.Context, portal *bridgev2.
 		log.Warn().Str("event_type", msg.Event.Type).Msg("Failed to convert GroupMe poll event, falling back to bare message text")
 	}
 
+	if allowStickers {
+		if part, err := gc.emojiStickerPart(ctx, portal, intent, msg); err != nil {
+			return nil, err
+		} else if part != nil {
+			cm.Parts = append(cm.Parts, part)
+			return cm, nil
+		}
+	}
+
+	stickerURL := strings.TrimSpace(msg.Text)
+	isSticker := groupmeext.IsStickerURL(stickerURL)
 	for i, att := range msg.Attachments {
 		if att == nil {
 			continue
@@ -191,7 +213,7 @@ func (gc *GMClient) convertGroupMeMessage(ctx context.Context, portal *bridgev2.
 		case "linked_image":
 			att = &groupme.Attachment{Type: groupme.Image, URL: att.URL}
 		case "postprocessing":
-			if stickerURL := strings.TrimSpace(msg.Text); groupmeext.IsGiphyImageURL(stickerURL) {
+			if isSticker || groupmeext.IsGiphyImageURL(stickerURL) {
 				att = &groupme.Attachment{Type: groupme.Image, URL: stickerURL}
 			}
 		}
@@ -242,6 +264,11 @@ func (gc *GMClient) convertGroupMeMessage(ctx context.Context, portal *bridgev2.
 				if urlInfo := imageInfoFromURL(att.URL); urlInfo != nil {
 					info.Width, info.Height = urlInfo.Width, urlInfo.Height
 				}
+				if isSticker && info.Width == 0 {
+					if config, _, err := image.DecodeConfig(bytes.NewReader(data)); err == nil {
+						info.Width, info.Height = config.Width, config.Height
+					}
+				}
 			}
 			content = &event.MessageEventContent{
 				MsgType: event.MessageType("m." + att.Type),
@@ -284,10 +311,14 @@ func (gc *GMClient) convertGroupMeMessage(ctx context.Context, portal *bridgev2.
 		if att.Type == groupme.Audio {
 			addVoiceNoteInfo(content, att)
 		}
+		partType := event.EventMessage
+		if allowStickers && isSticker && att.Type == groupme.Image {
+			partType, content.MsgType, content.Body = event.EventSticker, "", "sticker"
+		}
 
 		cm.Parts = append(cm.Parts, &bridgev2.ConvertedMessagePart{
 			ID:      partID,
-			Type:    event.EventMessage,
+			Type:    partType,
 			Content: content,
 		})
 	}
