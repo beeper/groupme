@@ -4,11 +4,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"regexp"
 	"strings"
 	"time"
+
+	"golang.org/x/net/publicsuffix"
 )
 
 // GroupMe documents a 50 MB limit for document sharing.
@@ -75,6 +78,7 @@ func validateMediaURL(u *url.URL) error {
 		return &MediaURLError{
 			Scheme:      mediaURLSchemeClass(u.Scheme),
 			Host:        mediaURLHostClass(u.Hostname()),
+			Domain:      mediaURLOutsideDomain(u.Hostname()),
 			Credentials: u.User != nil,
 			Port:        u.Port() != "",
 		}
@@ -85,11 +89,15 @@ func validateMediaURL(u *url.URL) error {
 type MediaURLError struct {
 	Scheme      string
 	Host        string
+	Domain      string
 	Credentials bool
 	Port        bool
 }
 
 func (e *MediaURLError) Error() string {
+	if e.Domain != "" {
+		return fmt.Sprintf("invalid GroupMe media URL (scheme %s, host %s, domain %s, credentials %t, port %t)", e.Scheme, e.Host, e.Domain, e.Credentials, e.Port)
+	}
 	return fmt.Sprintf("invalid GroupMe media URL (scheme %s, host %s, credentials %t, port %t)", e.Scheme, e.Host, e.Credentials, e.Port)
 }
 
@@ -109,6 +117,8 @@ func mediaURLHostClass(host string) string {
 	switch {
 	case host == "":
 		return "empty"
+	case net.ParseIP(host) != nil:
+		return "ip"
 	case lower == "groupme.com":
 		return "groupme.com"
 	case strings.HasSuffix(host, ".groupme.com"):
@@ -122,6 +132,17 @@ func mediaURLHostClass(host string) string {
 	default:
 		return "other"
 	}
+}
+
+func mediaURLOutsideDomain(host string) string {
+	if mediaURLHostClass(host) != "other" {
+		return ""
+	}
+	domain, err := publicsuffix.EffectiveTLDPlusOne(strings.TrimSuffix(strings.ToLower(host), "."))
+	if err != nil {
+		return "unknown"
+	}
+	return domain
 }
 
 func NormalizeMediaURL(rawURL string) string {
