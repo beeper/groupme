@@ -306,13 +306,15 @@ func (gl *GMLogin) credentialsStep(instructions string) *bridgev2.LoginStep {
 		Instructions: instructions,
 		UserInputParams: &bridgev2.LoginUserInputParams{
 			Fields: []bridgev2.LoginInputDataField{{
-				Type: bridgev2.LoginInputFieldTypeUsername,
-				ID:   "username",
-				Name: "Email or phone number",
+				Type:           bridgev2.LoginInputFieldTypeUsername,
+				ID:             "username",
+				Name:           "Email or phone number",
+				AutofillDomain: "groupme.com",
 			}, {
-				Type: bridgev2.LoginInputFieldTypePassword,
-				ID:   "password",
-				Name: "Password",
+				Type:           bridgev2.LoginInputFieldTypePassword,
+				ID:             "password",
+				Name:           "Password",
+				AutofillDomain: "groupme.com",
 			}},
 		},
 	}
