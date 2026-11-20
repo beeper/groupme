@@ -140,6 +140,9 @@ func mediaURLOutsideDomain(host string) string {
 	}
 	host = strings.TrimSuffix(strings.ToLower(host), ".")
 	if suffix, icann := publicsuffix.PublicSuffix(host); !icann {
+		if suffix == host {
+			return "unknown"
+		}
 		return suffix
 	}
 	domain, err := publicsuffix.EffectiveTLDPlusOne(host)
