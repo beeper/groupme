@@ -25,6 +25,7 @@ import (
 	"sync"
 
 	"github.com/rs/zerolog"
+	"go.mau.fi/util/l10n"
 	"maunium.net/go/mautrix"
 	"maunium.net/go/mautrix/bridgev2"
 	"maunium.net/go/mautrix/bridgev2/database"
@@ -42,16 +43,16 @@ const (
 
 func (gc *GMConnector) GetLoginFlows() []bridgev2.LoginFlow {
 	return []bridgev2.LoginFlow{{
-		Name:        "GroupMe",
-		Description: "Sign in to GroupMe in your browser",
+		Name:        msgFlowWebName.Message(),
+		Description: msgFlowWebDescription.Message(),
 		ID:          LoginFlowIDWeb,
 	}, {
-		Name:        "GroupMe password",
-		Description: "Sign in with your GroupMe email or phone number and password",
+		Name:        msgFlowPasswordName.Message(),
+		Description: msgFlowPasswordDescription.Message(),
 		ID:          LoginFlowIDPassword,
 	}, {
-		Name:        "GroupMe access token",
-		Description: "Use a session from your browser, including Google sign-in",
+		Name:        msgFlowTokenName.Message(),
+		Description: msgFlowTokenDescription.Message(),
 		ID:          LoginFlowIDToken,
 	}}
 }
@@ -102,12 +103,12 @@ func (gl *GMLogin) StartWithParams(ctx context.Context, params bridgev2.LoginSta
 	}
 	switch gl.FlowID {
 	case LoginFlowIDPassword:
-		return gl.credentialsStep("Sign in with your GroupMe account. If you sign in to GroupMe with Google, Microsoft or Apple, first set a password at https://web.groupme.com/forgot_password and use that here."), nil
+		return gl.credentialsStep(msgStepCredentialsInstructions.Message()), nil
 	case LoginFlowIDWeb:
 		return &bridgev2.LoginStep{
 			Type:         bridgev2.LoginStepTypeCookies,
 			StepID:       "fi.mau.groupme.login.web",
-			Instructions: "Sign in to your GroupMe account. If Google blocks this browser, close this window and choose GroupMe access token from Login options to use your normal browser instead.",
+			Instructions: msgStepWebInstructions.Message(),
 			CookiesParams: &bridgev2.LoginCookiesParams{
 				URL:               "https://web.groupme.com/",
 				WaitForURLPattern: `^https://web\.groupme\.com/(?:[^?#]*)(?:[?#].*)?$`,
@@ -126,13 +127,13 @@ func (gl *GMLogin) StartWithParams(ctx context.Context, params bridgev2.LoginSta
 		return &bridgev2.LoginStep{
 			Type:         bridgev2.LoginStepTypeUserInput,
 			StepID:       "fi.mau.groupme.login.enter_token",
-			Instructions: "Sign in at https://web.groupme.com/ in your normal browser. For Google sign-in, use this browser rather than the embedded login window. In Chrome, open DevTools, then Application, Local Storage, and https://web.groupme.com. Copy the access_token value and paste it below. You can also use a developer token from dev.groupme.com.",
+			Instructions: msgStepTokenInstructions.Message(),
 			UserInputParams: &bridgev2.LoginUserInputParams{
 				Fields: []bridgev2.LoginInputDataField{{
 					Type:        bridgev2.LoginInputFieldTypeToken,
 					ID:          "token",
-					Name:        "Access token",
-					Description: "GroupMe session token (access_token)",
+					Name:        msgFieldTokenName.Message(),
+					Description: msgFieldTokenDescription.Message(),
 				}},
 			},
 		}, nil
@@ -248,7 +249,7 @@ func (gl *GMLogin) submitPassword(ctx context.Context, username, password string
 		var authErr *groupmeext.AuthError
 		if errors.As(err, &authErr) && authErr.MetaCode != 40121 &&
 			(authErr.StatusCode == http.StatusUnauthorized || authErr.StatusCode == http.StatusNotFound) {
-			return gl.credentialsStep("GroupMe didn't accept that email or phone number and password. Check them and try again, with the country code for phone numbers (like +1). If you sign in to GroupMe with Google, Microsoft or Apple, set a password at https://web.groupme.com/forgot_password first."), nil
+			return gl.credentialsStep(msgStepCredentialsRejectedInstructions.Message()), nil
 		}
 		return nil, wrapPasswordLoginError(err)
 	} else if result.AccessToken != "" {
@@ -264,9 +265,9 @@ func (gl *GMLogin) submitPassword(ctx context.Context, username, password string
 		return nil, wrapVerificationError(err)
 	}
 	gl.username, gl.password, gl.verificationCode = username, password, result.Verification.Code
-	instructions := "Enter the code GroupMe sent you by SMS."
+	instructions := msgStepVerifyInstructions.Message()
 	if hint != "" {
-		instructions = fmt.Sprintf("Enter the code GroupMe sent by SMS to the number ending in %s.", hint)
+		instructions = msgStepVerifyHintInstructions.Render(l10n.Params{"hint": hint})
 	}
 	return gl.verifyStep(instructions), nil
 }
@@ -283,7 +284,7 @@ func (gl *GMLogin) submitVerificationPIN(ctx context.Context, pin string) (*brid
 		zerolog.Ctx(ctx).Err(err).Msg("GroupMe verification failed")
 		var authErr *groupmeext.AuthError
 		if errors.As(err, &authErr) && authErr.MetaCode == 40002 {
-			return gl.verifyStep("That code was incorrect. Enter the code GroupMe sent you by SMS."), nil
+			return gl.verifyStep(msgStepVerifyRetryInstructions.Message()), nil
 		}
 		return nil, wrapVerificationError(err)
 	}
@@ -299,7 +300,7 @@ func (gl *GMLogin) submitVerificationPIN(ctx context.Context, pin string) (*brid
 	return gl.finishLogin(ctx, result.AccessToken)
 }
 
-func (gl *GMLogin) credentialsStep(instructions string) *bridgev2.LoginStep {
+func (gl *GMLogin) credentialsStep(instructions l10n.Message) *bridgev2.LoginStep {
 	return &bridgev2.LoginStep{
 		Type:         bridgev2.LoginStepTypeUserInput,
 		StepID:       "fi.mau.groupme.login.credentials",
@@ -308,19 +309,19 @@ func (gl *GMLogin) credentialsStep(instructions string) *bridgev2.LoginStep {
 			Fields: []bridgev2.LoginInputDataField{{
 				Type:           bridgev2.LoginInputFieldTypeUsername,
 				ID:             "username",
-				Name:           "Email or phone number",
+				Name:           msgFieldUsernameName.Message(),
 				AutofillDomain: "groupme.com",
 			}, {
 				Type:           bridgev2.LoginInputFieldTypePassword,
 				ID:             "password",
-				Name:           "Password",
+				Name:           msgFieldPasswordName.Message(),
 				AutofillDomain: "groupme.com",
 			}},
 		},
 	}
 }
 
-func (gl *GMLogin) verifyStep(instructions string) *bridgev2.LoginStep {
+func (gl *GMLogin) verifyStep(instructions l10n.Message) *bridgev2.LoginStep {
 	return &bridgev2.LoginStep{
 		Type:         bridgev2.LoginStepTypeUserInput,
 		StepID:       "fi.mau.groupme.login.verify",
@@ -329,7 +330,7 @@ func (gl *GMLogin) verifyStep(instructions string) *bridgev2.LoginStep {
 			Fields: []bridgev2.LoginInputDataField{{
 				Type: bridgev2.LoginInputFieldType2FACode,
 				ID:   "code",
-				Name: "Verification code",
+				Name: msgFieldCodeName.Message(),
 			}},
 		},
 	}
@@ -388,7 +389,7 @@ func (gl *GMLogin) finishLogin(ctx context.Context, token string) (*bridgev2.Log
 	return &bridgev2.LoginStep{
 		Type:         bridgev2.LoginStepTypeComplete,
 		StepID:       "fi.mau.groupme.login.complete",
-		Instructions: fmt.Sprintf("Successfully logged in as %s", me.Name),
+		Instructions: msgStepCompleteInstructions.Render(l10n.Params{"name": me.Name}),
 		CompleteParams: &bridgev2.LoginCompleteParams{
 			UserLoginID: loginID,
 			UserLogin:   ul,

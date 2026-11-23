@@ -1,0 +1,89 @@
+{
+	"namespace": "groupme",
+	"messages": [
+		{
+			"key": "groupme:login.field.access_token.description",
+			"english": "GroupMe session token (access_token)"
+		},
+		{
+			"key": "groupme:login.field.access_token.name",
+			"english": "Access token"
+		},
+		{
+			"key": "groupme:login.field.code.name",
+			"english": "Verification code"
+		},
+		{
+			"key": "groupme:login.field.password.name",
+			"english": "Password"
+		},
+		{
+			"key": "groupme:login.field.username.name",
+			"english": "Email or phone number"
+		},
+		{
+			"key": "groupme:login.flow.access-token.description",
+			"english": "Use a session from your browser, including Google sign-in"
+		},
+		{
+			"key": "groupme:login.flow.access-token.name",
+			"english": "GroupMe access token"
+		},
+		{
+			"key": "groupme:login.flow.password.description",
+			"english": "Sign in with your GroupMe email or phone number and password"
+		},
+		{
+			"key": "groupme:login.flow.password.name",
+			"english": "GroupMe password"
+		},
+		{
+			"key": "groupme:login.flow.web.description",
+			"english": "Sign in to GroupMe in your browser"
+		},
+		{
+			"key": "groupme:login.flow.web.name",
+			"english": "GroupMe"
+		},
+		{
+			"key": "groupme:login.step.complete.instructions",
+			"english": "Successfully logged in as {name}",
+			"params": [
+				"name"
+			],
+			"comment": "name is the GroupMe display name of the account"
+		},
+		{
+			"key": "groupme:login.step.credentials.instructions",
+			"english": "Sign in with your GroupMe account. If you sign in to GroupMe with Google, Microsoft or Apple, first set a password at https://web.groupme.com/forgot_password and use that here."
+		},
+		{
+			"key": "groupme:login.step.credentials_rejected.instructions",
+			"english": "GroupMe didn't accept that email or phone number and password. Check them and try again, with the country code for phone numbers (like +1). If you sign in to GroupMe with Google, Microsoft or Apple, set a password at https://web.groupme.com/forgot_password first."
+		},
+		{
+			"key": "groupme:login.step.enter_token.instructions",
+			"english": "Sign in at https://web.groupme.com/ in your normal browser. For Google sign-in, use this browser rather than the embedded login window. In Chrome, open DevTools, then Application, Local Storage, and https://web.groupme.com. Copy the access_token value and paste it below. You can also use a developer token from dev.groupme.com."
+		},
+		{
+			"key": "groupme:login.step.verify.instructions",
+			"english": "Enter the code GroupMe sent you by SMS."
+		},
+		{
+			"key": "groupme:login.step.verify_hint.instructions",
+			"english": "Enter the code GroupMe sent by SMS to the number ending in {hint}.",
+			"params": [
+				"hint"
+			],
+			"comment": "hint is the last digits of the phone number, e.g. 42"
+		},
+		{
+			"key": "groupme:login.step.verify_retry.instructions",
+			"english": "That code was incorrect. Enter the code GroupMe sent you by SMS."
+		},
+		{
+			"key": "groupme:login.step.web.instructions",
+			"english": "Sign in to your GroupMe account. If Google blocks this browser, close this window and choose GroupMe access token from Login options to use your normal browser instead."
+		}
+	]
+}
