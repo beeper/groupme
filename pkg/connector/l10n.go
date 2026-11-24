@@ -40,6 +40,12 @@ var (
 	msgStepTokenInstructions               = L.Define("login.step.enter_token.instructions", "Sign in at https://web.groupme.com/ in your normal browser. For Google sign-in, use this browser rather than the embedded login window. In Chrome, open DevTools, then Application, Local Storage, and https://web.groupme.com. Copy the access_token value and paste it below. You can also use a developer token from dev.groupme.com.")
 	msgStepCredentialsInstructions         = L.Define("login.step.credentials.instructions", "Sign in with your GroupMe account. If you sign in to GroupMe with Google, Microsoft or Apple, first set a password at https://web.groupme.com/forgot_password and use that here.")
 	msgStepCredentialsRejectedInstructions = L.Define("login.step.credentials_rejected.instructions", "GroupMe didn't accept that email or phone number and password. Check them and try again, with the country code for phone numbers (like +1). If you sign in to GroupMe with Google, Microsoft or Apple, set a password at https://web.groupme.com/forgot_password first.")
+	msgStepWebVerifyUnfinishedInstructions = L.Define("login.step.web_verify_unfinished.instructions", "GroupMe's verification check did not finish on this device. Sign in to your GroupMe account in your browser instead.")
+	msgStepWebVerifyRejectedInstructions   = L.Define("login.step.web_verify_rejected.instructions", "GroupMe rejected the verification check for password sign-in. Sign in to your GroupMe account in your browser instead.")
+	msgStepVerifyingInstructions           = L.Define("login.step.browser_verification.instructions", "Verifying GroupMe sign-in...")
+	msgStepCompletingInstructions          = L.Define("login.step.browser_verification_complete.instructions", "Completing GroupMe sign-in...")
+	msgStepChallengeInstructions           = L.Define("login.step.browser_verification_challenge.instructions", "Complete the GroupMe verification challenge to continue signing in.")
+	msgStepChallengeFinishInstructions     = L.Define("login.step.browser_verification_challenge_finish.instructions", "Complete the GroupMe verification challenge to finish signing in.")
 	msgStepVerifyInstructions              = L.Define("login.step.verify.instructions", "Enter the code GroupMe sent you by SMS.")
 	msgStepVerifyHintInstructions          = L.Define(
 		"login.step.verify_hint.instructions", "Enter the code GroupMe sent by SMS to the number ending in {hint}.",
