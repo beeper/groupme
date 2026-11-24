@@ -24,6 +24,7 @@ const (
 	androidAppID       = "Android-" + androidVersionCode
 	androidLoginKey    = "48ea3317-4a12-4a30-9b87-efdf2dc1b9ec"
 	androidUserAgent   = "Dalvik/2.1.0 (Linux; U; Android 14; Pixel 8 Build/AP2A.240905.003)"
+	webappVerifyID     = "webapp"
 )
 
 // GroupMe keeps one token per user, app ID and device ID, so a stable device
@@ -54,6 +55,10 @@ type AuthError struct {
 
 func (e *AuthError) Error() string {
 	return fmt.Sprintf("%s: HTTP %d (code %d, %v)", e.Request, e.StatusCode, e.MetaCode, e.Errors)
+}
+
+func (e *AuthError) IsVerificationError() bool {
+	return e.StatusCode == http.StatusUnauthorized && (e.MetaCode == 40102 || e.MetaCode == 40103 || e.MetaCode == 40104)
 }
 
 type authEnvelope struct {
@@ -109,7 +114,7 @@ func authRequest(ctx context.Context, transport http.RoundTripper, name, endpoin
 // with Verification set and no AccessToken means the account has two-step
 // verification on: confirm a PIN for Verification.Code, then call this again
 // with that code.
-func PasswordLogin(ctx context.Context, transport http.RoundTripper, username, password, deviceID, verificationCode string) (*PasswordLoginResult, error) {
+func PasswordLogin(ctx context.Context, transport http.RoundTripper, username, password, deviceID, verificationCode, verifyToken string) (*PasswordLoginResult, error) {
 	body := map[string]any{
 		"username":    username,
 		"password":    password,
@@ -122,6 +127,10 @@ func PasswordLogin(ctx context.Context, transport http.RoundTripper, username, p
 		body["verification"] = map[string]string{"code": verificationCode}
 	}
 	header := http.Header{"X-Access-Token": {androidLoginSignature(deviceID, username)}}
+	if verifyToken != "" {
+		header.Set("X-Verify-Id", webappVerifyID)
+		header.Set("X-Verify-Token", verifyToken)
+	}
 	var result PasswordLoginResult
 	if err := authRequest(ctx, transport, "GroupMe sign-in", "https://v2.groupme.com/access_tokens", header, body, &result); err != nil {
 		return nil, err
