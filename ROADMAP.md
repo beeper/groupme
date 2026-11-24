@@ -7,6 +7,7 @@
 | Replies | ✅ | ✅ |
 | Mentions | ✅ | ✅ |
 | Images and GIFs | ✅ | ✅ |
+| Stickers | ✅ Tenor, GIPHY and emoji pack stickers | ✅ Emoji pack stickers natively, others as images; emoji packs can be imported |
 | Video | ✅ | ⚠️ Uploads, but GroupMe can't play it back |
 | Voice notes | ✅ | ✅ |
 | Files | ✅ Groups only | ✅ Groups only |

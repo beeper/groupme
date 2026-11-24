@@ -215,7 +215,7 @@ func (gc *GMClient) convertEdit(ctx context.Context, portal *bridgev2.Portal, in
 	if kind, chatID := ParsePortalID(portal.ID); kind == PortalTypeGroup {
 		msg.GroupID = chatID
 	}
-	converted, err := gc.convertGroupMeMessage(ctx, portal, intent, msg)
+	converted, err := gc.convertGroupMeMessageParts(ctx, portal, intent, msg, false)
 	if err != nil {
 		return nil, err
 	}
@@ -226,7 +226,7 @@ func (gc *GMClient) convertEdit(ctx context.Context, portal *bridgev2.Portal, in
 	}
 	// Synchronous outbound sends have a single default part ID, whereas the
 	// receive converter names media parts. Preserve that original mapping.
-	if len(existing) == 1 && len(converted.Parts) == 1 {
+	if len(existing) == 1 && len(converted.Parts) == 1 && !isStickerMessage(existing[0]) {
 		result.ModifiedParts = []*bridgev2.ConvertedEditPart{converted.Parts[0].ToEditPart(existing[0])}
 		return result, nil
 	}
@@ -249,7 +249,7 @@ func (gc *GMClient) convertEdit(ctx context.Context, portal *bridgev2.Portal, in
 	}
 	for _, part := range converted.Parts {
 		part.DBMetadata.(*MessageMetadata).EditedAt = update.UpdatedAt
-		if old := byPart[part.ID]; old != nil {
+		if old := byPart[part.ID]; old != nil && !isStickerMessage(old) {
 			result.ModifiedParts = append(result.ModifiedParts, part.ToEditPart(old))
 			delete(byPart, part.ID)
 		} else {
@@ -266,4 +266,11 @@ func (gc *GMClient) convertEdit(ctx context.Context, portal *bridgev2.Portal, in
 		}
 	}
 	return result, nil
+}
+
+// isStickerMessage reports whether the stored message was bridged as an
+// m.sticker event, which can't be replaced by an m.room.message edit.
+func isStickerMessage(msg *database.Message) bool {
+	meta, _ := msg.Metadata.(*MessageMetadata)
+	return meta != nil && meta.Sticker
 }
