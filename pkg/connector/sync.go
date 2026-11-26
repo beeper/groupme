@@ -19,6 +19,7 @@ package connector
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"slices"
 	"time"
 
@@ -31,7 +32,12 @@ import (
 	"github.com/beeper/groupme-lib"
 )
 
-const missedMessageCheckInterval = 5 * time.Minute
+const (
+	missedMessageCheckInterval = 5 * time.Minute
+	reactionRefreshPaceMin     = time.Second
+	reactionRefreshPaceMax     = time.Minute
+	reactionRefreshMaxRetries  = 3
+)
 
 type nativeChat struct {
 	portalKey networkid.PortalKey
@@ -255,13 +261,39 @@ func (gc *GMClient) subscribeToChat(portalID networkid.PortalID) {
 // chat as Web does on connection recovery, independently of message backfill.
 func (gc *GMClient) refreshRecentReactions(ctx context.Context, chats []nativeChat) {
 	ctx = gc.UserLogin.Log.With().Str("action", "refresh reactions").Logger().WithContext(ctx)
-	for _, chat := range chats {
+	var pace time.Duration
+	var retries int
+	for i := 0; i < len(chats); {
+		if pace > 0 {
+			select {
+			case <-time.After(pace):
+			case <-ctx.Done():
+				return
+			}
+		}
 		if ctx.Err() != nil {
 			return
 		}
+		chat := chats[i]
 		portalID := chat.portalKey.ID
 		// Groups support 100 messages; DMs return their native page of 20.
 		messages, err := gc.fetchMessagePage(ctx, portalID, "", "", 100)
+		if groupMeHTTPStatus(err) == http.StatusTooManyRequests {
+			pace = min(max(pace*2, reactionRefreshPaceMin), reactionRefreshPaceMax)
+			if retries < reactionRefreshMaxRetries {
+				retries++
+				zerolog.Ctx(ctx).Warn().
+					Int("checked", i).
+					Int("remaining", len(chats)-i).
+					Dur("pace", pace).
+					Msg("GroupMe rate limited the recent reaction refresh, slowing down")
+				continue
+			}
+		} else if pace > 0 {
+			pace = max(pace/2, reactionRefreshPaceMin)
+		}
+		i++
+		retries = 0
 		if err != nil {
 			zerolog.Ctx(ctx).Err(err).Str("portal_id", string(portalID)).Msg("Failed to refresh recent GroupMe reactions")
 			continue
