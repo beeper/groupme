@@ -34,8 +34,9 @@ import (
 
 const (
 	missedMessageCheckInterval = 5 * time.Minute
-	reactionRefreshPaceMin     = 2 * time.Second
+	reactionRefreshPaceMin     = time.Second
 	reactionRefreshPaceMax     = time.Minute
+	reactionRefreshMaxRetries  = 3
 )
 
 type nativeChat struct {
@@ -261,6 +262,7 @@ func (gc *GMClient) subscribeToChat(portalID networkid.PortalID) {
 func (gc *GMClient) refreshRecentReactions(ctx context.Context, chats []nativeChat) {
 	ctx = gc.UserLogin.Log.With().Str("action", "refresh reactions").Logger().WithContext(ctx)
 	var pace time.Duration
+	var retries int
 	for i := 0; i < len(chats); {
 		if pace > 0 {
 			select {
@@ -278,14 +280,20 @@ func (gc *GMClient) refreshRecentReactions(ctx context.Context, chats []nativeCh
 		messages, err := gc.fetchMessagePage(ctx, portalID, "", "", 100)
 		if groupMeHTTPStatus(err) == http.StatusTooManyRequests {
 			pace = min(max(pace*2, reactionRefreshPaceMin), reactionRefreshPaceMax)
-			zerolog.Ctx(ctx).Warn().
-				Int("checked", i).
-				Int("remaining", len(chats)-i).
-				Dur("pace", pace).
-				Msg("GroupMe rate limited the recent reaction refresh, slowing down")
-			continue
+			if retries < reactionRefreshMaxRetries {
+				retries++
+				zerolog.Ctx(ctx).Warn().
+					Int("checked", i).
+					Int("remaining", len(chats)-i).
+					Dur("pace", pace).
+					Msg("GroupMe rate limited the recent reaction refresh, slowing down")
+				continue
+			}
+		} else if pace > 0 {
+			pace = max(pace/2, reactionRefreshPaceMin)
 		}
 		i++
+		retries = 0
 		if err != nil {
 			zerolog.Ctx(ctx).Err(err).Str("portal_id", string(portalID)).Msg("Failed to refresh recent GroupMe reactions")
 			continue

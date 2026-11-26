@@ -262,8 +262,8 @@ func (gc *GMClient) runSession(ctx context.Context) {
 		reactionRefreshes.Add(2)
 		go func() {
 			defer reactionRefreshes.Done()
-			gc.refreshRecentReactions(ctx, chats)
 			gc.syncReadCheckpoints(ctx)
+			gc.refreshRecentReactions(ctx, chats)
 		}()
 		go func() {
 			defer reactionRefreshes.Done()
